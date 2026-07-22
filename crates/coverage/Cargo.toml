@@ -1,0 +1,13 @@
+[package]
+name = "hamheatmap-coverage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+geographiclib-rs = { version = "0.2.7", default-features = false }
+hamheatmap-propagation = { path = "../propagation" }
+hamheatmap-terrain = { path = "../terrain" }
+png = "0.18.1"
+

@@ -1,0 +1,18 @@
+[package]
+name = "hamheatmap-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+printpdf = { version = "=0.11.1", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+lopdf = { version = "=0.44.0", default-features = false }
+png = "0.18.1"
+tempfile = "3.24.0"

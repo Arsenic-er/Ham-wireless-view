@@ -1,0 +1,20 @@
+name: core
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.0 --profile minimal
+      - name: Run propagation tests
+        run: cargo +1.97.0 test --workspace --all-targets --locked
+

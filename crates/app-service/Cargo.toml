@@ -1,0 +1,16 @@
+[package]
+name = "hamheatmap-app-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+geographiclib-rs = { version = "0.2.7", default-features = false }
+hamheatmap-cache = { path = "../cache" }
+hamheatmap-coverage = { path = "../coverage" }
+hamheatmap-propagation = { path = "../propagation" }
+hamheatmap-terrain = { path = "../terrain" }
+serde = { version = "1.0.228", features = ["derive"] }
+

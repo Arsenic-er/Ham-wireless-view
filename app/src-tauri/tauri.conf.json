@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HamHeatmap",
+  "mainBinaryName": "HamHeatmap",
+  "version": "0.1.0",
+  "identifier": "org.hamheatmap.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "HamHeatmap",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1080,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "HamHeatmap Open Source Project",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "license": "Apache-2.0",
+    "licenseFile": "../../LICENSE",
+    "resources": {
+      "../../THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md"
+    },
+    "category": "Utility",
+    "shortDescription": "Terrain-aware amateur radio coverage prediction for China.",
+    "useLocalToolsDir": true,
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      },
+      "allowDowngrades": false,
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "compression": "lzma"
+      }
+    }
+  }
+}

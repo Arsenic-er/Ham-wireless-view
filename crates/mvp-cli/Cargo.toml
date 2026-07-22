@@ -1,0 +1,11 @@
+[package]
+name = "hamheatmap-mvp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hamheatmap-cache = { path = "../cache" }
+hamheatmap-coverage = { path = "../coverage" }
+hamheatmap-terrain = { path = "../terrain" }

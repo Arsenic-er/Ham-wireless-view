@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "crates/app-service",
+    "crates/cache",
+    "crates/export",
+    "crates/coverage",
+    "crates/mvp-cli",
+    "crates/phase0-cli",
+    "crates/propagation",
+    "crates/terrain",
+]
+resolver = "3"
+exclude = ["app/src-tauri"]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.97"
+version = "0.1.0"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

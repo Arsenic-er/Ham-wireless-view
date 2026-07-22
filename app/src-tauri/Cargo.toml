@@ -1,0 +1,25 @@
+[package]
+name = "hamheatmap-desktop"
+version = "0.1.0"
+description = "Windows desktop shell for HamHeatmap"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.97"
+
+[lib]
+name = "hamheatmap_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+hamheatmap-app-service = { path = "../../crates/app-service" }
+hamheatmap-export = { path = "../../crates/export" }
+serde = { version = "1.0.228", features = ["derive"] }
+tauri = { version = "=2.11.5", features = [] }
+
+[target.'cfg(windows)'.dependencies]
+tauri-plugin-single-instance = "=2.4.3"
+tauri-plugin-dialog = "=2.7.1"
+
