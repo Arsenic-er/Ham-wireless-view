@@ -3,7 +3,7 @@
 ## Workspace
 
 - Canonical workspace: `/home/ubuntu/hamheatmap` on `gpu-273312` (`ubuntu@150.65.181.202`).
-- Keep project documents, source, fixtures, scripts, and build configuration inside this directory.
+- Keep project documents, source, fixtures, scripts, build tools, dependency caches, validation artifacts, and build outputs on this server inside the canonical workspace. The Windows desktop may receive only the final EXE requested by the user.
 - Read all files in `docs/` before changing product scope or architecture.
 
 ## Durable product decisions
@@ -40,6 +40,7 @@
 - Keep frontend map code unable to access raw DEM tiles.
 - Preserve user privacy: coordinates and calculation results stay local.
 - Add or update tests for every change to propagation math, cache quota, coordinate transforms, and color thresholds.
+- Restore the pinned project-local Windows cross toolchain with `scripts/install-windows-cross-tools.sh`; do not install it system-wide or download it to the Windows desktop.
 
 ## Documentation
 

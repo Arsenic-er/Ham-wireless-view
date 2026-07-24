@@ -194,3 +194,15 @@
 - release 优化构建下的覆盖层重采样/第二张 PNG 编码耗时，以及 Windows 10/11 WebView2 中 MapLibre 实机几何仍未验收，不能由本检查点推断为已关闭。
 
 验证方法、旧方案数值和结果表见 `13-web-mercator-overlay-validation.md`。
+
+## 18. GPU-273312 Windows 交叉构建检查点（2026-07-24）
+
+- 使用固定项目内工具链和 `scripts/tauri-windows-cross.sh -- --locked` 完成 x64 MSVC production 构建。
+- 独立 EXE 为 16,061,952 bytes，NSIS 离线安装包为 211,439,966 bytes；SHA-256 已记录在 `14-windows-cross-build-gpu273312.md`。
+- 应用通过 AMD64、Windows GUI、ASLR、高熵 ASLR 和 NX 检查；15 个导入 DLL 均为 Windows 系统组件，不含动态 MSVC/UCRT 运行库。
+- NSIS 只包含预期插件、x64 应用、第三方许可和 WebView2 离线安装器；不含源码、构建工具、DEM 或地图缓存。
+- `scripts/verify-windows-artifacts.sh` 自动检查 PE、证书表、导入表、包内容和 Tauri 三字节 bundle marker，并安全清理解包目录。
+- Rust `57 passed`、前端 13 项测试通过；release 覆盖层重采样与 PNG 编码约 `0.335 s/张`。
+- Windows 10/11 实机、断网安装、代码签名、编码阶段取消、真实 MapLibre 几何和地图合规仍未完成，不能公开发布。
+
+完整证据见 `14-windows-cross-build-gpu273312.md`。

@@ -100,11 +100,14 @@ scripts/node-project.sh --prefix app run dev
 
 Tauri 壳层位于 `app/src-tauri/`。JAIST Linux 负责前端、共享 Rust 服务、浏览器视觉回归和内部 Windows 交叉构建；正式发布仍必须在 Windows 10/11 验证 WebView2、安装包和文件系统行为。
 
-项目内交叉工具准备完成后，服务器可生成 Windows 单文件 EXE 与内嵌 WebView2 的离线安装包：
+新服务器首次使用或项目内工具缓存丢失时，先恢复固定版本的 Windows 交叉工具链，再生成 Windows 单文件 EXE 与内嵌 WebView2 的离线安装包：
 
 ```bash
+scripts/install-windows-cross-tools.sh
 scripts/tauri-windows-cross.sh
 ```
+
+恢复脚本只写入服务器项目的 `.tools/`，不使用系统级安装，也不会向 Windows 桌面下载源码、SDK 或构建缓存。LLVM 完整工具包、归档和 xwin SDK 合计约占 14 GB；Windows release target 与 WebView2 离线安装器还会额外占用空间。
 
 该交叉构建只用于内部 Alpha；它不替代 Windows 10/11 实机、代码签名和地图合规验收。详细记录见 `docs/11-windows-cross-build.md`。
 
