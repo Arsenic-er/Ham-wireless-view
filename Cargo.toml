@@ -8,6 +8,7 @@ members = [
     "crates/phase0-cli",
     "crates/propagation",
     "crates/terrain",
+    "crates/validation-server",
 ]
 resolver = "3"
 exclude = ["app/src-tauri"]

@@ -83,6 +83,10 @@ select:focus-visible {
   color: var(--text);
 }
 
+.app-shell.validation-server-mode {
+  grid-template-rows: 70px 32px 36px minmax(0, 1fr);
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -258,6 +262,22 @@ select:focus-visible {
 
 .compliance-banner strong {
   font-size: 11px;
+}
+
+.validation-server-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 20px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  font-size: 11px;
+}
+
+.validation-server-banner strong {
+  font-size: 12px;
 }
 
 .workspace {

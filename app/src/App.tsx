@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MapView } from "./components/MapView";
 import { ParameterPanel } from "./components/ParameterPanel";
 import {
+  backendCapabilities,
   bootstrap,
   cacheOverview as loadCacheOverview,
   calculate,
   cancelCalculation,
   cancelDownload,
   deleteCacheRegion,
-  desktopBackendAvailable,
   exportReport,
   downloadRegion,
   estimateDownload,
@@ -114,7 +114,8 @@ export function App() {
   const [cacheError, setCacheError] = useState<string | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<CacheRegion | null>(null);
   const [deletingRegion, setDeletingRegion] = useState(false);
-  const backendAvailable = desktopBackendAvailable();
+  const capabilities = backendCapabilities();
+  const validationServerMode = capabilities.mode === "validation-server";
   const [exportOpen, setExportOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
@@ -208,7 +209,7 @@ export function App() {
     isCalculating;
   const isBusy = pointSelectionLocked || deletingRegion || exportingFormat !== null;
   const canCalculate = Boolean(
-    backendAvailable &&
+    capabilities.canCalculate &&
       point &&
       inspection?.dataReady &&
       !validationMessage &&
@@ -256,7 +257,7 @@ export function App() {
       case "ready":
         return { tone: "ready", title: "数据已就绪", detail: "可以开始 200 km 覆盖计算" };
       case "missing-data":
-        return backendAvailable
+        return capabilities.mode !== "preview"
           ? {
               tone: "warning",
               title: "当前区域缺少离线数据",
@@ -289,7 +290,7 @@ export function App() {
         return { tone: "error", title: "操作未完成", detail: errorMessage ?? "发生未知错误" };
     }
   }, [
-    backendAvailable,
+    capabilities.mode,
     bootstrapLoading,
     downloadEstimate,
     downloadProgress,
@@ -358,7 +359,7 @@ export function App() {
   }
 
   async function handleConfirmDownload() {
-    if (!point || !downloadEstimate || !backendAvailable) return;
+    if (!point || !downloadEstimate || !capabilities.canDownload) return;
     const estimate = downloadEstimate;
     setDownloadEstimate(null);
     setDownloadProgress({
@@ -403,7 +404,7 @@ export function App() {
   }
 
   async function handleDeleteRegion() {
-    if (!deleteCandidate || !backendAvailable || isBusy || deletingRegionRef.current) return;
+    if (!deleteCandidate || !capabilities.canDeleteCache || isBusy || deletingRegionRef.current) return;
     deletingRegionRef.current = true;
     setDeletingRegion(true);
     setCacheError(null);
@@ -464,7 +465,7 @@ export function App() {
   }
 
   function openExportModal() {
-    if (!result || resultStale || isBusy) return;
+    if (!result || resultStale || isBusy || !capabilities.canExport) return;
     setExportMessage(null);
     setExportError(null);
     setExportOpen(true);
@@ -478,7 +479,7 @@ export function App() {
   }
 
   async function handleExport(format: ExportFormat) {
-    if (!result || resultStale || exportingRef.current || !backendAvailable) return;
+    if (!result || resultStale || exportingRef.current || !capabilities.canExport) return;
     const resultSnapshot = result;
     const parameterSnapshot = { ...parameters };
     const generatedAt = new Date();
@@ -530,15 +531,11 @@ export function App() {
 
   function handleClear() {
     if (isBusy) return;
-    setPoint(null);
-    setInspection(null);
     setResult(null);
     setResultStale(false);
     setProgress(null);
-    setDownloadEstimate(null);
-    setDownloadProgress(null);
     setErrorMessage(null);
-    setWorkflow("idle");
+    setWorkflow(inspection ? (inspection.dataReady ? "ready" : "missing-data") : "idle");
     setExportOpen(false);
     setExportMessage(null);
     setExportError(null);
@@ -550,7 +547,7 @@ export function App() {
     : 0;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${validationServerMode ? " validation-server-mode" : ""}`}>
       <header className="app-header">
         <div className="brand-block">
           <div className="brand-mark" aria-hidden="true">
@@ -581,7 +578,7 @@ export function App() {
           <button
             className="header-button"
             type="button"
-            disabled={!result || resultStale || isBusy}
+            disabled={!capabilities.canExport || !result || resultStale || isBusy}
             onClick={openExportModal}
           >
             <span className="button-icon">⇩</span>
@@ -608,6 +605,13 @@ export function App() {
         <strong>{bootstrapInfo?.internalBuildWarning ?? "内部测试底图，不得公开发布"}</strong>
         <span>合规底图、有效区和审图号尚未接入；当前只显示 WGS84 坐标网格。</span>
       </div>
+
+      {validationServerMode && (
+        <div className="validation-server-banner" role="status">
+          <strong>内部服务器验证</strong>
+          <span>坐标、无线电参数和计算请求会发送到本服务器；文件导出仅在 Windows/Tauri 桌面版可用。</span>
+        </div>
+      )}
 
       <main className="workspace">
         <div className="map-column">
@@ -707,7 +711,7 @@ export function App() {
               >
                 <span>⌁</span>
                 {inspection && !inspection.dataReady
-                  ? backendAvailable
+                  ? capabilities.canDownload
                     ? "准备离线数据"
                     : "预览下载确认"
                   : resultStale
@@ -833,7 +837,7 @@ export function App() {
                   </div>
                   <button
                     type="button"
-                    disabled={!backendAvailable || isBusy}
+                    disabled={!capabilities.canDeleteCache || isBusy}
                     onClick={() => setDeleteCandidate(region)}
                   >
                     删除
@@ -901,7 +905,7 @@ export function App() {
             <p className="download-note">
               数据仅从固定的 Copernicus GLO-90 HTTPS 地址获取。取消后保留已校验资产和可续传临时文件；开始前会再次执行硬配额与磁盘检查。
             </p>
-            {!backendAvailable && (
+            {capabilities.mode === "preview" && (
               <p className="preview-callout">浏览器当前只展示确认流程，真实下载按钮仅在 Windows/Tauri 桌面版启用。</p>
             )}
             <div className="modal-actions">
@@ -909,7 +913,7 @@ export function App() {
               <button
                 type="button"
                 className="confirm-download"
-                disabled={!backendAvailable}
+                disabled={!capabilities.canDownload}
                 onClick={() => void handleConfirmDownload()}
               >
                 下载并准备

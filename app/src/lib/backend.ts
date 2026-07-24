@@ -19,13 +19,74 @@ import type {
 
 const PREVIEW_CACHE_CAP = 2_500_000_000;
 
+export type BackendMode = "tauri" | "validation-server" | "preview";
+
+export interface BackendCapabilities {
+  mode: BackendMode;
+  canDownload: boolean;
+  canDeleteCache: boolean;
+  canCalculate: boolean;
+  canExport: boolean;
+}
+
+export function backendMode(): BackendMode {
+  if ("__TAURI_INTERNALS__" in window) return "tauri";
+  return import.meta.env.VITE_VALIDATION_SERVER === "1"
+    ? "validation-server"
+    : "preview";
+}
+
+export function backendCapabilities(): BackendCapabilities {
+  const mode = backendMode();
+  return {
+    mode,
+    canDownload: mode !== "preview",
+    canDeleteCache: mode !== "preview",
+    canCalculate: mode !== "preview",
+    canExport: mode === "tauri",
+  };
+}
+
 export function desktopBackendAvailable(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return backendMode() === "tauri";
+}
+
+async function validationRequest<T>(
+  path: string,
+  body?: Record<string, unknown>,
+  method = body ? "POST" : "GET",
+): Promise<T> {
+  const sendsJson = body !== undefined || method.toUpperCase() === "POST";
+  const response = await fetch(path, {
+    method,
+    headers: sendsJson
+      ? { Accept: "application/json", "Content-Type": "application/json" }
+      : { Accept: "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    let message = `${response.status} ${response.statusText}`.trim();
+    if (contentType.includes("application/json")) {
+      const value = (await response.json()) as { error?: unknown; message?: unknown };
+      const detail = value.message ?? value.error;
+      if (typeof detail === "string" && detail.trim()) message = detail;
+    } else {
+      const detail = (await response.text()).trim();
+      if (detail) message = detail;
+    }
+    throw new Error(message);
+  }
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
 }
 
 export async function bootstrap(): Promise<BootstrapInfo> {
   if (desktopBackendAvailable()) {
     return invoke<BootstrapInfo>("bootstrap");
+  }
+  if (backendMode() === "validation-server") {
+    return validationRequest<BootstrapInfo>("/api/bootstrap");
   }
   return {
     schemaVersion: 2,
@@ -49,6 +110,9 @@ export async function bootstrap(): Promise<BootstrapInfo> {
 export async function inspectPoint(point: MapPoint): Promise<PointInspection> {
   if (desktopBackendAvailable()) {
     return invoke<PointInspection>("inspect_point", { point });
+  }
+  if (backendMode() === "validation-server") {
+    return validationRequest<PointInspection>("/api/inspect-point", { point });
   }
   return {
     point,
@@ -75,6 +139,9 @@ export async function estimateDownload(point: MapPoint): Promise<DownloadEstimat
   if (desktopBackendAvailable()) {
     return invoke<DownloadEstimate>("estimate_download", { point });
   }
+  if (backendMode() === "validation-server") {
+    return validationRequest<DownloadEstimate>("/api/estimate-download", { point });
+  }
   return {
     point,
     regionId: "browser-interface-preview",
@@ -99,21 +166,29 @@ export async function estimateDownload(point: MapPoint): Promise<DownloadEstimat
 }
 
 export async function downloadRegion(point: MapPoint): Promise<DownloadResult> {
-  if (!desktopBackendAvailable()) {
-    throw new Error("浏览器仅展示下载确认界面；真实数据只能由 Tauri 桌面后端下载。");
+  if (desktopBackendAvailable()) {
+    return invoke<DownloadResult>("download_region", { point });
   }
-  return invoke<DownloadResult>("download_region", { point });
+  if (backendMode() === "validation-server") {
+    return validationRequest<DownloadResult>("/api/download-region", { point });
+  }
+  throw new Error("浏览器仅展示下载确认界面；真实数据只能由 Tauri 桌面后端下载。");
 }
 
 export async function cancelDownload(): Promise<void> {
   if (desktopBackendAvailable()) {
     await invoke("cancel_download");
+  } else if (backendMode() === "validation-server") {
+    await validationRequest<void>("/api/cancel-download", undefined, "POST");
   }
 }
 
 export async function cacheOverview(): Promise<CacheOverview> {
   if (desktopBackendAvailable()) {
     return invoke<CacheOverview>("cache_overview");
+  }
+  if (backendMode() === "validation-server") {
+    return validationRequest<CacheOverview>("/api/cache-overview");
   }
   return {
     usage: {
@@ -130,24 +205,32 @@ export async function cacheOverview(): Promise<CacheOverview> {
 }
 
 export async function deleteCacheRegion(regionId: string): Promise<CacheDeleteResult> {
-  if (!desktopBackendAvailable()) {
-    throw new Error("缓存删除只在 Tauri 桌面后端中可用。");
+  if (desktopBackendAvailable()) {
+    return invoke<CacheDeleteResult>("delete_cache_region", { regionId });
   }
-  return invoke<CacheDeleteResult>("delete_cache_region", { regionId });
+  if (backendMode() === "validation-server") {
+    return validationRequest<CacheDeleteResult>("/api/delete-cache-region", { regionId });
+  }
+  throw new Error("缓存删除只在 Tauri 桌面后端中可用。");
 }
 
 export async function calculate(
   request: CalculationRequest,
 ): Promise<CalculationResult> {
-  if (!desktopBackendAvailable()) {
-    throw new Error("浏览器仅用于界面检查；真实传播计算必须在 Tauri 桌面后端中运行。");
+  if (desktopBackendAvailable()) {
+    return invoke<CalculationResult>("calculate", { request });
   }
-  return invoke<CalculationResult>("calculate", { request });
+  if (backendMode() === "validation-server") {
+    return validationRequest<CalculationResult>("/api/calculate", { request });
+  }
+  throw new Error("浏览器仅用于界面检查；真实传播计算必须在 Tauri 桌面后端中运行。");
 }
 
 export async function cancelCalculation(): Promise<void> {
   if (desktopBackendAvailable()) {
     await invoke("cancel_calculation");
+  } else if (backendMode() === "validation-server") {
+    await validationRequest<void>("/api/cancel-calculation", undefined, "POST");
   }
 }
 

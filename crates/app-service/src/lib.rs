@@ -30,9 +30,10 @@ pub struct MapPoint {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum Band {
+    #[serde(rename = "vhf-144")]
     Vhf144,
+    #[serde(rename = "uhf-430")]
     Uhf430,
 }
 
@@ -822,6 +823,45 @@ mod tests {
         let config = request_to_config(&value).unwrap();
         assert!((config.tx_power_w - 25.0).abs() < 1e-9);
         assert!((config.tx_gain_dbi - 6.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn calculation_request_json_matches_frontend_band_contract_exactly() {
+        for (band_json, frequency_mhz, expected_band) in [
+            ("vhf-144", 145.0, Band::Vhf144),
+            ("uhf-430", 435.0, Band::Uhf430),
+        ] {
+            let frontend_json = serde_json::json!({
+                "center": { "lat": 30.5, "lon": 103.5 },
+                "band": band_json,
+                "frequencyMhz": frequency_mhz,
+                "powerValue": 25.0,
+                "powerUnit": "watt",
+                "txGainValue": 6.0,
+                "txGainUnit": "dbi",
+                "txHeightM": 20.0,
+                "rxGainValue": -3.0,
+                "rxGainUnit": "dbi",
+                "rxHeightM": 1.5,
+                "polarization": "vertical"
+            });
+            let decoded: CalculationRequest =
+                serde_json::from_value(frontend_json.clone()).unwrap();
+            assert_eq!(decoded.band, expected_band);
+            assert_eq!(decoded.frequency_mhz, frequency_mhz);
+            let encoded = serde_json::to_value(decoded).unwrap();
+            assert_eq!(encoded["band"], band_json);
+            assert_eq!(encoded, frontend_json);
+        }
+
+        for rejected in ["vhf144", "uhf430", "unknown"] {
+            let mut invalid = serde_json::to_value(request()).unwrap();
+            invalid["band"] = serde_json::Value::String(rejected.into());
+            assert!(
+                serde_json::from_value::<CalculationRequest>(invalid).is_err(),
+                "unexpectedly accepted band {rejected}"
+            );
+        }
     }
 
     #[test]

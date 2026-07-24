@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildMapOverlayImageSpec } from "./mapOverlay";
+import {
+  MapOverlayBlobUrlLease,
+  buildMapOverlayImageSpec,
+  createMapOverlayBlobUrl,
+} from "./mapOverlay";
 
 const overlayCorners: [number, number][] = [
   [101.39, 32.31],
@@ -45,4 +49,49 @@ describe("MapLibre map overlay image spec", () => {
       }),
     ).toThrow("exactly four corners");
   });
+
+  it("converts a backend PNG data URL into an image/png blob URL without fetching data:", () => {
+    let capturedBlob: Blob | null = null;
+    const objectUrl = createMapOverlayBlobUrl(
+      "data:image/png;base64,iVBORw0KGgo=",
+      (blob) => {
+        capturedBlob = blob;
+        return "blob:hamheatmap-overlay";
+      },
+    );
+
+    expect(objectUrl).toBe("blob:hamheatmap-overlay");
+    expect(capturedBlob).not.toBeNull();
+    expect(capturedBlob!.type).toBe("image/png");
+    expect(capturedBlob!.size).toBe(8);
+  });
+
+  it("rejects non-PNG, malformed base64, and invalid PNG signatures", () => {
+    expect(() => createMapOverlayBlobUrl("data:text/plain;base64,aGk=")).toThrow(
+      "base64 PNG",
+    );
+    expect(() => createMapOverlayBlobUrl("data:image/png;base64,%%%"))
+      .toThrow("invalid base64");
+    expect(() => createMapOverlayBlobUrl("data:image/png;base64,bm90LXBuZw=="))
+      .toThrow("PNG signature");
+  });
+
+  it("reuses the active blob URL and revokes it on replacement, clear, and only once", () => {
+    const create = vi.fn((dataUrl: string) => `blob:${dataUrl}`);
+    const revoke = vi.fn();
+    const lease = new MapOverlayBlobUrlLease(create, revoke);
+
+    expect(lease.acquire("first")).toBe("blob:first");
+    expect(lease.acquire("first")).toBe("blob:first");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(revoke).not.toHaveBeenCalled();
+
+    expect(lease.acquire("second")).toBe("blob:second");
+    expect(revoke).toHaveBeenNthCalledWith(1, "blob:first");
+    lease.clear();
+    expect(revoke).toHaveBeenNthCalledWith(2, "blob:second");
+    lease.clear();
+    expect(revoke).toHaveBeenCalledTimes(2);
+  });
+
 });

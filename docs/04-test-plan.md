@@ -206,3 +206,72 @@
 - Windows 10/11 实机、断网安装、代码签名、编码阶段取消、真实 MapLibre 几何和地图合规仍未完成，不能公开发布。
 
 完整证据见 `14-windows-cross-build-gpu273312.md`。
+
+## 19. 私有服务器验证平台检查点（2026-07-24）
+
+该检查点只验证 `127.0.0.1:1421` 回环服务经 SSH 隧道复用真实 Rust 核心的内部开发路径，不替代 Windows/Tauri、公开 Web 服务或地图合规验收。
+
+### 19.1 已确认的代码回归
+
+- `hamheatmap-validation-server`：10/10 通过，覆盖 CLI 非回环拒绝、路径/MIME、请求上限、唯一且匹配监听地址的 `Host`、单任务门闩、目录隔离、路由 fail-closed、JSON 契约、取消 POST 的 JSON 媒体类型、安全响应头、HEAD 语义，以及 CSP 允许 `data:`/`blob:` 热力图而不放宽外部网络源。
+- 前端：24/24 通过，包含 preview/validation-server/Tauri 三态能力、Tauri 优先级、同源适配器、无体取消 POST 的 JSON 媒体类型、远程处理横幅、服务器计算启用、导出禁用、清空后保留发射点并可重算，以及 MapLibre Blob URL 的 PNG 校验、复用和生命周期释放。
+- `scripts/validation-platform.sh`：`bash -n` 和 `git diff --check` 通过；运行资源固定在 `.runtime/validation-platform/`。
+- validation server 没有导出路由；未知 `/api/export-result` 由路由测试确认为拒绝，浏览器能力测试确认 `canExport=false`。
+
+### 19.2 运行与安全检查
+
+- [x] `scripts/validation-platform.sh build` 生成带 `VITE_VALIDATION_SERVER=1` 的 `app/dist` 与 release server。
+- [x] 完成 `stop → build → start → status/health`；`/healthz` 返回健康。
+- [x] 服务只监听 `127.0.0.1:1421`，公网地址直接连接失败；CLI 也会拒绝任何非回环绑定。
+- [x] Windows 端通过 SSH 本地转发打开 `http://127.0.0.1:1421`，浏览器访问地址为本机 `127.0.0.1`。
+- [ ] 尚未单独执行重复 `start` 与严格 PID 停止的运行时破坏性验证；已有脚本代码防护与测试不替代实测。
+- [x] PID、数据、日志和 build metadata 均收敛在 `.runtime/validation-platform/`，本次未创建 Docker、systemd、Caddy/Nginx 或系统级项目存储。
+- [ ] 日志轮转阈值与请求取消日志脱敏尚未进行压力验证。
+- [x] validation 远程处理横幅在 1080×700 浏览器验收中可见，并有自动化内容测试。
+- [x] validation 模式浏览器导出保持禁用，服务端不存在文件路径或导出端点。
+- [x] 缺失/重复/错误端口/外部 `Host` 被拒绝；取消端点要求 `application/json`，阻断普通跨站表单的简单 POST。
+
+### 19.3 成都真实数据与计算
+
+中心为 `(30.5, 103.5)`。真实数据准备已确认：25 个 DEM、25 个 WBM ready，本次下载 `132,997,688 bytes`，数据根总量 `133,063,224 bytes`，中心高程 `526.3443 m`；浏览器缓存对话框显示 `133.1 MB / 2.50 GB`。
+
+- [x] 真实 DEM/WBM 数据准备和中心高程读取。
+- [x] 修复 `band` JSON 契约后完成真实 `/api/calculate`。
+- [x] 相同输入重复计算的原始 heatmap、地图覆盖层和非耗时统计保持确定。
+
+确定性哈希：heatmap 两次均为 `1e64b5c0c95ba12c5ed52589304df66343b9d2c5f3d48288d3b7250c92f610a7`，overlay 两次均为 `e41b715614045b09a863956e46a0111e4e3761ade29a9eeff069a266ccc5b542`，非耗时统计两次均为 `c7d45d6e69db14f72e80017991bf0a37c6cfc2f59ab9694d178e550bd98a0ea3`。
+- [ ] 取消请求不留下可显示或可导出半成品尚未验证。
+
+真实计算请求：中心 `(30.5,103.5)`，`145.00 MHz`，`25 W`，发射天线 `6 dBi / 20 m`，接收天线 `-3 dBi / 1.5 m`，垂直极化。共享 Coverage / NTIA ITM 路径返回 `401×401` 原始 heatmap 和 `401×401` EPSG:3857 map overlay。
+
+| 统计字段 | 结果 |
+|---|---:|
+| valid | 125,628 |
+| below | 77,496 |
+| warning | 99,214 |
+| min | -250.14908 dBm |
+| max | -41.75736 dBm |
+| mean | -146.670031115 dBm |
+| water | 109,817 |
+| meanWater | 0.0128492517 |
+| propagation | 2.696916 s |
+| total | 8.311013 s |
+| HTTP response | 407,060 bytes |
+
+完整响应体 SHA-256：`4d219a120ef38ad9eb3c2cf5bd0b939ffe247bee123ca1768b124b10c67468f6`。
+
+### 19.4 浏览器视觉
+
+- [x] 在本机 SSH 隧道地址 `127.0.0.1:1421` 完成浏览器验收。
+- [x] `1080×700` 窗口下浅色和深色主题均通过。
+- [x] 真实 heatmap 可见，并随地图缩放和平移保持联动。
+- [x] 缓存对话框显示 `133.1 MB / 2.50 GB`。
+- [x] 服务器模式下导出禁用。
+- [x] 清空只移除 heatmap，保留发射点与就绪数据，同一点可以立即重新计算。
+- [x] 页面刷新后重新完成真实计算，界面报告 `8.3 s / 125628 px`；浏览器控制台 error 和 warning 均为空。
+- [ ] 完整 200 km 圆边界、圆外透明和无像素检查交互尚未在本轮文字记录中逐项独立确认。
+- [x] 内部验证横幅在浏览器截图与 DOM 记录中均可见；自动化测试覆盖其内容。
+
+问题关闭链路：最初 PNG data URL 被 CSP 拒绝；CSP 在不放宽外部来源的前提下加入 `data:`/`blob:` 后，MapLibre ImageSource 仍出现 data URL AJAXError；最终改为带 PNG 签名校验和生命周期测试的 Blob URL。刷新后真实覆盖层正常显示并跟随地图交互。本轮按要求只保留文字证据，没有生成截图。
+
+完整架构、安全边界和命令见 `15-private-validation-platform.md`。即使本节已完成真实计算与浏览器显示，Windows 10/11 WebView2、原生导出、安装包、地图授权/审图号和传播外场精度仍是独立门槛。

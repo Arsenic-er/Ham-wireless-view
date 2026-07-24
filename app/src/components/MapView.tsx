@@ -11,7 +11,7 @@ import {
   graticuleGeoJson,
   maidenheadLocator,
 } from "../lib/geodesy";
-import { buildMapOverlayImageSpec } from "../lib/mapOverlay";
+import { MapOverlayBlobUrlLease, buildMapOverlayImageSpec } from "../lib/mapOverlay";
 import type { CalculationResult, MapPoint, ResolvedTheme } from "../lib/types";
 
 interface MapViewProps {
@@ -71,14 +71,17 @@ function updateHeatmap(
   map: MapLibreMap,
   heatmap: CalculationResult | null,
   stale: boolean,
+  blobUrls: MapOverlayBlobUrlLease,
 ): void {
   const source = map.getSource("coverage-heatmap") as ImageSource | undefined;
   if (!heatmap) {
     if (map.getLayer("coverage-heatmap-layer")) map.removeLayer("coverage-heatmap-layer");
     if (source) map.removeSource("coverage-heatmap");
+    blobUrls.clear();
     return;
   }
-  const image = buildMapOverlayImageSpec(heatmap);
+  const dataImage = buildMapOverlayImageSpec(heatmap);
+  const image = { ...dataImage, url: blobUrls.acquire(dataImage.url) };
   if (source) {
     source.updateImage(image);
     map.setPaintProperty("coverage-heatmap-layer", "raster-opacity", stale ? 0.28 : 0.84);
@@ -105,6 +108,10 @@ export function MapView({
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const heatmapBlobUrlsRef = useRef<MapOverlayBlobUrlLease | null>(null);
+  if (!heatmapBlobUrlsRef.current) {
+    heatmapBlobUrlsRef.current = new MapOverlayBlobUrlLease();
+  }
   const pointRef = useRef(point);
   const heatmapRef = useRef(heatmap);
   const heatmapStaleRef = useRef(heatmapStale);
@@ -115,7 +122,8 @@ export function MapView({
   onPointSelectRef.current = onPointSelect;
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !heatmapBlobUrlsRef.current) return;
+    const heatmapBlobUrls = heatmapBlobUrlsRef.current;
     const dark = theme === "dark";
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -202,13 +210,14 @@ export function MapView({
           "circle-stroke-width": 2,
         },
       });
-      updateHeatmap(map, heatmapRef.current, heatmapStaleRef.current);
+      updateHeatmap(map, heatmapRef.current, heatmapStaleRef.current, heatmapBlobUrls);
     });
     map.on("click", (event) => {
       onPointSelectRef.current({ lat: event.lngLat.lat, lon: event.lngLat.lng });
     });
     return () => {
       mapRef.current = null;
+      heatmapBlobUrls.clear();
       map.remove();
     };
   }, []);
@@ -238,8 +247,9 @@ export function MapView({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
-    updateHeatmap(map, heatmap, heatmapStale);
+    const heatmapBlobUrls = heatmapBlobUrlsRef.current;
+    if (!map?.isStyleLoaded() || !heatmapBlobUrls) return;
+    updateHeatmap(map, heatmap, heatmapStale, heatmapBlobUrls);
   }, [heatmap, heatmapStale]);
 
   return (

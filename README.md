@@ -6,6 +6,8 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 需求基线已经确认，Phase 0、计算核心最小可行性验证、Phase 1 DEM/WBM 缓存闭环和陆地/统一水体传播建模已经通过。Phase 2 已完成 React/MapLibre 主界面、地图点选、参数与主题、Tauri→Rust 真实计算、区域准备与安全缓存删除、服务器 Windows 构建，以及带强制内部水印的离线 PNG/PDF 诊断报告。地图显示已改为独立的 401×401、轴对齐 EPSG:3857 反向重采样覆盖层；中国代表性纬度的最大定位误差为 739.625 m，低于 1 km 门槛，自动化验收已经通过。合规底图、正式地图导出、代码签名和 Windows 10/11 完整实机验收仍未完成。
 
+为便于在不向 Windows 本机同步开发资源的前提下验证真实缓存和传播流程，项目新增了只监听服务器回环地址的私有浏览器验证平台。它通过 SSH 隧道访问，具有醒目的内部验证与远程处理提示，不开放公网端口，也不提供文件导出。该平台不替代 Windows/WebView2、原生保存对话框或公开地图合规验收。
+
 首轮结果见 `docs/05-phase0-validation-report.md`，真实地形最小可行性结果见 `docs/06-minimum-viability-validation.md`，缓存闭环见 `docs/07-phase1-cache-validation.md`，陆地/水体结果见 `docs/08-land-water-validation.md`，桌面首切片见 `docs/09-phase2-desktop-slice.md`，下载与缓存交互见 `docs/10-phase2-download-cache-slice.md`。通过桌面服务契约运行成都真实缓存时，125,628 个像素约 9.75 秒完成；下载状态烟雾测试确认 50 个 DEM/WBM 资产无需重复下载并正确进入 ready。上述数字仍不是 Windows 整机验收。
 
 > [!WARNING]
@@ -39,6 +41,8 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 - `docs/11-windows-cross-build.md`：服务器 Windows 交叉构建、静态 CRT、产物和实机门槛。
 - `docs/12-phase2-export-slice.md`：内部诊断 PNG/PDF、原生保存与正式地图导出边界。
 - `docs/13-web-mercator-overlay-validation.md`：MapLibre 四角映射误差、Web Mercator 覆盖层方法与验收记录。
+- `docs/14-windows-cross-build-gpu273312.md`：新服务器固定工具链、Windows 产物与 PE/安装包审计。
+- `docs/15-private-validation-platform.md`：SSH 隧道私有验证平台、三态前端、运行边界与验证记录。
 - `docs/decisions/`：带证据的工程决策记录。
 
 ## 开发与构建
@@ -97,6 +101,44 @@ scripts/node-project.sh --prefix app test
 scripts/node-project.sh --prefix app run build
 scripts/node-project.sh --prefix app run dev
 ```
+
+## 私有服务器验证平台
+
+验证平台只供项目内部开发使用。它把 validation 构建的 React 前端与复用 `hamheatmap-app-service` 的 Linux HTTP 桥接器放在同一个源站，允许检查真实数据准备、缓存管理和传播计算。服务器进程固定监听 `127.0.0.1:1421`；不要改为 `0.0.0.0`，不要占用 Cockpit 的 `9090`，也不要在云防火墙中开放新的公网端口。
+
+在服务器构建并启动：
+
+```bash
+cd /home/ubuntu/hamheatmap
+scripts/validation-platform.sh build
+scripts/validation-platform.sh start
+scripts/validation-platform.sh status
+scripts/validation-platform.sh health
+```
+
+在 Windows PowerShell 建立 SSH 隧道，并保持该终端窗口运行：
+
+```powershell
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 1421:127.0.0.1:1421 ubuntu@150.65.181.202
+```
+
+然后在本机浏览器打开 `http://127.0.0.1:1421`。该地址是 SSH 隧道的本机入口，不是服务器公网端口。验证结束后在服务器停止：
+
+```bash
+scripts/validation-platform.sh stop
+```
+
+三种前端模式具有不同权限：
+
+| 模式 | 数据准备/缓存/计算 | 文件导出 | 用途 |
+|---|---:|---:|---|
+| Windows Tauri | 是 | 是 | 最终桌面行为 |
+| 私有 validation server | 是 | 否 | 服务器真实核心验证 |
+| 普通浏览器 preview | 否 | 否 | 纯界面与视觉检查 |
+
+验证模式会把坐标、无线电参数和计算请求发送到用户控制的 JAIST 服务器，因此它是桌面“坐标和结果只留本机”原则的明确内部测试例外。只使用测试坐标，不要输入不愿离开本机的敏感位置。服务器仍通过共享 `AppService` 执行固定来源、2.5 GB 配额、DEM/WBM 完整性和 ITM 规则；浏览器没有服务器文件路径权限，服务端也没有导出端点。
+
+所有运行数据、PID、日志和构建元数据都在项目的 `.runtime/validation-platform/`，不会写入 Windows 本机，也不使用 Docker、系统服务或系统级运行目录。`start` 可安全重复执行并在 SSH 断开后继续运行，但服务器重启后需要重新执行；日志与进程控制细节见 `docs/15-private-validation-platform.md`。
 
 Tauri 壳层位于 `app/src-tauri/`。JAIST Linux 负责前端、共享 Rust 服务、浏览器视觉回归和内部 Windows 交叉构建；正式发布仍必须在 Windows 10/11 验证 WebView2、安装包和文件系统行为。
 
