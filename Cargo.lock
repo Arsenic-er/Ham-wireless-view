@@ -427,6 +427,7 @@ dependencies = [
  "hamheatmap-propagation",
  "hamheatmap-terrain",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

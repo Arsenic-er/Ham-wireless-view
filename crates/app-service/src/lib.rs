@@ -20,7 +20,7 @@ use hamheatmap_propagation::{Polarization, dbd_to_dbi, dbm_to_watts};
 use hamheatmap_terrain::{DemTileId, DemTileSet, WaterTileSet};
 use serde::{Deserialize, Serialize};
 
-pub const APP_SERVICE_SCHEMA_VERSION: u32 = 1;
+pub const APP_SERVICE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -273,6 +273,11 @@ pub struct CalculationResult {
     pub image_height: usize,
     pub image_corners: [[f64; 2]; 4],
     pub heatmap_png_data_url: String,
+    pub map_overlay_projection: &'static str,
+    pub map_overlay_width: usize,
+    pub map_overlay_height: usize,
+    pub map_overlay_corners: [[f64; 2]; 4],
+    pub map_overlay_png_data_url: String,
     pub statistics: CalculationStatisticsView,
 }
 
@@ -564,6 +569,9 @@ impl AppService {
                 total_pixel_count: grid.statistics.valid_pixel_count,
             });
             let png = grid.encode_png().map_err(|error| error.to_string())?;
+            let map_overlay = grid
+                .encode_map_overlay()
+                .map_err(|error| error.to_string())?;
             let statistics = CalculationStatisticsView {
                 valid_pixel_count: grid.statistics.valid_pixel_count,
                 below_threshold_pixel_count: grid.statistics.below_threshold_pixel_count,
@@ -587,6 +595,14 @@ impl AppService {
                 heatmap_png_data_url: format!(
                     "data:image/png;base64,{}",
                     BASE64_STANDARD.encode(png)
+                ),
+                map_overlay_projection: map_overlay.projection,
+                map_overlay_width: map_overlay.width,
+                map_overlay_height: map_overlay.height,
+                map_overlay_corners: map_overlay.corners,
+                map_overlay_png_data_url: format!(
+                    "data:image/png;base64,{}",
+                    BASE64_STANDARD.encode(map_overlay.png)
                 ),
                 statistics,
             })
@@ -827,6 +843,75 @@ mod tests {
             let distance_m: f64 = geodesic.inverse(center.lat, center.lon, corner[1], corner[0]);
             assert!((distance_m - 200_000.0 * 2.0_f64.sqrt()).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn calculation_contract_schema_includes_map_overlay() {
+        assert_eq!(APP_SERVICE_SCHEMA_VERSION, 2);
+    }
+
+    #[test]
+    fn calculation_result_serializes_all_overlay_fields_in_camel_case() {
+        let result = CalculationResult {
+            schema_version: APP_SERVICE_SCHEMA_VERSION,
+            model_name: "NTIA ITM Point-to-Point",
+            model_version: MODEL_DEFAULTS_VERSION,
+            center: MapPoint {
+                lat: 30.5,
+                lon: 103.5,
+            },
+            image_width: GRID_SIZE,
+            image_height: GRID_SIZE,
+            image_corners: [[101.0, 32.0], [106.0, 32.0], [106.0, 28.0], [101.0, 28.0]],
+            heatmap_png_data_url: "data:image/png;base64,native".into(),
+            map_overlay_projection: "EPSG:3857",
+            map_overlay_width: GRID_SIZE,
+            map_overlay_height: GRID_SIZE,
+            map_overlay_corners: [[101.1, 32.1], [105.9, 32.1], [105.9, 27.9], [101.1, 27.9]],
+            map_overlay_png_data_url: "data:image/png;base64,overlay".into(),
+            statistics: CalculationStatisticsView {
+                valid_pixel_count: 125_628,
+                below_threshold_pixel_count: 400,
+                warning_pixel_count: 0,
+                minimum_dbm: -139.0,
+                maximum_dbm: -40.0,
+                mean_dbm: -90.0,
+                water_affected_pixel_count: 10,
+                mean_path_water_fraction: 0.1,
+                propagation_seconds: 8.0,
+                total_seconds: 9.0,
+            },
+        };
+        let serialized = serde_json::to_value(result).unwrap();
+        let object = serialized.as_object().unwrap();
+        let expected_keys = [
+            "schemaVersion",
+            "modelName",
+            "modelVersion",
+            "center",
+            "imageWidth",
+            "imageHeight",
+            "imageCorners",
+            "heatmapPngDataUrl",
+            "mapOverlayProjection",
+            "mapOverlayWidth",
+            "mapOverlayHeight",
+            "mapOverlayCorners",
+            "mapOverlayPngDataUrl",
+            "statistics",
+        ];
+        assert_eq!(object.len(), expected_keys.len());
+        for key in expected_keys {
+            assert!(object.contains_key(key), "missing serialized field {key}");
+        }
+        assert_eq!(object["mapOverlayProjection"].as_str(), Some("EPSG:3857"));
+        assert_eq!(object["mapOverlayWidth"].as_u64(), Some(GRID_SIZE as u64));
+        assert_eq!(
+            object["mapOverlayPngDataUrl"].as_str(),
+            Some("data:image/png;base64,overlay")
+        );
+        assert!(!object.contains_key("map_overlay_projection"));
+        assert!(!object.contains_key("map_overlay_png_data_url"));
     }
 
     #[test]

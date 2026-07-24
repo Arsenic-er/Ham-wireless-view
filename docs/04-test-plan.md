@@ -35,6 +35,10 @@
 - 海岸和边境站点仍生成完整 200 km 圆。
 - 接收点海拔逐像素从 DEM 取得。
 - 发射点手动海拔只覆盖该点，不修改 DEM。
+- 原始报告栅格保持 `401×401` 局部等距样本；地图另生成 `401×401`、轴对齐 EPSG:3857 覆盖层。
+- 地图图像边界相对首末输出像素中心各扩展半个像素；精确 200 km 连续边界点必须位于图像域内，199 km 内侧 alpha 可见。若最近像素中心透明，`3×3` 邻域内最近可见中心误差不得超过该处 WGS-84 实算一个输出像素对角线。
+- 纬度 18°、30.5°、40°、54° 的代表性覆盖层定位误差均小于 1 km。
+- 反向重采样对有限邻域重新归一化；圆外、原始 NaN、原始域外和无有限贡献像素透明。
 
 ## 4. UI 测试
 
@@ -43,6 +47,7 @@
 - 两种主题下色标数值和颜色顺序一致。
 - 底图不存在 hillshade、等高线、坡度、高程着色或 3D terrain。
 - 热力图像素不响应 hover/click，也不存在像素查询命令。
+- MapView 只使用独立 Web Mercator 覆盖层字段；内部报告继续使用原始局部等距 PNG，二者不能误接。
 - 发射点信息显示坐标、海拔、Maidenhead 与缓存状态。
 - 参数变化后旧结果变淡、显示过期状态且禁止导出。
 - 计算时参数锁定；取消后恢复。
@@ -105,6 +110,7 @@
 ## 10. MVP 退出标准
 
 - 所有 P0/P1 测试通过。
+- Web Mercator 覆盖层在代表性中国纬度满足 `< 1 km` 样本中心门槛；精确 200 km 连续边界位于半像素扩展域内，并按一个输出像素对角线容差验收栅格化 alpha；原始报告 PNG 保持不变。
 - 无未处理 ITM error；warning 有统计和解释。
 - 三个真实区域案例通过人工审查：平原、山区、沿海。
 - Windows 10 和 Windows 11 至少各完成一次安装、离线计算和导出。
@@ -152,7 +158,7 @@
 - 交叉构建不替代 Windows 原生 QA。Windows 10/11 的 WebView2、文件目录、原子操作、安装/卸载、代码签名和整机性能仍是下一检查点。
 - 完整构建证据、哈希与边界见 `11-windows-cross-build.md`。
 
-完整记录见 `09-phase2-desktop-slice.md`。该检查点当时尚未验收区域下载/删除；此项已由下一节与 `10-phase2-download-cache-slice.md` 补充。合规有效区、热力图最终地图重投影和 PNG/PDF 导出仍未验收。
+完整记录见 `09-phase2-desktop-slice.md`。该检查点当时尚未验收区域下载/删除、热力图最终地图重投影和 PNG/PDF 导出；区域下载/删除已由下一节与 `10-phase2-download-cache-slice.md` 补充，内部 PNG/PDF 已由第 16 节补充，地图重投影已由第 17 节补充。合规有效区仍未验收。
 
 ## 15. Phase 2 下载与缓存管理检查点（2026-07-16）
 
@@ -175,3 +181,16 @@
 - Windows production EXE/NSIS 重建和静态 CRT 导入表检查已通过；WebView2 原生保存流程和另一台 Windows 电脑打开产物仍待验证。
 
 完整记录见 `12-phase2-export-slice.md`。正式地图导出继续受底图、审图号、署名、离线授权和导出授权硬门槛约束。
+
+## 17. Web Mercator 地图覆盖层检查点（2026-07-24）
+
+- 旧 MapLibre 四角两三角映射已按其 Web Mercator 仿射插值过程复核；纬度 18°–54° 的最大误差为 2.035–8.587 km，确认不能满足 1 km 门槛。
+- ADR 0011 固定双栅格方案：原始 `401×401` PNG 保留给内部报告，地图使用单独的 `401×401` 轴对齐 EPSG:3857 反向重采样覆盖层。
+- 自动化验收必须覆盖半像素边界、四角轴对齐、代表性纬度 `< 1 km`、199 km 内侧 alpha、精确 200 km 连续边界的单像素栅格容差、NaN/圆外透明、确定性编码和前端字段分离。
+- 新覆盖层在纬度 18°、30.5°、40°、54° 的最大定位误差分别为 711.655 m、716.127 m、725.742 m、739.625 m；总体最大值 `739.625 m < 1 km`，四个代表性纬度全部通过。
+- `map_overlay_pixel_sampling_matches_absolute_affine_field_and_image_uv`、`calculation_result_serializes_all_overlay_fields_in_camel_case` 和前端 `buildMapOverlayImageSpec` 测试分别关闭绝对仿射 dBm/MapLibre UV、真实 14 字段 camelCase 序列化和地图/报告字段分离风险。
+- 精确 200 km 连续边界点全部位于半像素扩展图像域内；部分边界的最近像素中心透明，`3×3` 邻域最近可见中心最差为纬度 18°向南 `1012.102 m`，小于该处 WGS-84 实算一个输出像素对角线 `1431.578 m`。
+- Rust 工作区 `57 passed`、`0 failed`、`3 ignored`（显式联网 GLO-90）；rustfmt、`scripts/cargo-project.sh clippy --workspace --all-targets --locked --offline -- -D warnings`、TypeScript 检查、前端 4 文件/13 测试、Vite production build 和 `git diff --check` 全部通过。本检查点已关闭。
+- release 优化构建下的覆盖层重采样/第二张 PNG 编码耗时，以及 Windows 10/11 WebView2 中 MapLibre 实机几何仍未验收，不能由本检查点推断为已关闭。
+
+验证方法、旧方案数值和结果表见 `13-web-mercator-overlay-validation.md`。

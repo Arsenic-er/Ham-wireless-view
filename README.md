@@ -4,7 +4,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 ## 当前状态
 
-需求基线已经确认，Phase 0、计算核心最小可行性验证、Phase 1 DEM/WBM 缓存闭环和陆地/统一水体传播建模已经通过。Phase 2 已完成 React/MapLibre 主界面、地图点选、参数与主题、Tauri→Rust 真实计算、区域准备与安全缓存删除、服务器 Windows 构建，以及带强制内部水印的离线 PNG/PDF 诊断报告。合规底图、正式地图导出、热力图最终重投影、代码签名和 Windows 10/11 完整实机验收仍未完成。
+需求基线已经确认，Phase 0、计算核心最小可行性验证、Phase 1 DEM/WBM 缓存闭环和陆地/统一水体传播建模已经通过。Phase 2 已完成 React/MapLibre 主界面、地图点选、参数与主题、Tauri→Rust 真实计算、区域准备与安全缓存删除、服务器 Windows 构建，以及带强制内部水印的离线 PNG/PDF 诊断报告。地图显示已改为独立的 401×401、轴对齐 EPSG:3857 反向重采样覆盖层；中国代表性纬度的最大定位误差为 739.625 m，低于 1 km 门槛，自动化验收已经通过。合规底图、正式地图导出、代码签名和 Windows 10/11 完整实机验收仍未完成。
 
 首轮结果见 `docs/05-phase0-validation-report.md`，真实地形最小可行性结果见 `docs/06-minimum-viability-validation.md`，缓存闭环见 `docs/07-phase1-cache-validation.md`，陆地/水体结果见 `docs/08-land-water-validation.md`，桌面首切片见 `docs/09-phase2-desktop-slice.md`，下载与缓存交互见 `docs/10-phase2-download-cache-slice.md`。通过桌面服务契约运行成都真实缓存时，125,628 个像素约 9.75 秒完成；下载状态烟雾测试确认 50 个 DEM/WBM 资产无需重复下载并正确进入 ready。上述数字仍不是 Windows 整机验收。
 
@@ -38,9 +38,12 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 - `docs/10-phase2-download-cache-slice.md`：下载确认、进度/取消、区域列表和引用安全删除验证。
 - `docs/11-windows-cross-build.md`：服务器 Windows 交叉构建、静态 CRT、产物和实机门槛。
 - `docs/12-phase2-export-slice.md`：内部诊断 PNG/PDF、原生保存与正式地图导出边界。
+- `docs/13-web-mercator-overlay-validation.md`：MapLibre 四角映射误差、Web Mercator 覆盖层方法与验收记录。
 - `docs/decisions/`：带证据的工程决策记录。
 
 ## 开发与构建
+
+当前唯一规范开发工作区是 `gpu-273312`（`ubuntu@150.65.181.202`）上的 `/home/ubuntu/hamheatmap`；源码、依赖、缓存、构建与验证产物均保留在服务器，Windows 本机只接收最终可执行程序。
 
 克隆公开仓库：
 

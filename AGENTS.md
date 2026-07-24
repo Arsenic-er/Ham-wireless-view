@@ -2,7 +2,7 @@
 
 ## Workspace
 
-- Canonical workspace: `/home/ubuntu/hamheatmap` on `gpu-753856`.
+- Canonical workspace: `/home/ubuntu/hamheatmap` on `gpu-273312` (`ubuntu@150.65.181.202`).
 - Keep project documents, source, fixtures, scripts, and build configuration inside this directory.
 - Read all files in `docs/` before changing product scope or architecture.
 

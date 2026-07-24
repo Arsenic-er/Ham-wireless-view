@@ -161,6 +161,11 @@ export interface CalculationResult {
   imageHeight: number;
   imageCorners: [number, number][];
   heatmapPngDataUrl: string;
+  mapOverlayProjection: "EPSG:3857";
+  mapOverlayWidth: number;
+  mapOverlayHeight: number;
+  mapOverlayCorners: [number, number][];
+  mapOverlayPngDataUrl: string;
   statistics: CalculationStatistics;
 }
 

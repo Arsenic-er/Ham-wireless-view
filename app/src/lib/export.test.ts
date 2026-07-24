@@ -8,7 +8,7 @@ import {
 import type { CalculationResult, RadioParameters } from "./types";
 
 const result: CalculationResult = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   modelName: "NTIA ITM Point-to-Point",
   modelVersion: "land-water-v1",
   center: { lat: 30.5, lon: 103.5 },
@@ -21,6 +21,16 @@ const result: CalculationResult = {
     [101.4, 28.7],
   ],
   heatmapPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+  mapOverlayProjection: "EPSG:3857",
+  mapOverlayWidth: 401,
+  mapOverlayHeight: 401,
+  mapOverlayCorners: [
+    [101.39, 32.31],
+    [105.61, 32.31],
+    [105.61, 28.69],
+    [101.39, 28.69],
+  ],
+  mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
   statistics: {
     validPixelCount: 125_628,
     belowThresholdPixelCount: 400,

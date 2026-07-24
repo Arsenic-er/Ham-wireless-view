@@ -11,6 +11,7 @@ import {
   graticuleGeoJson,
   maidenheadLocator,
 } from "../lib/geodesy";
+import { buildMapOverlayImageSpec } from "../lib/mapOverlay";
 import type { CalculationResult, MapPoint, ResolvedTheme } from "../lib/types";
 
 interface MapViewProps {
@@ -77,15 +78,7 @@ function updateHeatmap(
     if (source) map.removeSource("coverage-heatmap");
     return;
   }
-  const image = {
-    url: heatmap.heatmapPngDataUrl,
-    coordinates: heatmap.imageCorners as [
-      [number, number],
-      [number, number],
-      [number, number],
-      [number, number],
-    ],
-  };
+  const image = buildMapOverlayImageSpec(heatmap);
   if (source) {
     source.updateImage(image);
     map.setPaintProperty("coverage-heatmap-layer", "raster-opacity", stale ? 0.28 : 0.84);

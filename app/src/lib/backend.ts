@@ -28,7 +28,7 @@ export async function bootstrap(): Promise<BootstrapInfo> {
     return invoke<BootstrapInfo>("bootstrap");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     modelName: "NTIA ITM Point-to-Point",
     modelVersion: "land-water-v1",
     coverageRadiusKm: 200,
