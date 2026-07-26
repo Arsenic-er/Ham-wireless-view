@@ -213,18 +213,18 @@
 
 ### 19.1 已确认的代码回归
 
-- `hamheatmap-validation-server`：10/10 通过，覆盖 CLI 非回环拒绝、路径/MIME、请求上限、唯一且匹配监听地址的 `Host`、单任务门闩、目录隔离、路由 fail-closed、JSON 契约、取消 POST 的 JSON 媒体类型、安全响应头、HEAD 语义，以及 CSP 允许 `data:`/`blob:` 热力图而不放宽外部网络源。
-- 前端：24/24 通过，包含 preview/validation-server/Tauri 三态能力、Tauri 优先级、同源适配器、无体取消 POST 的 JSON 媒体类型、远程处理横幅、服务器计算启用、导出禁用、清空后保留发射点并可重算，以及 MapLibre Blob URL 的 PNG 校验、复用和生命周期释放。
+- `hamheatmap-validation-server`：11/11 通过，覆盖 CLI 非回环拒绝、路径/MIME、请求上限、唯一且匹配监听地址的 `Host`、单任务门闩与取消线性化、目录隔离、路由 fail-closed、JSON 契约、取消 POST 的 JSON 媒体类型、安全响应头、HEAD 语义，以及 CSP 允许 `data:`/`blob:` 热力图而不放宽外部网络源。
+- 前端：26/26 通过，包含 preview/validation-server/Tauri 三态能力、Tauri 优先级、同源适配器、无体取消 POST 的 JSON 媒体类型、远程处理横幅、服务器计算启用、导出禁用、取消期间阻断新操作、清空后保留发射点并可重算，以及 MapLibre Blob URL 的 PNG 校验、复用和生命周期释放。
 - `scripts/validation-platform.sh`：`bash -n` 和 `git diff --check` 通过；运行资源固定在 `.runtime/validation-platform/`。
 - validation server 没有导出路由；未知 `/api/export-result` 由路由测试确认为拒绝，浏览器能力测试确认 `canExport=false`。
 
 ### 19.2 运行与安全检查
 
 - [x] `scripts/validation-platform.sh build` 生成带 `VITE_VALIDATION_SERVER=1` 的 `app/dist` 与 release server。
-- [x] 完成 `stop → build → start → status/health`；`/healthz` 返回健康。
+- [x] 基于 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 完成 `stop → build → start → status/health → bootstrap/cache-overview`；旧 PID `214692` 已退出，新 PID 为 `1114524`。
 - [x] 服务只监听 `127.0.0.1:1421`，公网地址直接连接失败；CLI 也会拒绝任何非回环绑定。
 - [x] Windows 端通过 SSH 本地转发打开 `http://127.0.0.1:1421`，浏览器访问地址为本机 `127.0.0.1`。
-- [ ] 尚未单独执行重复 `start` 与严格 PID 停止的运行时破坏性验证；已有脚本代码防护与测试不替代实测。
+- [x] 重复 `start` 保持 PID `1114524`；直接 `__run` 被 runner claim 拒绝，严格 stop 只终止已验证的旧 PID `214692`。
 - [x] PID、数据、日志和 build metadata 均收敛在 `.runtime/validation-platform/`，本次未创建 Docker、systemd、Caddy/Nginx 或系统级项目存储。
 - [ ] 日志轮转阈值与请求取消日志脱敏尚未进行压力验证。
 - [x] validation 远程处理横幅在 1080×700 浏览器验收中可见，并有自动化内容测试。
@@ -233,14 +233,15 @@
 
 ### 19.3 成都真实数据与计算
 
-中心为 `(30.5, 103.5)`。真实数据准备已确认：25 个 DEM、25 个 WBM ready，本次下载 `132,997,688 bytes`，数据根总量 `133,063,224 bytes`，中心高程 `526.3443 m`；浏览器缓存对话框显示 `133.1 MB / 2.50 GB`。
+中心为 `(30.5, 103.5)`。首次真实数据准备已确认：25 个 DEM、25 个 WBM ready，本次下载 `132,997,688 bytes`，当时数据根总量 `133,063,224 bytes`，中心高程 `526.3443 m`；浏览器缓存对话框显示 `133.1 MB / 2.50 GB`。
+2026-07-27 的应用进程重启恢复检查中，缓存总量在重启前后均为 `133,071,416 bytes`、partial 为 0，两个缓存区域各 `50/50 ready`。
 
 - [x] 真实 DEM/WBM 数据准备和中心高程读取。
 - [x] 修复 `band` JSON 契约后完成真实 `/api/calculate`。
 - [x] 相同输入重复计算的原始 heatmap、地图覆盖层和非耗时统计保持确定。
 
 确定性哈希：heatmap 两次均为 `1e64b5c0c95ba12c5ed52589304df66343b9d2c5f3d48288d3b7250c92f610a7`，overlay 两次均为 `e41b715614045b09a863956e46a0111e4e3761ade29a9eeff069a266ccc5b542`，非耗时统计两次均为 `c7d45d6e69db14f72e80017991bf0a37c6cfc2f59ab9694d178e550bd98a0ea3`。
-- [ ] 取消请求不留下可显示或可导出半成品尚未验证。
+- [x] 真实 HTTP 取消返回 `cancelled=true`；被取消计算为 HTTP 422 且不含双 PNG。随后相同请求 HTTP 200，`schemaVersion=2`，两组尺寸均为 `401×401`，两个唯一且非空的 data URL 均通过 Base64 与 24-byte PNG/IHDR `401×401` 验证。
 
 真实计算请求：中心 `(30.5,103.5)`，`145.00 MHz`，`25 W`，发射天线 `6 dBi / 20 m`，接收天线 `-3 dBi / 1.5 m`，垂直极化。共享 Coverage / NTIA ITM 路径返回 `401×401` 原始 heatmap 和 `401×401` EPSG:3857 map overlay。
 
@@ -292,7 +293,7 @@
 - validation server 和 Tauri 各自用带身份的操作 lease 把“接受取消”和“发布成功结果”线性化；若取消标志在 lease 结束前已经被接受，即使 worker 返回成功，也只能向调用方返回取消。
 - `AppService` 在传播完成后、两张 PNG 编码之间、Base64 转换之间和最终结果交付前继续检查取消，缩小编码阶段不可响应窗口。
 - 前端取消重算时立即丢弃旧 heatmap 并禁用导出；被取消的请求结束后允许干净重试，旧结果不能重新出现。
-- 代码测试不等于真实 HTTP 并发时序。通过 SSH 隧道对长计算发送 `/api/cancel-calculation`、确认响应不含结果且随后可重算，仍是明确待办。
+- `scripts/validation-recovery-smoke.sh` 加固后再次连续通过：运行前无效 inspect 返回 422 确认 gate 为空；只有后台 curl 同时匹配本 shell job、PPID、start time 和 executable，才把活动 gate 认作本测试所有。该证明仍限受控单客户端，不关闭 operation ID 多客户端风险。
 
 ### 20.3 管理脚本恢复
 
@@ -301,14 +302,33 @@
 - 所有管理路径必须位于项目工作区且路径分量不能是符号链接；自检覆盖陈旧锁/claim 恢复、存活 claim 排他、符号链接逃逸拒绝、精确 argv 和当前托管进程身份。
 - `/healthz` 只表示回环 HTTP 进程能响应及协议 schema；它不打开缓存。需要确认缓存锁、重启整理和 2.5 GB 配额可用时，必须调用 `/api/bootstrap`。管理脚本 `health` 不能被描述为数据就绪检查。
 
-### 20.4 自动化证据与未关闭项
+### 20.4 证据与未关闭项
 
 - Rust workspace 离线清单合计 `77 passed / 3 ignored`：app-service 12、cache 21、coverage 15、export 6、propagation 6、official reference 1、terrain 5、validation server 11；3 项 ignored 是显式真实网络测试。
 - 3 项真实 GLO-90 HTTPS 测试另行 `3/3` 通过；它们不属于离线 `77 passed`。
 - 前端 26 项测试通过；其中取消重算与延迟取消测试确认旧结果清除、取消期间阻断新操作、导出禁用和重试恢复。
 - Tauri 纯状态控制器 4/4 通过，并完成 Windows xwin 目标编译检查；这不等于 Windows EXE/NSIS 最终重建或 Windows 实机验收。
 - `scripts/validation-platform.sh` 已通过 `bash -n` 和 `self-test`。
-- [ ] 真实 HTTP 长计算取消及取消后无半结果验证。
-- [ ] 改动后的真实 `stop → build → start → status/health → bootstrap` 全链路。
+- [x] 真实 HTTP 长计算取消、无半结果和同请求重算通过。
+- [x] 加固版 `stop → build → start → status/health → bootstrap/cache-overview` 全链路通过。
 - [ ] 十进制 2.5 GB 实体缓存压力、磁盘不足与进程崩溃注入。
-- [ ] HTTP 渐进进度、Windows 10/11 WebView2 和地图合规。
+- [ ] GPU 主机整机重启、HTTP 渐进进度、Windows 10/11 WebView2、operation ID 多客户端绑定和地图合规。
+
+### 20.5 加固版真实恢复运行
+
+应用基线提交与 validation build metadata revision 均为 `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`。
+
+| 检查 | 结果 |
+|---|---|
+| 受管进程切换 | 旧 PID `214692` 经严格 `stop` 退出；`build → start` 后新 PID `1114524` |
+| 进程与数据就绪 | `status`、`health`、`/api/bootstrap`、`/api/cache-overview` 全部通过 |
+| 缓存恢复 | 重启前后均为 `133,071,416 bytes`、`partial=0`；两个区域各 `50/50 ready` |
+| 重复 start | 返回已运行并保持 PID `1114524` |
+| runner 排他 | 直接调用 `__run` 被拒绝：`another validation runner is active` |
+| 真实取消恢复 | `scripts/validation-recovery-smoke.sh` 连续运行通过 |
+
+真实取消中，取消端点返回 `cancelled=true`；被取消的 calculate 返回 HTTP 422，响应不含 `heatmapPngDataUrl` 或 `mapOverlayPngDataUrl`。随后相同请求返回 HTTP 200，并验证 `schemaVersion=2`、原始图与 overlay 尺寸字段均为 `401×401`、两个 data URL 各唯一且非空、Base64 可解码、解码结果前 24 bytes 为 PNG signature/IHDR `401×401`。
+
+最终 gate probe 不再返回 409，`/healthz` 仍为 200；脚本再次输出 `validation recovery smoke passed: cancel=true cancelled_http=422 recovery_http=200`，且没有 `validation-recovery-smoke.*` 临时目录残留。
+
+本记录验证的是受管应用进程 stop/start，不是 GPU 主机整机重启。整机重启后的手动恢复仍保留为待办。

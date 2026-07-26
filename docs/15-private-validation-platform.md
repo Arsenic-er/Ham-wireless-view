@@ -5,7 +5,7 @@
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`
-- 状态：私有平台、真实成都计算和浏览器视觉验证已完成；恢复/取消加固通过代码检查，真实 HTTP 取消与加固版 stop/start 运行验收仍待完成
+- 状态：私有平台、真实成都计算、浏览器视觉、加固版 stop/build/start/readiness 和真实 HTTP 取消恢复均已验证；仍不替代整机重启、Windows/Tauri 与地图合规验收
 
 ## 1. 目标与边界
 
@@ -121,7 +121,7 @@ scripts/validation-platform.sh stop
 
 `start` 使用 `nohup + setsid`，SSH 断开后进程继续运行；服务器重启后不会自动恢复。不要用通配进程名或手工 PID 执行 `kill`。停止入口除核对用户、项目 release binary 和完整 argv 外，还核对进程 start time；后台 runner 以 PID、start time、boot ID 的 claim 证明生命周期所有权，避免只凭可复用 PID 发送信号。
 
-`self-test` 在独立的项目内临时状态目录验证陈旧控制锁、runner claim、符号链接路径逃逸和精确 argv，不启动或停止持久服务。新加固版仍需单独完成一次真实 `stop → build → start → status/health → bootstrap`，才能记录运行链路通过。
+`self-test` 在独立的项目内临时状态目录验证陈旧控制锁、runner claim、符号链接路径逃逸和精确 argv，不启动或停止持久服务。加固版真实 `stop → build → start → status/health → bootstrap/cache-overview` 已另行通过，证据见 9.4 节。
 
 ## 7. 项目内运行资源
 
@@ -179,7 +179,7 @@ scripts/validation-platform.sh stop
 
 ### 8.3 管理脚本
 
-2026-07-24 的初始版本已实际完成 `stop → build → start → status/health`。2026-07-27 的加固版已通过 `bash -n` 与 `self-test`：控制锁和 runner claim 绑定 PID/start time/boot ID，信号路径校验精确 argv，管理路径拒绝符号链接逃逸。加固版尚未执行新的真实 stop/start，也未最终重建 release 平台；二者不能借用初始版本证据。
+2026-07-27 的加固版先通过 `bash -n` 与 `self-test`，随后以 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 完成真实 stop/build/start/readiness。旧 PID `214692` 被严格停止，新 PID `1114524` 通过身份、重复 start 和 runner 排他检查；完整运行证据见 9.4 节。
 
 ## 9. 真实成都验证
 
@@ -194,10 +194,10 @@ scripts/validation-platform.sh stop
 | DEM | 25 ready |
 | WBM | 25 ready |
 | 本次下载 | 132,997,688 bytes |
-| 数据根总量 | 133,063,224 bytes |
+| 首次数据根总量 | 133,063,224 bytes |
 | 中心高程 | 526.3443 m |
 
-这些结果证明当前服务器验证数据已准备并能由共享缓存服务读取；随后同一数据已完成传播计算和浏览器视觉验收。浏览器缓存对话框以十进制显示为 `133.1 MB / 2.50 GB`。
+这些结果证明首次服务器验证数据已准备并能由共享缓存服务读取；随后同一数据已完成传播计算和浏览器视觉验收。浏览器缓存对话框以十进制显示为 `133.1 MB / 2.50 GB`。恢复切片因索引/运行元数据变化测得 `133,071,416 bytes`，详见 9.4 节。
 
 ### 9.2 真实传播计算
 
@@ -248,15 +248,35 @@ scripts/validation-platform.sh stop
 - 刷新页面后重新执行真实计算，界面报告 `8.3 s / 125628 px`，浏览器控制台 error 和 warning 均为空；
 - 本轮按要求只保留文字证据，没有生成或提交截图。
 
+### 9.4 加固版应用进程恢复与真实取消
+
+本次部署以提交和 build metadata revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 为基线。
+
+| 检查 | 结果 |
+|---|---|
+| stop/build/start | 旧 PID `214692` 退出；新 PID `1114524` |
+| 管理与 liveness | `status`、`health` 通过 |
+| readiness | `/api/bootstrap`、`/api/cache-overview` 通过 |
+| 缓存不变性 | 重启前后均为 `133,071,416 bytes`、`partial=0` |
+| 区域完整性 | 两个区域各 `50/50 ready` |
+| 重复 start | 仍为 PID `1114524` |
+| runner 排他 | 直接 `__run` 返回 `another validation runner is active` |
+
+`scripts/validation-recovery-smoke.sh` 加固后再次连续对真实受管回环服务运行通过。运行前，无效 `/api/inspect-point` 返回 HTTP 422，确认 gate 为空；后台 calculate curl 必须同时是本 shell 的 job、以本 shell 为 PPID，并匹配记录的 start time 和 curl executable，脚本才把 gate 内操作视为自己所有。该所有权判断只适用于受控单客户端，不能替代多客户端 operation ID。
+
+每次取消端点都返回 `cancelled=true`；被取消的 calculate 返回 HTTP 422 且没有两个 PNG 字段。随后相同请求返回 HTTP 200，`schemaVersion=2`，`imageWidth/imageHeight` 与 `mapOverlayWidth/mapOverlayHeight` 均为 `401×401`。两个 data URL 字段各只出现一次、payload 非空、Base64 可解码，解码结果前 24 bytes 均验证为 PNG signature、IHDR 与 `401×401`。
+
+结束探针返回业务校验 HTTP 422 而非冲突 409，最终 `/healthz` 为 200。脚本再次输出 `validation recovery smoke passed: cancel=true cancelled_http=422 recovery_http=200`，operation gate 与健康状态恢复，且没有 `validation-recovery-smoke.*` 临时目录残留。
+
+这是应用进程 stop/start 证据，不是 GPU 主机整机重启测试。SSH 隧道访问此前已独立验证；本烟雾脚本直接命中服务器回环地址，以减少浏览器和隧道时序噪声。
+
 ## 10. 尚未关闭
 
-- 通过 SSH 隧道执行真实 HTTP 长计算取消，并确认响应不含半成品、随后可重算；
 - 多标签页/多客户端并发取消仍没有 operation ID 绑定；当前保障范围是单服务门闩与官方单窗口 UI 正常路径；
 - HTTP 模式的渐进进度显示；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；
-- 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程崩溃注入；
-- 加固版管理脚本真实 `stop → build → start → status/health → bootstrap`；
-- 服务器重启后手动恢复流程；
+- 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程强制崩溃注入；
+- GPU 主机整机重启后的手动恢复流程；
 - 合规中国大陆底图、审图号、署名、离线/导出授权；
 - 传播结果的外场测量校准。
 

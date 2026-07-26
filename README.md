@@ -8,7 +8,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 为便于在不向 Windows 本机同步开发资源的前提下验证真实缓存和传播流程，项目新增了只监听服务器回环地址的私有浏览器验证平台。它通过 SSH 隧道访问，具有醒目的内部验证与远程处理提示，不开放公网端口，也不提供文件导出。该平台不替代 Windows/WebView2、原生保存对话框或公开地图合规验收。
 
-2026-07-27 的恢复与取消切片补强了缓存重启整理、精确配额边界、操作取消线性化，以及私有平台管理锁和 runner 生命周期声明。自动化检查已经覆盖这些代码路径，但真实 HTTP 长计算取消、管理脚本完整 stop/start 重建和十进制 2.5 GB 实体数据压力仍保留为独立运行验收，不能由单元测试替代。
+2026-07-27 的恢复与取消切片补强了缓存重启整理、精确配额边界、操作取消线性化，以及私有平台管理锁和 runner 生命周期声明。基于提交和构建 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`，加固版已完成真实 `stop → build → start`、重复启动、readiness 和 HTTP 取消后重算验收；十进制 2.5 GB 实体压力、整机重启、Windows 实机和地图合规仍是独立门槛。
 
 首轮结果见 `docs/05-phase0-validation-report.md`，真实地形最小可行性结果见 `docs/06-minimum-viability-validation.md`，缓存闭环见 `docs/07-phase1-cache-validation.md`，陆地/水体结果见 `docs/08-land-water-validation.md`，桌面首切片见 `docs/09-phase2-desktop-slice.md`，下载与缓存交互见 `docs/10-phase2-download-cache-slice.md`。通过桌面服务契约运行成都真实缓存时，125,628 个像素约 9.75 秒完成；下载状态烟雾测试确认 50 个 DEM/WBM 资产无需重复下载并正确进入 ready。上述数字仍不是 Windows 整机验收。
 
@@ -142,7 +142,7 @@ scripts/validation-platform.sh stop
 
 验证模式会把坐标、无线电参数和计算请求发送到用户控制的 JAIST 服务器，因此它是桌面“坐标和结果只留本机”原则的明确内部测试例外。只使用测试坐标，不要输入不愿离开本机的敏感位置。服务器仍通过共享 `AppService` 执行固定来源、2.5 GB 配额、DEM/WBM 完整性和 ITM 规则；浏览器没有服务器文件路径权限，服务端也没有导出端点。
 
-所有运行数据、PID、日志和构建元数据都在项目的 `.runtime/validation-platform/`，不会写入 Windows 本机，也不使用 Docker、系统服务或系统级运行目录。`start` 可安全重复执行并在 SSH 断开后继续运行，但服务器重启后需要重新执行；`self-test` 只检查脚本的陈旧锁恢复、路径保护和 PID 身份逻辑，不会替代真实 `stop → build → start` 运行验收。日志与进程控制细节见 `docs/15-private-validation-platform.md`。
+所有运行数据、PID、日志和构建元数据都在项目的 `.runtime/validation-platform/`，不会写入 Windows 本机，也不使用 Docker、系统服务或系统级运行目录。`start` 可安全重复执行并在 SSH 断开后继续运行，但服务器整机重启后仍需要手动执行；`self-test` 检查脚本不变量，`validation-recovery-smoke.sh` 检查真实取消、结果卫生和重算恢复。日志、进程控制与运行证据见 `docs/15-private-validation-platform.md` 和 `docs/16-recovery-and-cancellation-validation.md`。
 
 Tauri 壳层位于 `app/src-tauri/`。JAIST Linux 负责前端、共享 Rust 服务、浏览器视觉回归和内部 Windows 交叉构建；正式发布仍必须在 Windows 10/11 验证 WebView2、安装包和文件系统行为。
 

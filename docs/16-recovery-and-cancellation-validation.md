@@ -4,7 +4,7 @@
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 范围：缓存重启整理、2.5 GB 边界不变量、计算取消结果交付、私有平台管理状态
-- 状态：代码与自动化测试通过；真实 HTTP 取消、加固版平台重建/重启和真实 2.5 GB 压力待验证
+- 状态：代码、加固版应用进程重建/重启、readiness 和真实 HTTP 取消恢复已验证；真实 2.5 GB 压力、整机重启、Windows 实机与地图合规待验证
 
 ## 1. 本切片要关闭的故障窗口
 
@@ -101,21 +101,43 @@ owner 记录 PID、Linux 进程 start time 和 boot ID。陈旧目录只有在�
 | Tauri 纯状态控制器 | 4/4 | 不需要 Windows UI |
 | Windows xwin 目标检查 | 通过 | 不是 EXE/NSIS 最终重建 |
 | 管理脚本 `bash -n` / `self-test` | 通过 | 不等于真实 stop/start |
+| 加固版真实恢复运行 | 通过 | stop/build/start/readiness、缓存不变、真实取消与重算 |
 
 离线 workspace 的 77 项由 app-service 12、cache 21、coverage 15、export 6、propagation 6、official reference 1、terrain 5、validation server 11 构成。3 项真实网络测试单列为 ignored，不重复计入 77。
 
-## 7. 待完成的运行验收
+## 7. 已完成的真实运行验收
 
-以下项目在本文件当前版本中没有通过声明：
+本次应用基线提交和 validation build metadata revision 均为 `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`。
 
-- [ ] 通过 SSH 隧道发起真实 `/api/calculate`，计算进行中 POST `/api/cancel-calculation`；
-- [ ] 确认取消响应被接受、计算请求不返回双 PNG，界面不显示或导出半成品；
-- [ ] 取消完成后相同输入可重新计算，并与既有确定性结果一致；
-- [ ] 对加固版执行 `stop → build → start → status → health → bootstrap`；
-- [ ] 验证重复 start 拒绝/幂等和严格 stop，不向无关 PID 发送信号；
-- [ ] 模拟服务器重启后的手动恢复并核对缓存 overview；
-- [ ] 使用真实十进制 2.5 GB 数据执行 exact-cap、over-cap、磁盘不足和故障注入；
-- [ ] 增加 HTTP 渐进进度；
-- [ ] 完成 Windows 10/11 WebView2、安装、导出和地图合规验收。
+### 7.1 进程与缓存恢复
 
-只有在命令、响应、日志和输出哈希被补充到本节后，相关运行项才能从待办改为通过。
+- [x] 严格停止旧 PID `214692`，完成 `build → start`，新受管 PID 为 `1114524`。
+- [x] `status`、`health`、`/api/bootstrap` 和 `/api/cache-overview` 全部通过。
+- [x] 缓存总量在应用进程重启前后均为 `133,071,416 bytes`，partial 为 0；两个区域各 `50/50 ready`。
+- [x] 重复 `start` 保持 PID `1114524`，没有启动第二个 server。
+- [x] 直接调用内部 `__run` 被拒绝并返回 `another validation runner is active`。
+
+### 7.2 真实 HTTP 取消与重算
+
+`scripts/validation-recovery-smoke.sh` 加固后再次连续对受管回环服务真实运行通过：
+
+- [x] 运行前以无效 point 调用 `/api/inspect-point` 返回 HTTP 422，确认 gate 初始为空。
+- [x] 后台 calculate curl 同时匹配本 shell job、PPID、进程 start time 和 curl executable 后，才把 gate 中的操作视为本脚本所有。
+- [x] 活动计算进入 gate 后，取消端点返回 HTTP 200 和 `cancelled=true`。
+- [x] 被取消的 calculate 返回 HTTP 422，响应不含 `heatmapPngDataUrl` 或 `mapOverlayPngDataUrl`。
+- [x] 相同请求随后返回 HTTP 200；`schemaVersion=2`，原始图和 map overlay 的宽高字段均为 `401×401`。
+- [x] 两个 PNG data URL 字段各恰好出现一次且 payload 非空；Base64 均成功解码，前 24 bytes 均验证为 PNG signature、IHDR 和 `401×401` 尺寸。
+- [x] 最终 gate probe 返回业务校验 HTTP 422 而非冲突 409，`/healthz` 仍返回 200。
+- [x] 最终输出 `validation recovery smoke passed: cancel=true cancelled_http=422 recovery_http=200`，运行后没有 `validation-recovery-smoke.*` 临时目录残留。
+
+烟雾脚本直接访问服务器 `127.0.0.1:1421`；SSH 隧道路径已由此前浏览器验收独立覆盖。该身份校验只证明受控单 shell/单客户端测试拥有其后台 curl，不能替代多客户端 operation ID。本次是应用进程 stop/start，不是 GPU 主机整机重启。
+
+## 8. 仍未关闭
+
+- [ ] 使用真实十进制 2.5 GB 数据执行 exact-cap、over-cap、磁盘不足和强制崩溃注入；
+- [ ] GPU 主机整机重启后的手动恢复与缓存 overview 复核；
+- [ ] 弱网下载中断/恢复和日志轮转压力；
+- [ ] HTTP 渐进进度；
+- [ ] 为多标签页/多客户端取消增加 operation ID 或等价所有权令牌；
+- [ ] Windows 10/11 WebView2、安装、原生导出和真实文件系统；
+- [ ] 合规中国大陆底图、审图号、署名、离线/导出授权和公开发布验收。
