@@ -96,6 +96,7 @@ export function App() {
   const cacheLoadingRef = useRef(false);
   const deletingRegionRef = useRef(false);
   const exportingRef = useRef(false);
+  const cancellationPendingRef = useRef(false);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapInfo, setBootstrapInfo] = useState<BootstrapInfo | null>(null);
   const [point, setPoint] = useState<MapPoint | null>(null);
@@ -108,6 +109,7 @@ export function App() {
   const [result, setResult] = useState<CalculationResult | null>(null);
   const [resultStale, setResultStale] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [cancellationPending, setCancellationPending] = useState(false);
   const [cacheOpen, setCacheOpen] = useState(false);
   const [cacheOverview, setCacheOverview] = useState<CacheOverview | null>(null);
   const [cacheLoading, setCacheLoading] = useState(false);
@@ -206,7 +208,8 @@ export function App() {
     workflow === "inspecting" ||
     isEstimatingDownload ||
     isDownloading ||
-    isCalculating;
+    isCalculating ||
+    cancellationPending;
   const isBusy = pointSelectionLocked || deletingRegion || exportingFormat !== null;
   const canCalculate = Boolean(
     capabilities.canCalculate &&
@@ -359,7 +362,7 @@ export function App() {
   }
 
   async function handleConfirmDownload() {
-    if (!point || !downloadEstimate || !capabilities.canDownload) return;
+    if (!point || !downloadEstimate || !capabilities.canDownload || isBusy) return;
     const estimate = downloadEstimate;
     setDownloadEstimate(null);
     setDownloadProgress({
@@ -435,6 +438,25 @@ export function App() {
     if (deletingRegion) return;
     setDeleteCandidate(null);
     setCacheOpen(false);
+  }
+
+  async function handleCancellation(
+    cancel: () => Promise<void>,
+    actionLabel: string,
+  ) {
+    if (cancellationPendingRef.current) return;
+    cancellationPendingRef.current = true;
+    setCancellationPending(true);
+    setErrorMessage(null);
+    try {
+      await cancel();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setErrorMessage(`${actionLabel}\u5931\u8d25\uff1a${message}`);
+    } finally {
+      cancellationPendingRef.current = false;
+      setCancellationPending(false);
+    }
   }
 
   async function handleCalculate() {
@@ -650,7 +672,7 @@ export function App() {
           <div className="sidebar-scroll">
             <ParameterPanel
               parameters={parameters}
-              disabled={isCalculating || exportingFormat !== null}
+              disabled={isCalculating || cancellationPending || exportingFormat !== null}
               elevationM={inspection?.elevationM ?? null}
               onChange={handleParameterChange}
             />
@@ -684,20 +706,35 @@ export function App() {
                 <button
                   type="button"
                   className="secondary-action danger"
-                  onClick={() => void cancelCalculation()}
+                  disabled={cancellationPending}
+                  onClick={() =>
+                    void handleCancellation(cancelCalculation, "取消计算请求")
+                  }
                 >
-                  取消计算
+                  {cancellationPending ? "正在取消…" : "取消计算"}
                 </button>
               ) : isDownloading || isEstimatingDownload ? (
                 <button
                   type="button"
                   className="secondary-action danger"
-                  onClick={() => void cancelDownload()}
+                  disabled={cancellationPending}
+                  onClick={() =>
+                    void handleCancellation(cancelDownload, "取消下载请求")
+                  }
                 >
-                  {isEstimatingDownload ? "取消数据检查" : "取消下载"}
+                  {cancellationPending
+                    ? "正在取消…"
+                    : isEstimatingDownload
+                      ? "取消数据检查"
+                      : "取消下载"}
                 </button>
               ) : (
-                <button type="button" className="secondary-action" onClick={handleClear}>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={isBusy}
+                  onClick={handleClear}
+                >
                   清空
                 </button>
               )}
@@ -913,7 +950,7 @@ export function App() {
               <button
                 type="button"
                 className="confirm-download"
-                disabled={!capabilities.canDownload}
+                disabled={!capabilities.canDownload || isBusy}
                 onClick={() => void handleConfirmDownload()}
               >
                 下载并准备

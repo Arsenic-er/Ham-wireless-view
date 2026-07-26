@@ -101,9 +101,25 @@ fn interrupted_real_tile_download_resumes_from_partial_file() {
     let interrupted_usage = store.usage().unwrap();
     assert!(interrupted_usage.partial_bytes > 0);
     assert!(interrupted_usage.partial_bytes < download_plan.assets[0].expected_size_bytes);
+    let interrupted_partial_bytes = interrupted_usage.partial_bytes;
+
+    let resume_plan = service.probe_region(&mut store, plan.clone()).unwrap();
+    let resume_asset = resume_plan
+        .assets
+        .iter()
+        .find(|asset| asset.resumable_bytes > 0)
+        .expect("the interrupted asset should have a safe resume offset");
+    assert_eq!(resume_asset.resumable_bytes, interrupted_partial_bytes);
+    assert_eq!(
+        resume_plan.additional_download_bytes,
+        download_plan
+            .additional_download_bytes
+            .checked_sub(interrupted_partial_bytes)
+            .unwrap()
+    );
 
     cancelled.store(false, Ordering::Relaxed);
-    execute_download_plan(&service, &mut store, &download_plan, &cancelled, |_| {}).unwrap();
+    execute_download_plan(&service, &mut store, &resume_plan, &cancelled, |_| {}).unwrap();
     let verified_paths = store.ready_paths_for_region(&plan).unwrap();
     assert_eq!(verified_paths.len(), 1);
     assert_eq!(store.ready_water_paths_for_region(&plan).unwrap().len(), 1);

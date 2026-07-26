@@ -1,6 +1,4 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use hamheatmap_app_service::{
     AppService, BootstrapInfo, CacheDeleteResult, CacheOverview, CalculationRequest,
@@ -13,40 +11,15 @@ use hamheatmap_export::{
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+mod operation_state;
+use operation_state::{CancellationTarget, DesktopOperation, DesktopOperationController};
 #[cfg(windows)]
 use tauri_plugin_dialog::DialogExt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DesktopOperation {
-    Bootstrapping,
-    InspectingPoint,
-    EstimatingDownload,
-    Downloading,
-    ReadingCache,
-    Calculating,
-    DeletingCache,
-    Exporting,
-}
-
-impl DesktopOperation {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Bootstrapping => "应用初始化",
-            Self::InspectingPoint => "区域数据检查",
-            Self::EstimatingDownload => "数据下载量检查",
-            Self::Downloading => "区域数据下载",
-            Self::ReadingCache => "缓存状态读取",
-            Self::Calculating => "传播计算",
-            Self::DeletingCache => "缓存删除",
-            Self::Exporting => "结果导出",
-        }
-    }
-}
-
 struct DesktopState {
     data_root: PathBuf,
-    cancelled: Arc<AtomicBool>,
-    running_operation: Arc<Mutex<Option<DesktopOperation>>>,
+    operations: DesktopOperationController,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -81,34 +54,17 @@ struct ExportResultView {
     bytes_written: u64,
 }
 
-fn begin_operation(state: &DesktopState, operation: DesktopOperation) -> Result<(), String> {
-    let mut running = state
-        .running_operation
-        .lock()
-        .map_err(|_| "operation state lock is poisoned".to_string())?;
-    if let Some(current) = *running {
-        return Err(format!("{}正在进行，请稍候或先取消", current.label()));
-    }
-    *running = Some(operation);
-    state.cancelled.store(false, Ordering::Release);
-    Ok(())
-}
-
-fn finish_operation(running: &Mutex<Option<DesktopOperation>>) {
-    if let Ok(mut value) = running.lock() {
-        *value = None;
-    }
-}
-
 #[tauri::command]
 async fn bootstrap(state: State<'_, DesktopState>) -> Result<BootstrapInfo, String> {
-    begin_operation(&state, DesktopOperation::Bootstrapping)?;
+    let lease = state.operations.begin(DesktopOperation::Bootstrapping)?;
     let data_root = state.data_root.clone();
-    let running = Arc::clone(&state.running_operation);
     let join_result =
         tauri::async_runtime::spawn_blocking(move || AppService::new(data_root).bootstrap()).await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("bootstrap worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("bootstrap worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[tauri::command]
@@ -116,15 +72,17 @@ async fn inspect_point(
     point: MapPoint,
     state: State<'_, DesktopState>,
 ) -> Result<PointInspection, String> {
-    begin_operation(&state, DesktopOperation::InspectingPoint)?;
+    let lease = state.operations.begin(DesktopOperation::InspectingPoint)?;
     let data_root = state.data_root.clone();
-    let running = Arc::clone(&state.running_operation);
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         AppService::new(data_root).inspect_point(point)
     })
     .await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("point inspection worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("point inspection worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[tauri::command]
@@ -132,16 +90,20 @@ async fn estimate_download(
     point: MapPoint,
     state: State<'_, DesktopState>,
 ) -> Result<DownloadEstimate, String> {
-    begin_operation(&state, DesktopOperation::EstimatingDownload)?;
+    let lease = state
+        .operations
+        .begin(DesktopOperation::EstimatingDownload)?;
     let data_root = state.data_root.clone();
-    let cancelled = Arc::clone(&state.cancelled);
-    let running = Arc::clone(&state.running_operation);
+    let cancelled = lease.cancellation_flag();
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         AppService::new(data_root).estimate_download_with_cancel(point, &cancelled)
     })
     .await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("download estimate worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("download estimate worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[tauri::command]
@@ -150,30 +112,34 @@ async fn download_region(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<DownloadResult, String> {
-    begin_operation(&state, DesktopOperation::Downloading)?;
+    let lease = state.operations.begin(DesktopOperation::Downloading)?;
     let data_root = state.data_root.clone();
-    let cancelled = Arc::clone(&state.cancelled);
-    let running = Arc::clone(&state.running_operation);
+    let cancelled = lease.cancellation_flag();
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         AppService::new(data_root).download_region(point, &cancelled, |progress| {
             let _ = app.emit::<DownloadProgressView>("download-progress", progress);
         })
     })
     .await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("download worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("download worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[tauri::command]
 async fn cache_overview(state: State<'_, DesktopState>) -> Result<CacheOverview, String> {
-    begin_operation(&state, DesktopOperation::ReadingCache)?;
+    let lease = state.operations.begin(DesktopOperation::ReadingCache)?;
     let data_root = state.data_root.clone();
-    let running = Arc::clone(&state.running_operation);
     let join_result =
         tauri::async_runtime::spawn_blocking(move || AppService::new(data_root).cache_overview())
             .await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("cache overview worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("cache overview worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[tauri::command]
@@ -181,15 +147,17 @@ async fn delete_cache_region(
     region_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<CacheDeleteResult, String> {
-    begin_operation(&state, DesktopOperation::DeletingCache)?;
+    let lease = state.operations.begin(DesktopOperation::DeletingCache)?;
     let data_root = state.data_root.clone();
-    let running = Arc::clone(&state.running_operation);
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         AppService::new(data_root).delete_cache_region(&region_id)
     })
     .await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("cache delete worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("cache delete worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[tauri::command]
@@ -198,18 +166,20 @@ async fn calculate(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<CalculationResult, String> {
-    begin_operation(&state, DesktopOperation::Calculating)?;
+    let lease = state.operations.begin(DesktopOperation::Calculating)?;
     let data_root = state.data_root.clone();
-    let cancelled = Arc::clone(&state.cancelled);
-    let running = Arc::clone(&state.running_operation);
+    let cancelled = lease.cancellation_flag();
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         AppService::new(data_root).calculate(&request, &cancelled, |progress| {
             let _ = app.emit("calculation-progress", progress);
         })
     })
     .await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("calculation worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("calculation worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[tauri::command]
@@ -218,12 +188,14 @@ async fn export_result(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<ExportResultView, String> {
-    begin_operation(&state, DesktopOperation::Exporting)?;
-    let running = Arc::clone(&state.running_operation);
+    let lease = state.operations.begin(DesktopOperation::Exporting)?;
     let join_result =
         tauri::async_runtime::spawn_blocking(move || export_result_blocking(&app, request)).await;
-    finish_operation(&running);
-    join_result.map_err(|error| format!("export worker failed: {error}"))?
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("export worker failed: {error}")),
+    };
+    lease.finish(outcome)
 }
 
 #[cfg(windows)]
@@ -277,12 +249,12 @@ fn export_result_blocking(
 
 #[tauri::command]
 fn cancel_calculation(state: State<'_, DesktopState>) {
-    state.cancelled.store(true, Ordering::Release);
+    let _ = state.operations.cancel(CancellationTarget::Calculation);
 }
 
 #[tauri::command]
 fn cancel_download(state: State<'_, DesktopState>) {
-    state.cancelled.store(true, Ordering::Release);
+    let _ = state.operations.cancel(CancellationTarget::Download);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -305,8 +277,7 @@ pub fn run() {
             })?;
             app.manage(DesktopState {
                 data_root,
-                cancelled: Arc::new(AtomicBool::new(false)),
-                running_operation: Arc::new(Mutex::new(None)),
+                operations: DesktopOperationController::default(),
             });
             Ok(())
         })

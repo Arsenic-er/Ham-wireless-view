@@ -1,6 +1,7 @@
 # ADR-0012：通过 SSH 隧道提供私有服务器验证平台
 
 - 日期：2026-07-24
+- 补充日期：2026-07-27
 - 状态：已采纳，仅限内部开发验证
 
 ## 背景
@@ -54,3 +55,13 @@ HamHeatmap 的正式产品仍是 Windows 10/11 离线优先桌面应用，坐标
 ## 验收与记录
 
 代码、进程、真实数据和浏览器检查点记录在 `../15-private-validation-platform.md`。只有该文档明确记录的项目可以宣称通过；私有验证结果不能外推为 Windows 10/11 实机或公开地图合规验收。
+
+## 2026-07-27 补充：取消线性化与管理进程所有权
+
+1. 单任务门闩返回带身份的 lease。任务完成时必须在同一互斥状态下确认 lease 仍是当前操作并读取取消标志，然后清除 active；已接受取消后到达的成功值不得再发布。Tauri 状态控制器采用同一规则。
+2. `AppService` 在传播结束到最终结果交付之间增加编码、Base64 和交付检查点，取消后的请求不能从这些阶段返回完整成功结果。前端同时清除旧 heatmap 并禁用导出，待旧 promise 结束后才允许重试。
+3. 当前取消 API 没有 operation ID，不能宣称多标签页或多客户端取消绑定到特定请求。保证范围是 validation server 的单任务门闩与官方单窗口 UI 正常路径；跨客户端时序需要后续协议扩展。
+4. 管理控制锁和后台 runner claim 都记录 PID、`/proc/<pid>/stat` start time 与 boot ID。只有所有者身份失效且超过短初始化保护期的目录才可作为陈旧状态恢复。
+5. runner claim 覆盖后台 runner 的完整生命周期；server、runner 与日志 monitor 的信号操作还必须匹配用户、可执行文件、精确 argv 和 start time。PID 文件只是定位信息，不再单独构成授权。
+6. 管理路径的每个既有分量都必须留在项目根内且不能是符号链接。`self-test` 只验证这些脚本不变量，不替代加固版真实 stop/start。
+7. `/healthz` 只定义为 HTTP 进程存活和 schema 检查；`/api/bootstrap` 才会打开 `CacheStore` 并验证缓存锁、重启整理和配额。运维记录必须区分 liveness 与数据 readiness。

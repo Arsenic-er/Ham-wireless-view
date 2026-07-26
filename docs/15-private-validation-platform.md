@@ -1,10 +1,11 @@
 # HamHeatmap 私有服务器验证平台
 
-- 日期：2026-07-24
+- 初始日期：2026-07-24
+- 恢复切片更新：2026-07-27
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`
-- 状态：私有平台构建、真实成都计算和 1080×700 浏览器视觉验证已完成；仍不替代 Windows/Tauri 与地图合规验收
+- 状态：私有平台、真实成都计算和浏览器视觉验证已完成；恢复/取消加固通过代码检查，真实 HTTP 取消与加固版 stop/start 运行验收仍待完成
 
 ## 1. 目标与边界
 
@@ -65,6 +66,8 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 
 没有导出端点。POST JSON 使用与 Tauri 调用相同的包装字段，并拒绝未知字段。服务一次只允许一个共享操作；冲突返回 HTTP 409。当前 validation 适配器没有 Tauri 事件流，因而不记录逐阶段实时进度；取消通过另一条 HTTP 请求设置共享取消令牌。
 
+`/healthz` 是不打开缓存的轻量进程存活检查，只返回 HTTP 状态和协议 schema。需要确认 `CacheStore` 能获得锁、完成重启整理并满足配额时，调用方必须成功执行 `/api/bootstrap`；因此管理脚本的 `health` 结果不能替代数据就绪判断。
+
 ## 5. 网络、隐私与安全
 
 规范进程固定监听 `127.0.0.1:1421`。服务器公网 IP 上不开放该端口，访问控制由已有 SSH 公钥承担。
@@ -95,6 +98,7 @@ scripts/validation-platform.sh build
 scripts/validation-platform.sh start
 scripts/validation-platform.sh status
 scripts/validation-platform.sh health
+scripts/validation-platform.sh self-test
 ```
 
 Windows PowerShell：
@@ -115,7 +119,9 @@ http://127.0.0.1:1421
 scripts/validation-platform.sh stop
 ```
 
-`start` 使用 `nohup + setsid`，SSH 断开后进程继续运行；服务器重启后不会自动恢复。不要用通配进程名或手工 PID 执行 `kill`，停止入口会严格核对 PID 所有者、项目 release binary 和固定参数。
+`start` 使用 `nohup + setsid`，SSH 断开后进程继续运行；服务器重启后不会自动恢复。不要用通配进程名或手工 PID 执行 `kill`。停止入口除核对用户、项目 release binary 和完整 argv 外，还核对进程 start time；后台 runner 以 PID、start time、boot ID 的 claim 证明生命周期所有权，避免只凭可复用 PID 发送信号。
+
+`self-test` 在独立的项目内临时状态目录验证陈旧控制锁、runner claim、符号链接路径逃逸和精确 argv，不启动或停止持久服务。新加固版仍需单独完成一次真实 `stop → build → start → status/health → bootstrap`，才能记录运行链路通过。
 
 ## 7. 项目内运行资源
 
@@ -130,6 +136,9 @@ scripts/validation-platform.sh stop
 │  └─ server.log.1..3
 └─ state/
    ├─ control.lock/
+   │  └─ owner
+   ├─ runner.claim/
+   │  └─ owner
    ├─ runner.pid
    └─ server.pid
 ```
@@ -140,22 +149,23 @@ scripts/validation-platform.sh stop
 
 ### 8.1 Rust validation server
 
-`hamheatmap-validation-server` 的 10 项测试全部通过，覆盖：
+`hamheatmap-validation-server` 的 11 项测试全部通过，覆盖：
 
 1. CLI 默认值、参数覆盖、IPv4/IPv6 回环监听，以及非回环地址拒绝；
 2. 静态路径与 MIME fail-closed；
 3. 请求体上限、唯一 `Host` 与 JSON 元数据；
-4. 单任务门闩和按任务类型取消；
+4. 单任务门闩、按任务类型取消，以及取消/成功结果交付的线性化；
 5. 静态目录与数据目录重叠拒绝；
 6. 静态/API 路由、未知文件和导出端点拒绝；
 7. camelCase 包装契约、未知字段和错误媒体类型拒绝；
 8. HTTP `Host` 必须匹配实际回环监听地址/端口，拒绝缺失、重复、错误端口和外部主机名；
 9. 取消端点强制 `application/json`，拒绝无媒体类型或表单媒体类型的简单跨站 POST；
 10. 安全响应头、HEAD 无响应体语义，以及 Tauri CSP 允许 `data:`/`blob:` 覆盖层但不放宽外部网络来源。
+11. 已接受取消时丢弃随后到达的成功值，并在 lease 释放后允许下一项操作。
 
 ### 8.2 前端
 
-前端 24 项测试全部通过。其中 validation 专项测试确认：
+前端 26 项测试通过。其中 validation 专项测试确认：
 
 - preview、validation-server、Tauri 三态能力矩阵；
 - Tauri 对 validation 构建标志的优先级；
@@ -165,10 +175,11 @@ scripts/validation-platform.sh stop
 - preview 仍禁止确认下载和真实计算；
 - 清空只移除热力图，保留发射点和数据就绪状态，并允许同一点立即重新计算；
 - MapLibre 覆盖层将后端 PNG data URL 同步转换为 Blob URL，校验 PNG 签名，并在替换、清空和组件卸载时复用或释放对象 URL。
+- 取消重算会清除旧 heatmap、禁用导出，并在被取消的 promise 结束后恢复干净重试。
 
 ### 8.3 管理脚本
 
-`scripts/validation-platform.sh` 已通过 `bash -n` 和 `git diff --check`。代码包含重复启动保护、启动健康检查、严格 PID 身份验证、受限停止、日志轮转和全部运行资源项目内收敛。服务器已实际完成 `stop → build → start → status/health`，release 进程仅通过项目脚本启动，`/healthz` 返回健康。
+2026-07-24 的初始版本已实际完成 `stop → build → start → status/health`。2026-07-27 的加固版已通过 `bash -n` 与 `self-test`：控制锁和 runner claim 绑定 PID/start time/boot ID，信号路径校验精确 argv，管理路径拒绝符号链接逃逸。加固版尚未执行新的真实 stop/start，也未最终重建 release 平台；二者不能借用初始版本证据。
 
 ## 9. 真实成都验证
 
@@ -239,10 +250,13 @@ scripts/validation-platform.sh stop
 
 ## 10. 尚未关闭
 
-- 取消计算不留下半成品；
+- 通过 SSH 隧道执行真实 HTTP 长计算取消，并确认响应不含半成品、随后可重算；
+- 多标签页/多客户端并发取消仍没有 operation ID 绑定；当前保障范围是单服务门闩与官方单窗口 UI 正常路径；
 - HTTP 模式的渐进进度显示；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；
-- 2.5 GB 边界压力、弱网/中断恢复和服务器重启恢复；
+- 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程崩溃注入；
+- 加固版管理脚本真实 `stop → build → start → status/health → bootstrap`；
+- 服务器重启后手动恢复流程；
 - 合规中国大陆底图、审图号、署名、离线/导出授权；
 - 传播结果的外场测量校准。
 

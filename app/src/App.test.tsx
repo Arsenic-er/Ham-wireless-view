@@ -9,6 +9,7 @@ const backendMocks = vi.hoisted(() => ({
   bootstrap: vi.fn(),
   inspectPoint: vi.fn(),
   calculate: vi.fn(),
+  cancelCalculation: vi.fn(),
   cacheOverview: vi.fn(),
   estimateDownload: vi.fn(),
 }));
@@ -25,7 +26,7 @@ vi.mock("./lib/backend", () => ({
   inspectPoint: backendMocks.inspectPoint,
   calculate: backendMocks.calculate,
   cacheOverview: backendMocks.cacheOverview,
-  cancelCalculation: vi.fn().mockResolvedValue(undefined),
+  cancelCalculation: backendMocks.cancelCalculation,
   cancelDownload: vi.fn().mockResolvedValue(undefined),
   deleteCacheRegion: vi.fn(),
   downloadRegion: vi.fn(),
@@ -122,6 +123,7 @@ beforeEach(() => {
     cacheUsage,
   });
   backendMocks.calculate.mockResolvedValue(result);
+  backendMocks.cancelCalculation.mockResolvedValue(undefined);
   backendMocks.cacheOverview.mockResolvedValue({ usage: cacheUsage, regions: [] });
   backendMocks.estimateDownload.mockResolvedValue({
     point: { lat: 30.5, lon: 103.5 },
@@ -195,6 +197,107 @@ describe("validation server UI", () => {
     const calculateButton = screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ });
     expect((calculateButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(calculateButton);
+    await waitFor(() => expect(backendMocks.calculate).toHaveBeenCalledTimes(2));
+  });
+
+  it("discards an older result when a recalculation is cancelled and allows a clean retry", async () => {
+    backendMocks.mode = "tauri";
+    let rejectCalculation: (reason?: unknown) => void = () => undefined;
+    backendMocks.calculate
+      .mockResolvedValueOnce(result)
+      .mockImplementationOnce(
+        () =>
+          new Promise<CalculationResult>((_resolve, reject) => {
+            rejectCalculation = reject;
+          }),
+      );
+    backendMocks.cancelCalculation.mockImplementationOnce(async () => {
+      rejectCalculation(new Error("calculation cancelled"));
+    });
+
+    render(<App />);
+
+    await screen.findByText("\u7b49\u5f85\u9009\u62e9\u53d1\u5c04\u70b9");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
+
+    fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
+    await screen.findByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210");
+    expect(backendMocks.calculate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("heatmap").textContent).toBe("present");
+    expect(
+      (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
+    const cancelButton = await screen.findByRole("button", {
+      name: "\u53d6\u6d88\u8ba1\u7b97",
+    });
+    fireEvent.click(cancelButton);
+
+    await screen.findByText("\u8ba1\u7b97\u5df2\u53d6\u6d88");
+    expect(backendMocks.cancelCalculation).toHaveBeenCalledTimes(1);
+    expect(backendMocks.calculate).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("heatmap").textContent).toBe("none");
+    expect(
+      (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    const retryButton = screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ });
+    expect((retryButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(retryButton);
+
+    await screen.findByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210");
+    expect(backendMocks.calculate).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("heatmap").textContent).toBe("present");
+    expect(
+      (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("blocks a new calculation until a delayed cancellation request settles", async () => {
+    backendMocks.mode = "tauri";
+    let finishCalculation: (value: CalculationResult) => void = () => undefined;
+    let finishCancellation: () => void = () => undefined;
+    backendMocks.calculate.mockImplementationOnce(
+      () =>
+        new Promise<CalculationResult>((resolve) => {
+          finishCalculation = resolve;
+        }),
+    );
+    backendMocks.cancelCalculation.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCancellation = resolve;
+        }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("\u7b49\u5f85\u9009\u62e9\u53d1\u5c04\u70b9");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
+
+    fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "\u53d6\u6d88\u8ba1\u7b97" }));
+    expect(backendMocks.cancelCalculation).toHaveBeenCalledTimes(1);
+
+    finishCalculation(result);
+    await screen.findByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210");
+
+    const blockedButton = screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ });
+    expect((blockedButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(blockedButton);
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    expect(backendMocks.calculate).toHaveBeenCalledTimes(1);
+    expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(1);
+    expect(
+      (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    finishCancellation();
+    await waitFor(() => expect((blockedButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(blockedButton);
     await waitFor(() => expect(backendMocks.calculate).toHaveBeenCalledTimes(2));
   });
 

@@ -151,7 +151,19 @@ impl CacheStore {
     }
 
     pub fn upsert_region(&mut self, plan: &DemRegionPlan) -> Result<(), CacheError> {
-        self.connection.execute(
+        let mut descriptors = Vec::with_capacity(plan.tiles.len().saturating_mul(2));
+        for tile in &plan.tiles {
+            descriptors.extend(glo90_assets(*tile)?);
+        }
+        for descriptor in &descriptors {
+            self.absolute_path(&descriptor.relative_path)?;
+        }
+        self.preflight_additional_bytes(0)?;
+
+        let root = self.root.clone();
+        let cap_bytes = self.cap_bytes;
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
             "INSERT INTO regions (
                  region_id, center_lat, center_lon, radius_m, south, west, north, east, created_unix
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
@@ -174,15 +186,15 @@ impl CacheStore {
                 now_unix(),
             ],
         )?;
-        for tile in &plan.tiles {
-            for descriptor in glo90_assets(*tile)? {
-                self.register_asset_descriptor(&descriptor)?;
-                self.connection.execute(
-                    "INSERT OR IGNORE INTO region_assets (region_id, asset_key) VALUES (?1, ?2)",
-                    params![plan.region_id, descriptor.asset_key],
-                )?;
-            }
+        for descriptor in &descriptors {
+            write_asset_descriptor(&transaction, descriptor)?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO region_assets (region_id, asset_key) VALUES (?1, ?2)",
+                params![plan.region_id, descriptor.asset_key],
+            )?;
         }
+        enforce_root_cap(&root, cap_bytes)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -529,12 +541,15 @@ impl CacheStore {
             registered_partials.insert(partial_path.clone());
             match asset.state {
                 CacheState::Ready => {
-                    if !verify_file(
+                    if verify_file(
                         &final_path,
                         asset.expected_size_bytes,
                         asset.sha256.as_deref(),
                     )? {
+                        remove_regular_file_if_present(&partial_path)?;
+                    } else {
                         self.mark_corrupt(&asset.asset_key)?;
+                        remove_regular_file_if_present(&partial_path)?;
                     }
                 }
                 CacheState::Downloading => {
@@ -547,15 +562,26 @@ impl CacheStore {
                     {
                         let digest = sha256_file(&final_path)?;
                         self.set_ready(&asset.asset_key, asset.expected_size_bytes, &digest)?;
-                    } else if partial_path
-                        .metadata()
-                        .is_ok_and(|metadata| metadata.len() > asset.expected_size_bytes)
-                    {
-                        fs::remove_file(&partial_path)?;
-                        self.mark_corrupt(&asset.asset_key)?;
+                        remove_regular_file_if_present(&partial_path)?;
+                    } else {
+                        match regular_file_size(&partial_path)? {
+                            Some(partial_bytes)
+                                if asset.expected_size_bytes == 0
+                                    || partial_bytes > asset.expected_size_bytes =>
+                            {
+                                fs::remove_file(&partial_path)?;
+                                self.mark_corrupt(&asset.asset_key)?;
+                            }
+                            Some(partial_bytes) => {
+                                self.update_partial_size(&asset.asset_key, partial_bytes)?;
+                            }
+                            None => self.update_partial_size(&asset.asset_key, 0)?,
+                        }
                     }
                 }
-                CacheState::Missing | CacheState::Corrupt => {}
+                CacheState::Missing | CacheState::Corrupt => {
+                    remove_regular_file_if_present(&partial_path)?;
+                }
             }
         }
         for partial_path in find_partial_files(&self.root)? {
@@ -828,27 +854,19 @@ impl CacheStore {
         Ok(())
     }
 
-    fn register_asset_descriptor(&self, descriptor: &AssetDescriptor) -> Result<(), CacheError> {
+    fn register_asset_descriptor(
+        &mut self,
+        descriptor: &AssetDescriptor,
+    ) -> Result<(), CacheError> {
         self.absolute_path(&descriptor.relative_path)?;
-        self.connection.execute(
-            "INSERT INTO assets (
-                 asset_key, kind, dataset_id, dataset_version, relative_path,
-                 expected_size_bytes, size_bytes, state, last_used_unix
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 'missing', ?6)
-             ON CONFLICT(asset_key) DO UPDATE SET
-                 kind=excluded.kind,
-                 dataset_id=excluded.dataset_id,
-                 dataset_version=excluded.dataset_version,
-                 relative_path=excluded.relative_path",
-            params![
-                descriptor.asset_key,
-                descriptor.kind.as_str(),
-                descriptor.dataset_id,
-                descriptor.dataset_version,
-                descriptor.relative_path,
-                now_unix(),
-            ],
-        )?;
+        self.preflight_additional_bytes(0)?;
+
+        let root = self.root.clone();
+        let cap_bytes = self.cap_bytes;
+        let transaction = self.connection.transaction()?;
+        write_asset_descriptor(&transaction, descriptor)?;
+        enforce_root_cap(&root, cap_bytes)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -930,6 +948,44 @@ impl CacheStore {
         partial_name.push(".partial");
         Ok(PathBuf::from(partial_name))
     }
+}
+
+fn write_asset_descriptor(
+    connection: &Connection,
+    descriptor: &AssetDescriptor,
+) -> Result<(), CacheError> {
+    connection.execute(
+        "INSERT INTO assets (
+             asset_key, kind, dataset_id, dataset_version, relative_path,
+             expected_size_bytes, size_bytes, state, last_used_unix
+         ) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 'missing', ?6)
+         ON CONFLICT(asset_key) DO UPDATE SET
+             kind=excluded.kind,
+             dataset_id=excluded.dataset_id,
+             dataset_version=excluded.dataset_version,
+             relative_path=excluded.relative_path",
+        params![
+            descriptor.asset_key,
+            descriptor.kind.as_str(),
+            descriptor.dataset_id,
+            descriptor.dataset_version,
+            descriptor.relative_path,
+            now_unix(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn enforce_root_cap(root: &Path, cap_bytes: u64) -> Result<(), CacheError> {
+    let current_bytes = directory_size_bytes(root)?;
+    if current_bytes > cap_bytes {
+        return Err(CacheError::QuotaExceeded {
+            current_bytes,
+            requested_additional_bytes: 0,
+            cap_bytes,
+        });
+    }
+    Ok(())
 }
 
 fn initialize_schema(connection: &Connection) -> Result<(), CacheError> {
@@ -1465,5 +1521,256 @@ mod tests {
             store.delete_region("active"),
             Err(CacheError::ActiveRegion(_))
         ));
+    }
+
+    #[test]
+    fn restart_recovers_partial_growth_not_yet_recorded_in_sqlite() {
+        let directory = TestDirectory::new("restart-partial-growth");
+        let plan = one_tile_plan("restart-partial-growth");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let partial_path = {
+            let mut store = CacheStore::open(&directory.0).unwrap();
+            store.upsert_region(&plan).unwrap();
+            let (partial_path, _) = store
+                .prepare_download(&descriptor, 100, None, Some("\"v1\""), 0)
+                .unwrap();
+            File::create(&partial_path)
+                .unwrap()
+                .write_all(&[3_u8; 40])
+                .unwrap();
+            partial_path
+        };
+
+        let mut reopened = CacheStore::open(&directory.0).unwrap();
+        let asset = reopened.asset(&descriptor.asset_key).unwrap().unwrap();
+        assert_eq!(asset.state, CacheState::Downloading);
+        assert_eq!(asset.size_bytes, 40);
+        assert_eq!(
+            reopened
+                .resumable_bytes_for_probe(&descriptor, 100, Some("\"v1\""), true)
+                .unwrap(),
+            40
+        );
+        assert!(partial_path.is_file());
+    }
+
+    #[test]
+    fn restart_removes_stale_partial_for_ready_asset() {
+        let directory = TestDirectory::new("restart-ready-partial");
+        let plan = one_tile_plan("restart-ready-partial");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let partial_path = {
+            let mut store = CacheStore::open(&directory.0).unwrap();
+            store.upsert_region(&plan).unwrap();
+            let (partial_path, _) = store
+                .prepare_download(&descriptor, 5, None, Some("\"v1\""), 0)
+                .unwrap();
+            File::create(&partial_path)
+                .unwrap()
+                .write_all(b"hello")
+                .unwrap();
+            store.finalize_download(&descriptor, 5, None).unwrap();
+            File::create(&partial_path)
+                .unwrap()
+                .write_all(b"stale")
+                .unwrap();
+            partial_path
+        };
+
+        let reopened = CacheStore::open(&directory.0).unwrap();
+        assert!(!partial_path.exists());
+        assert_eq!(
+            reopened
+                .asset(&descriptor.asset_key)
+                .unwrap()
+                .unwrap()
+                .state,
+            CacheState::Ready
+        );
+        assert_eq!(reopened.usage().unwrap().partial_bytes, 0);
+    }
+
+    #[test]
+    fn restart_cleans_stale_partial_before_enforcing_hard_cap() {
+        const TEST_CAP_BYTES: u64 = 100_000;
+        let directory = TestDirectory::new("restart-hard-cap");
+        let plan = one_tile_plan("restart-hard-cap");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let partial_path = {
+            let mut store = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+            store.upsert_region(&plan).unwrap();
+            let partial_path = store
+                .partial_path_for_relative(&descriptor.relative_path)
+                .unwrap();
+            fs::create_dir_all(partial_path.parent().unwrap()).unwrap();
+            let usage = store.usage().unwrap();
+            File::create(&partial_path)
+                .unwrap()
+                .set_len(TEST_CAP_BYTES - usage.total_bytes + 1)
+                .unwrap();
+            assert!(store.usage().unwrap().total_bytes > TEST_CAP_BYTES);
+            partial_path
+        };
+
+        let reopened = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+        assert!(!partial_path.exists());
+        assert!(reopened.usage().unwrap().total_bytes <= TEST_CAP_BYTES);
+    }
+
+    #[test]
+    fn restart_finishes_atomic_rename_left_before_index_update() {
+        let directory = TestDirectory::new("restart-after-rename");
+        let plan = one_tile_plan("restart-after-rename");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let final_path = {
+            let mut store = CacheStore::open(&directory.0).unwrap();
+            store.upsert_region(&plan).unwrap();
+            let (partial_path, _) = store
+                .prepare_download(&descriptor, 5, None, Some("\"v1\""), 0)
+                .unwrap();
+            File::create(&partial_path)
+                .unwrap()
+                .write_all(b"hello")
+                .unwrap();
+            let final_path = store.absolute_path(&descriptor.relative_path).unwrap();
+            fs::rename(&partial_path, &final_path).unwrap();
+            final_path
+        };
+
+        let reopened = CacheStore::open(&directory.0).unwrap();
+        let asset = reopened.asset(&descriptor.asset_key).unwrap().unwrap();
+        assert_eq!(asset.state, CacheState::Ready);
+        assert_eq!(asset.size_bytes, 5);
+        assert!(final_path.is_file());
+    }
+
+    #[test]
+    fn trusted_partial_at_cap_reopens_but_one_byte_more_is_rejected() {
+        const TEST_CAP_BYTES: u64 = 100_000;
+        let directory = TestDirectory::new("trusted-partial-hard-cap");
+        let plan = one_tile_plan("trusted-partial-hard-cap");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let partial_path = {
+            let mut store = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+            store.upsert_region(&plan).unwrap();
+            store
+                .connection
+                .execute(
+                    "UPDATE assets SET
+                         expected_size_bytes=?2,
+                         size_bytes=0,
+                         source_etag='\"v1\"',
+                         state='downloading'
+                     WHERE asset_key=?1",
+                    params![descriptor.asset_key, to_i64(TEST_CAP_BYTES * 2).unwrap()],
+                )
+                .unwrap();
+            let partial_path = store
+                .partial_path_for_relative(&descriptor.relative_path)
+                .unwrap();
+            fs::create_dir_all(partial_path.parent().unwrap()).unwrap();
+            let baseline = store.usage().unwrap().total_bytes;
+            File::create(&partial_path)
+                .unwrap()
+                .set_len(TEST_CAP_BYTES - baseline)
+                .unwrap();
+            assert_eq!(store.usage().unwrap().total_bytes, TEST_CAP_BYTES);
+            partial_path
+        };
+
+        let reopened = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+        assert_eq!(reopened.usage().unwrap().total_bytes, TEST_CAP_BYTES);
+        assert_eq!(
+            reopened
+                .asset(&descriptor.asset_key)
+                .unwrap()
+                .unwrap()
+                .state,
+            CacheState::Downloading
+        );
+        drop(reopened);
+
+        let current_partial_bytes = partial_path.metadata().unwrap().len();
+        OpenOptions::new()
+            .write(true)
+            .open(&partial_path)
+            .unwrap()
+            .set_len(current_partial_bytes + 1)
+            .unwrap();
+        let error = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap_err();
+        assert!(matches!(
+            error,
+            CacheError::QuotaExceeded {
+                current_bytes,
+                requested_additional_bytes: 0,
+                cap_bytes: TEST_CAP_BYTES,
+            } if current_bytes == TEST_CAP_BYTES + 1
+        ));
+        assert!(partial_path.is_file());
+    }
+
+    #[test]
+    fn metadata_headroom_guard_rejects_without_index_changes() {
+        const TEST_CAP_BYTES: u64 = 100_000;
+        let directory = TestDirectory::new("metadata-headroom-guard");
+        let mut store = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+        let plan = one_tile_plan("metadata-headroom-guard");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let headroom = (TEST_CAP_BYTES / 100).min(16_000_000);
+        let baseline = store.usage().unwrap().total_bytes;
+        let padding_path = directory.0.join("near-cap-padding.bin");
+        File::create(&padding_path)
+            .unwrap()
+            .set_len(TEST_CAP_BYTES - baseline - headroom + 1)
+            .unwrap();
+        let usage_before = store.usage().unwrap();
+        assert!(usage_before.total_bytes <= TEST_CAP_BYTES);
+        assert!(usage_before.total_bytes + headroom > TEST_CAP_BYTES);
+
+        assert!(matches!(
+            store.upsert_region(&plan),
+            Err(CacheError::QuotaExceeded { .. })
+        ));
+        assert_eq!(store.usage().unwrap(), usage_before);
+        assert!(store.list_regions().unwrap().is_empty());
+        assert!(store.list_assets().unwrap().is_empty());
+
+        assert!(matches!(
+            store.resumable_bytes_for_probe(&descriptor, 100, Some("\"v1\""), true),
+            Err(CacheError::QuotaExceeded { .. })
+        ));
+        assert_eq!(store.usage().unwrap(), usage_before);
+        assert!(store.list_regions().unwrap().is_empty());
+        assert!(store.list_assets().unwrap().is_empty());
+    }
+
+    #[test]
+    fn metadata_batch_over_cap_rolls_back_region_and_assets() {
+        const TEST_CAP_BYTES: u64 = 100_000;
+        let directory = TestDirectory::new("metadata-transaction-rollback");
+        let mut store = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+        let mut plan = plan_glo90_region(GeoPoint {
+            lat: 30.5,
+            lon: 103.5,
+        })
+        .unwrap();
+        plan.region_id = "metadata-transaction-rollback".into();
+        let headroom = (TEST_CAP_BYTES / 100).min(16_000_000);
+        let baseline = store.usage().unwrap().total_bytes;
+        let padding_path = directory.0.join("transaction-padding.bin");
+        File::create(&padding_path)
+            .unwrap()
+            .set_len(TEST_CAP_BYTES - baseline - headroom)
+            .unwrap();
+        let usage_before = store.usage().unwrap();
+        assert_eq!(usage_before.total_bytes + headroom, TEST_CAP_BYTES);
+
+        assert!(matches!(
+            store.upsert_region(&plan),
+            Err(CacheError::QuotaExceeded { .. })
+        ));
+        assert_eq!(store.usage().unwrap(), usage_before);
+        assert!(store.list_regions().unwrap().is_empty());
+        assert!(store.list_assets().unwrap().is_empty());
     }
 }

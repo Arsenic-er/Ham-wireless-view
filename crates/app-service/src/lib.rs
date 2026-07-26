@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use base64::Engine;
@@ -563,16 +563,28 @@ impl AppService {
                 },
             )
             .map_err(|error| error.to_string())?;
+            calculation_cancellation_checkpoint(cancelled)?;
             progress(CalculationProgress {
                 phase: CalculationPhase::Encoding,
                 percent: 96.0,
                 completed_pixel_count: grid.statistics.valid_pixel_count,
                 total_pixel_count: grid.statistics.valid_pixel_count,
             });
+            calculation_cancellation_checkpoint(cancelled)?;
             let png = grid.encode_png().map_err(|error| error.to_string())?;
+            calculation_cancellation_checkpoint(cancelled)?;
             let map_overlay = grid
                 .encode_map_overlay()
                 .map_err(|error| error.to_string())?;
+            calculation_cancellation_checkpoint(cancelled)?;
+            let heatmap_png_data_url =
+                format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png));
+            calculation_cancellation_checkpoint(cancelled)?;
+            let map_overlay_png_data_url = format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(map_overlay.png)
+            );
+            calculation_cancellation_checkpoint(cancelled)?;
             let statistics = CalculationStatisticsView {
                 valid_pixel_count: grid.statistics.valid_pixel_count,
                 below_threshold_pixel_count: grid.statistics.below_threshold_pixel_count,
@@ -585,7 +597,7 @@ impl AppService {
                 propagation_seconds: grid.propagation_time.as_secs_f64(),
                 total_seconds: started.elapsed().as_secs_f64(),
             };
-            Ok(CalculationResult {
+            let result = CalculationResult {
                 schema_version: APP_SERVICE_SCHEMA_VERSION,
                 model_name: "NTIA ITM Point-to-Point",
                 model_version: MODEL_DEFAULTS_VERSION,
@@ -593,20 +605,16 @@ impl AppService {
                 image_width: GRID_SIZE,
                 image_height: GRID_SIZE,
                 image_corners: heatmap_image_corners(request.center),
-                heatmap_png_data_url: format!(
-                    "data:image/png;base64,{}",
-                    BASE64_STANDARD.encode(png)
-                ),
+                heatmap_png_data_url,
                 map_overlay_projection: map_overlay.projection,
                 map_overlay_width: map_overlay.width,
                 map_overlay_height: map_overlay.height,
                 map_overlay_corners: map_overlay.corners,
-                map_overlay_png_data_url: format!(
-                    "data:image/png;base64,{}",
-                    BASE64_STANDARD.encode(map_overlay.png)
-                ),
+                map_overlay_png_data_url,
                 statistics,
-            })
+            };
+            calculation_cancellation_checkpoint(cancelled)?;
+            Ok(result)
         })();
         let clear_result = store
             .set_active_region(None)
@@ -624,6 +632,14 @@ impl AppService {
             (Err(error), _) => Err(error),
             (Ok(_), Err(error)) => Err(error),
         }
+    }
+}
+
+fn calculation_cancellation_checkpoint(cancelled: &AtomicBool) -> Result<(), String> {
+    if cancelled.load(Ordering::Acquire) {
+        Err("coverage calculation cancelled".into())
+    } else {
+        Ok(())
     }
 }
 
@@ -973,6 +989,17 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("取消"), "{error}");
+    }
+
+    #[test]
+    fn calculation_encoding_checkpoint_honors_cancellation() {
+        let running = AtomicBool::new(false);
+        assert!(calculation_cancellation_checkpoint(&running).is_ok());
+        running.store(true, Ordering::Release);
+        assert_eq!(
+            calculation_cancellation_checkpoint(&running).unwrap_err(),
+            "coverage calculation cancelled"
+        );
     }
 
     #[test]

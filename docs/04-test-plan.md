@@ -275,3 +275,40 @@
 问题关闭链路：最初 PNG data URL 被 CSP 拒绝；CSP 在不放宽外部来源的前提下加入 `data:`/`blob:` 后，MapLibre ImageSource 仍出现 data URL AJAXError；最终改为带 PNG 签名校验和生命周期测试的 Blob URL。刷新后真实覆盖层正常显示并跟随地图交互。本轮按要求只保留文字证据，没有生成截图。
 
 完整架构、安全边界和命令见 `15-private-validation-platform.md`。即使本节已完成真实计算与浏览器显示，Windows 10/11 WebView2、原生导出、安装包、地图授权/审图号和传播外场精度仍是独立门槛。
+
+## 20. 恢复与取消检查点（2026-07-27）
+
+本检查点针对三类失败窗口：缓存进程在 partial 写入、原子改名或索引更新之间退出；取消与计算成功几乎同时发生；私有平台管理命令因 SSH 中断、进程号复用或陈旧锁而失去所有权证据。详细记录见 `16-recovery-and-cancellation-validation.md`。
+
+### 20.1 缓存恢复与配额边界
+
+- `CacheStore::open` 在执行硬上限判定前先整理索引和文件系统：同步未及时写入 SQLite 的 partial 长度，删除 ready/missing/corrupt 资产的陈旧 partial，并把“最终文件已改名、索引仍为 downloading”的资产校验后推进为 ready。
+- 只有与 downloading 状态、期望大小、强 ETag 和 Range 能力一致的 partial 才允许续传；不可信或超出期望大小的 partial 被删除或标记损坏。
+- 精确到自定义测试上限的可信 partial 可以重开；再增长 1 byte 必须拒绝。区域和资产元数据写入执行预留空间检查，批量区域写入使用事务，失败后不能留下半个区域或孤立资产记录。
+- 这些测试使用缩小的测试配额快速覆盖边界；十进制 `2,500,000,000 bytes` 的真实实体数据压力、磁盘耗尽和进程强制崩溃注入仍未完成。
+
+### 20.2 取消结果线性化
+
+- validation server 和 Tauri 各自用带身份的操作 lease 把“接受取消”和“发布成功结果”线性化；若取消标志在 lease 结束前已经被接受，即使 worker 返回成功，也只能向调用方返回取消。
+- `AppService` 在传播完成后、两张 PNG 编码之间、Base64 转换之间和最终结果交付前继续检查取消，缩小编码阶段不可响应窗口。
+- 前端取消重算时立即丢弃旧 heatmap 并禁用导出；被取消的请求结束后允许干净重试，旧结果不能重新出现。
+- 代码测试不等于真实 HTTP 并发时序。通过 SSH 隧道对长计算发送 `/api/cancel-calculation`、确认响应不含结果且随后可重算，仍是明确待办。
+
+### 20.3 管理脚本恢复
+
+- build/start/stop 控制锁记录 PID、`/proc/<pid>/stat` start time 和 boot ID；只有超过初始化保护期且所有者不再存活的锁才可恢复。
+- 后台 runner 另持有覆盖其完整生命周期的 claim；PID 文件不再单独作为进程所有权证明。server、runner 和日志 monitor 均要求精确 argv、可执行文件、用户和 start time 匹配后才可发送信号。
+- 所有管理路径必须位于项目工作区且路径分量不能是符号链接；自检覆盖陈旧锁/claim 恢复、存活 claim 排他、符号链接逃逸拒绝、精确 argv 和当前托管进程身份。
+- `/healthz` 只表示回环 HTTP 进程能响应及协议 schema；它不打开缓存。需要确认缓存锁、重启整理和 2.5 GB 配额可用时，必须调用 `/api/bootstrap`。管理脚本 `health` 不能被描述为数据就绪检查。
+
+### 20.4 自动化证据与未关闭项
+
+- Rust workspace 离线清单合计 `77 passed / 3 ignored`：app-service 12、cache 21、coverage 15、export 6、propagation 6、official reference 1、terrain 5、validation server 11；3 项 ignored 是显式真实网络测试。
+- 3 项真实 GLO-90 HTTPS 测试另行 `3/3` 通过；它们不属于离线 `77 passed`。
+- 前端 26 项测试通过；其中取消重算与延迟取消测试确认旧结果清除、取消期间阻断新操作、导出禁用和重试恢复。
+- Tauri 纯状态控制器 4/4 通过，并完成 Windows xwin 目标编译检查；这不等于 Windows EXE/NSIS 最终重建或 Windows 实机验收。
+- `scripts/validation-platform.sh` 已通过 `bash -n` 和 `self-test`。
+- [ ] 真实 HTTP 长计算取消及取消后无半结果验证。
+- [ ] 改动后的真实 `stop → build → start → status/health → bootstrap` 全链路。
+- [ ] 十进制 2.5 GB 实体缓存压力、磁盘不足与进程崩溃注入。
+- [ ] HTTP 渐进进度、Windows 10/11 WebView2 和地图合规。

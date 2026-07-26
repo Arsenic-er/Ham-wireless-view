@@ -296,9 +296,11 @@ impl ValidationServer {
             Ok(lease) => lease,
             Err(error) => return error.into_response(),
         };
-        match operation(&lease.cancelled) {
-            Ok(value) => json_response(200, &value),
-            Err(message) => ApiError::service(message).into_response(),
+        let outcome = operation(&lease.cancelled);
+        match lease.finish(outcome) {
+            Ok(Ok(value)) => json_response(200, &value),
+            Ok(Err(message)) => ApiError::service(message).into_response(),
+            Err(error) => error.into_response(),
         }
     }
 
@@ -380,6 +382,7 @@ struct ActiveOperation {
 struct OperationLease {
     gate: Arc<OperationGate>,
     cancelled: Arc<AtomicBool>,
+    finished: bool,
 }
 
 impl OperationGate {
@@ -399,6 +402,7 @@ impl OperationGate {
         Ok(OperationLease {
             gate: self.clone(),
             cancelled,
+            finished: false,
         })
     }
 
@@ -417,10 +421,45 @@ impl OperationGate {
     }
 }
 
+impl OperationLease {
+    fn finish<T>(mut self, outcome: Result<T, String>) -> Result<Result<T, String>, ApiError> {
+        let mut active = self
+            .gate
+            .active
+            .lock()
+            .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
+        let is_current = active
+            .as_ref()
+            .is_some_and(|operation| Arc::ptr_eq(&operation.cancelled, &self.cancelled));
+        if !is_current {
+            return Err(ApiError::internal(
+                "operation lease lost its active identity",
+            ));
+        }
+        let was_cancelled = self.cancelled.load(Ordering::Acquire);
+        *active = None;
+        self.finished = true;
+        drop(active);
+        if was_cancelled {
+            Ok(Err("operation cancelled".into()))
+        } else {
+            Ok(outcome)
+        }
+    }
+}
+
 impl Drop for OperationLease {
     fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
         if let Ok(mut active) = self.gate.active.lock() {
-            *active = None;
+            let is_current = active
+                .as_ref()
+                .is_some_and(|operation| Arc::ptr_eq(&operation.cancelled, &self.cancelled));
+            if is_current {
+                *active = None;
+            }
         }
     }
 }
@@ -885,6 +924,26 @@ mod tests {
         assert!(lease.cancelled.load(Ordering::Acquire));
         drop(lease);
         assert!(gate.begin(OperationKind::Other).is_ok());
+    }
+
+    #[test]
+    fn operation_completion_and_cancellation_are_linearized() {
+        let gate = Arc::new(OperationGate::default());
+        let cancelled_lease = gate.begin(OperationKind::Calculation).unwrap();
+        assert!(gate.cancel(OperationKind::Calculation));
+        let cancelled_outcome = match cancelled_lease.finish(Ok(42)) {
+            Ok(outcome) => outcome,
+            Err(_) => panic!("operation lease unexpectedly lost its identity"),
+        };
+        assert_eq!(cancelled_outcome.unwrap_err(), "operation cancelled");
+        assert!(!gate.cancel(OperationKind::Calculation));
+        let completed_lease = gate.begin(OperationKind::Calculation).unwrap();
+        let completed_outcome = match completed_lease.finish(Ok(42)) {
+            Ok(outcome) => outcome,
+            Err(_) => panic!("operation lease unexpectedly lost its identity"),
+        };
+        assert_eq!(completed_outcome.unwrap(), 42);
+        assert!(!gate.cancel(OperationKind::Calculation));
     }
 
     static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
