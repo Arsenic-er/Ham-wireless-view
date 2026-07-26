@@ -68,6 +68,57 @@ export interface DownloadProgress {
   percent: number;
 }
 
+export type OperationKind = "estimate-download" | "download" | "calculation";
+
+export type OperationState =
+  | "reserved"
+  | "running"
+  | "cancellation-requested"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface OperationTicket {
+  schemaVersion: 1;
+  operationId: string;
+  kind: OperationKind;
+  state: "reserved";
+}
+
+export interface EstimateDownloadOperationProgress {
+  type: "estimate-download";
+  stage: "estimating";
+}
+
+export interface DownloadOperationProgress {
+  type: "download";
+  assetIndex: number;
+  assetCount: number;
+  assetDownloadedBytes: number;
+  assetExpectedBytes: number;
+  totalDownloadedBytes: number;
+  totalExpectedBytes: number;
+  percent: number;
+}
+
+export interface CalculationOperationProgress extends CalculationProgress {
+  type: "calculation";
+}
+
+export type OperationProgress =
+  | EstimateDownloadOperationProgress
+  | DownloadOperationProgress
+  | CalculationOperationProgress;
+
+export interface OperationStatus {
+  schemaVersion: 1;
+  operationId: string;
+  kind: OperationKind;
+  state: OperationState;
+  sequence: number;
+  progress: OperationProgress | null;
+}
+
 export interface DownloadResult {
   inspection: PointInspection;
   preparedAssetCount: number;

@@ -53,6 +53,8 @@
 - 计算时参数锁定；取消后恢复。
 - Rust worker 在接收点之间和长剖面采样期间响应取消；取消后不编码或保留半成品。
 - 清空删除点和热力图，不删除参数和缓存。
+- validation-server 模式中，计算与下载进度由约 250 ms 的非重叠状态轮询驱动，并复用 Tauri 已有的进度监听接口。
+- 多标签页同时存在时，取消只影响本页 exact operation ID；旧 ID、旧 generation 或迟到 poll 不能覆盖新任务进度/结果。
 
 ## 5. 数据与缓存测试
 
@@ -97,6 +99,9 @@
 - Tauri 前端不能执行任意命令或读取任意文件。
 - 损坏清单、路径穿越和超大文件被拒绝。
 - 日志不记录不必要的精确坐标；诊断导出需用户主动操作。
+- operation ID 必须由服务端 CSPRNG 生成，保持 UUIDv4 形状；客户端提交自选 ID、错 kind、过期或重复消费均被拒绝。
+- status/cancel/ack 只接受 POST JSON exact ID，不提供 current/list 或 URL 查询 capability；状态响应不含 PNG、URL、路径和详细错误。
+- reserved/terminal 状态分别验证 60 秒/5 分钟 TTL、32 项上限和 ack 回收；未知、错 family 或终态取消返回 false 且不改变 active。
 
 ## 9. 地图合规测试
 
@@ -312,7 +317,8 @@
 - [x] 真实 HTTP 长计算取消、无半结果和同请求重算通过。
 - [x] 加固版 `stop → build → start → status/health → bootstrap/cache-overview` 全链路通过。
 - [ ] 十进制 2.5 GB 实体缓存压力、磁盘不足与进程崩溃注入。
-- [ ] GPU 主机整机重启、HTTP 渐进进度、Windows 10/11 WebView2、operation ID 多客户端绑定和地图合规。
+- [ ] GPU 主机整机重启、Windows 10/11 WebView2 和地图合规。
+- [ ] operation ID 与 HTTP 渐进进度由第 21 节的新协议切片接管；在新构建证据补齐前不得标记通过。
 
 ### 20.5 加固版真实恢复运行
 
@@ -332,3 +338,38 @@
 最终 gate probe 不再返回 409，`/healthz` 仍为 200；脚本再次输出 `validation recovery smoke passed: cancel=true cancelled_http=422 recovery_http=200`，且没有 `validation-recovery-smoke.*` 临时目录残留。
 
 本记录验证的是受管应用进程 stop/start，不是 GPU 主机整机重启。整机重启后的手动恢复仍保留为待办。
+
+## 21. Operation identity 与 HTTP 渐进进度检查点（待实测）
+
+ADR 0013 用服务端签发的短期 UUIDv4 capability 取代“按 kind 取消当前任务”，并让 validation 浏览器通过状态轮询复用现有进度 UI。第 20 节记录的是旧协议历史证据；新切片只有在下列证据全部记录后，才可关闭 HTTP 渐进进度和多标签页错误取消风险。
+
+### 21.1 Rust 协议回归
+
+- [ ] ticket 仅接受 `estimate-download`、`download`、`calculation`，ID 来自服务端密码学安全随机源并具有 UUIDv4 形状。
+- [ ] 匹配长请求在同一状态锁中原子消费 reserved ticket；busy 不消费，错 kind、过期和重复消费失败。
+- [ ] reserved 最多 32 项/TTL 60 秒，terminal 最多 32 项/TTL 5 分钟；确定性边界测试覆盖过期和容量回收。
+- [ ] status 覆盖 `reserved/running/cancellation-requested/succeeded/failed/cancelled`、单调 sequence 和 calculation/download 白名单 progress。
+- [ ] status/terminal 序列化检查不存在结果、PNG/data URL、下载 URL、文件路径或详细错误，也不存在 current/list 路由。
+- [ ] cancel 同时匹配 exact ID 与 family；未知、错 family、终态和迟到取消返回 200/false，不能影响后来操作。
+- [ ] ack 按 exact ID 回收 reserved/terminal；重复、未知和过期 ack 幂等返回 false。
+- [ ] progress、cancel、finish 与 Drop 在同一 mutex 下线性化；取消先到丢弃成功，finish 先到隔离迟到取消，Drop 发布 failed 并释放 gate。
+
+### 21.2 前端回归
+
+- [ ] validation 长请求先领取 ticket，再发送带 `operationId` 的包装 body；导出、preview 和 Tauri 能力边界不变。
+- [ ] 状态轮询使用约 250 ms 递归定时器且不重叠，只分发相同 ID/generation 的新 sequence。
+- [ ] calculation/download progress 复用现有监听器；旧 poll、临时 poll 错误和旧终态不能污染新任务。
+- [ ] ticket 未返回前立即取消仍等待并绑定原 handle；长请求 settle 后停止轮询并 best-effort ack。
+- [ ] 同步长响应仍是唯一结果来源；status 成功不能恢复丢失的 PNG 或绕过正式 calculate/download response。
+
+### 21.3 受管服务与浏览器验收
+
+- [ ] 使用 `scripts/validation-platform.sh build` 生成新 revision，并记录 `stop → build → start → status/health → bootstrap/cache-overview`。
+- [ ] HTTP 烟雾验证服务端签发两个不同 ID；错 ID/错 family 不能取消活动计算，正确 ID 能取消且被取消响应不含双 PNG。
+- [ ] 取消终态可按同一 ID 轮询、ack 后不可再查询；旧 ID 的 status/cancel 不影响下一 ID 的恢复计算。
+- [ ] 恢复计算 HTTP 200，两个 `401×401` PNG 仍完成签名/IHDR/Base64 检查；终态为 succeeded 后可 ack。
+- [ ] 至少观察一项真实 calculation progress 的 sequence/阶段变化，并确认轮询请求不重叠；若验证下载进度，另记录实际字节/资产推进。
+- [ ] 通过 SSH 隧道在浏览器确认可见进度、取消屏障、重试和无控制台错误；不得把这项证据外推为 Windows WebView2。
+- [ ] 运行后 gate 为空、`/healthz` 仍为 200、缓存用量/partial/区域 ready 不变，临时烟雾目录被清理。
+
+在这些复选框回填前，文档只能陈述协议已设计或代码已实现，不能填入新的通过数量、PID、revision、进度序列或浏览器结论。即使全部通过，Windows 10/11 实机、2.5 GB 实体压力、GPU 整机重启和中国大陆地图合规仍是独立门槛。

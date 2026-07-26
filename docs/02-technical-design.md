@@ -105,6 +105,43 @@ cancel_calculation → 原子取消令牌
 
 下载估算只接受 `MapPoint`，URL、资产键和版本全部由 Rust 从固定瓦片计划生成。估算阶段不创建区域引用；用户确认后 `download_region` 在后端重新探测并执行，以避免信任前端回传的 URL 或大小。下载进度由 `download-progress` 事件报告，并按至少 0.5% 变化、250 ms 或资产完成节流。Tauri 用同一个 operation mutex 串行化初始化、点检查、估算、下载、概览、计算、删除和导出命令，避免缓存锁及报告快照竞态。
 
+### 4.2.1 私有 validation server 操作协议
+
+validation HTTP 桥接器保留同步长请求作为结果的唯一权威来源，但为计算和下载类长操作增加服务端签发的 capability：
+
+```text
+POST /api/operation-ticket {"kind":"estimate-download"|"download"|"calculation"}
+  → server-generated CSPRNG UUIDv4 operationId（reserved）
+
+POST /api/estimate-download {"operationId":"…","point":{…}}
+POST /api/download-region   {"operationId":"…","point":{…}}
+POST /api/calculate         {"operationId":"…","request":{…}}
+
+POST /api/operation-status {"operationId":"…"}
+POST /api/cancel-download {"operationId":"…"}
+POST /api/cancel-calculation {"operationId":"…"}
+POST /api/operation-ack {"operationId":"…"}
+```
+
+操作规则：
+
+- `operationId` 由服务器使用密码学安全随机源生成并编码为 UUIDv4，等同短期 bearer capability；客户端不能指定 ID。
+- reserved ticket 必须在同一个 operation-state mutex 内，由匹配 `kind` 的长请求原子消费。共享 gate 忙时返回冲突，但不能消费 ticket；错 kind 或失效 ticket 不能进入 worker。
+- reserved ticket 最多保留 32 个、TTL 为 60 秒；终态快照最多保留 32 个、TTL 为 5 分钟。每次相关操作先清理过期项，避免无人确认的状态无限增长。
+- 状态只有 `reserved`、`running`、`cancellation-requested`、`succeeded`、`failed`、`cancelled`。响应包含 schema version、精确 operation ID、kind、单调 `sequence` 和三类 tagged 白名单 progress：`estimate-download` 只有 `{type, stage:"estimating"}`，不含 URL、资产或结果；`download` 只有字节、资产序号/数量和 percent，不含内部 asset key/URL；`calculation` 只有 phase、percent 和完成/总像素数。所有状态均不含结果、PNG、数据 URL、下载 URL、服务器路径或详细错误。
+- 不提供 current/list 端点，也不允许在 ID 缺失、未知或过期时退化为“按 kind 取消当前任务”。状态使用 POST JSON，使 capability 不进入查询字符串、浏览历史或常规访问日志。
+- `cancel-calculation` 与 `cancel-download` 同时校验 exact ID 和取消 family；未知 ID、错 family 或已经进入终态均返回 HTTP 200 与 `cancelled=false`，不能影响后来任务。
+- `operation-ack` 按 exact ID 删除 reserved 或 terminal 记录；重复、未知或已过期确认幂等返回 false。ack 不提前释放 active worker，也不保存或返回长请求结果。
+- progress、cancel、finish 和 lease Drop 通过同一 mutex 串行化，并同时核对 ID 与 generation。取消先被接受时，随后 worker 成功必须转成 `cancelled` 且丢弃结果；finish 先完成时，迟到取消不能命中下一项任务；未正常 finish 的 Drop 发布 `failed` 终态并释放 gate。
+
+validation 浏览器在启动长请求前领取 ticket，保留 ticket promise、ID 和客户端 generation。它以约 250 ms 的递归 `setTimeout` 发起非重叠同源状态 POST，把新 sequence 转发给既有 `calculation-progress` / `download-progress` 监听器；轮询临时失败不改变长请求结果。旧 generation 或旧 ID 的迟到响应不得更新 UI。
+
+长请求 settle 后先停止轮询；final status 与 best-effort ack 各自使用 1.5 秒超时。final status 结束后，前端必须按 handle identity 先释放当前 handle，再执行有界 ack，因此迟到 cleanup 不能清空后来 generation，ack 卡顿也不能继续占用客户端 operation 槽。
+
+取消捕获本次 handle，即使 ticket 尚未返回也只等待该 ID，并受 3 秒总 deadline 约束。若 exact cancel 返回 false，立即查询同一 ID 的 exact status；`reserved` 或 `running` 时每 100 ms 重试相同 ID，`cancellation-requested`、任何 terminal、404 或原 handle settle 时停止。deadline 超时必须向 UI 返回明确取消超时错误，不能静默报告已取消或退化为按 kind 操作。
+
+该协议只用于回环 validation 平台。Tauri 继续使用原生事件和桌面 operation lease，普通 preview 继续禁止真实操作。设计依据见 ADR 0013；新构建、真实回环烟雾和浏览器可见进度需要另行记录后才能宣称通过。
+
 ### 4.3 原生传播层
 
 - 使用 NTIA 官方 ITM C++ 代码作为固定版本的第三方依赖。
@@ -257,6 +294,9 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - 下载、剖面块和 ITM 批次之间检查取消状态。
 - 取消后释放临时栅格，UI 回到可编辑状态。
 - 已完整下载并校验的数据仍保留缓存。
+- validation HTTP 取消只接受服务端签发的 exact operation ID 与匹配 family；错 ID、错 family、终态或过期 capability 不改变 active。
+- validation 的 progress、cancel、finish 与 Drop 使用同一状态锁决定线性化顺序；每次回调还核对 generation，旧 worker 不能发布到后来 ID。
+- 同步 HTTP 请求只在 operation terminal 化后交付成功或取消；terminal 仅用于轮询可见性，不承担结果恢复。
 
 ## 9. 热力图数据格式
 
@@ -335,6 +375,9 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - Tauri 命令采用最小权限白名单，前端不能执行任意系统命令。
 - 下载 URL 必须在允许域名列表内并使用 HTTPS。
 - 对远端清单和下载内容进行校验，防止缓存投毒。
+- 私有 validation 模式是坐标离开 Windows 本机的显式例外；仍只允许同源回环/SSH 隧道访问，不新增 CORS 或公网入口。
+- operation ID 作为短期 capability，只能由服务器生成并放在 JSON body 中；禁止放入 URL、提供 current/list 枚举或在状态响应泄露结果与基础设施细节。
+- ticket/terminal 集合同时实施 TTL 和最大 32 项限制；ack、过期清理及容量回收都必须按 exact ID 运行。
 
 ## 13. 测试策略
 
@@ -354,6 +397,11 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 纬度 18°、30.5°、40°、54° 的地图像素定位误差小于 1 km。
 - 精确 200 km 连续边界位于半像素扩展域内；最近可见栅格中心满足该处一个 WGS-84 实算输出像素对角线容差。
 - 绝对仿射 dBm 与 MapLibre UV 像素中心、真实 14 字段 camelCase 序列化和地图/报告字段分离。
+- operation ticket 只接受三种 kind，ID 为服务端 CSPRNG UUIDv4；客户端指定 ID、错 kind、过期 ticket 和重复消费失败。
+- busy gate 不消费 reserved ticket；容量 32、reserved 60 秒、terminal 5 分钟和 ack 回收均有确定性时钟/边界测试。
+- status 状态转换与 sequence 单调；progress 仅含白名单字段，序列化中不存在 PNG、data URL、下载 URL、路径或错误详情。
+- exact-ID + family 取消覆盖未知 ID、错 family、终态、取消先于完成、完成先于迟到取消、Drop failed 及旧 generation 回调。
+- 前端轮询非重叠，临时失败可恢复；旧 generation/ID 不分发进度，取消在 ticket 返回前仍绑定原 handle，settle 后停止并 best-effort ack。
 
 ### 13.2 ITM 回归
 

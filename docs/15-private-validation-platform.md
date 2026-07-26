@@ -2,10 +2,11 @@
 
 - 初始日期：2026-07-24
 - 恢复切片更新：2026-07-27
+- operation 协议切片更新：2026-07-27
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
-- 对应决策：`decisions/0012-private-server-validation-platform.md`
-- 状态：私有平台、真实成都计算、浏览器视觉、加固版 stop/build/start/readiness 和真实 HTTP 取消恢复均已验证；仍不替代整机重启、Windows/Tauri 与地图合规验收
+- 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`
+- 状态：旧协议私有平台、真实成都计算、浏览器视觉、加固版 stop/build/start/readiness 和真实 HTTP 取消恢复均已验证；operation capability 与轮询进度的新构建、真实烟雾和浏览器证据待补，且始终不替代整机重启、Windows/Tauri 与地图合规验收
 
 ## 1. 目标与边界
 
@@ -57,14 +58,27 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 | GET | `/api/bootstrap` | 模型、网格和缓存配额 |
 | GET | `/api/cache-overview` | 实际缓存用量与区域列表 |
 | POST | `/api/inspect-point` | 区域计划、ready 状态和中心高程 |
-| POST | `/api/estimate-download` | 固定来源下载量与配额预检 |
-| POST | `/api/download-region` | DEM/WBM 下载、生成、校验与 ready |
+| POST | `/api/operation-ticket` | 为 estimate/download/calculation 签发短期 capability |
+| POST | `/api/operation-status` | exact-ID 状态、sequence 与白名单进度快照 |
+| POST | `/api/operation-ack` | exact-ID 回收 reserved/terminal 快照 |
+| POST | `/api/estimate-download` | 带 operationId 的固定来源下载量与配额预检 |
+| POST | `/api/download-region` | 带 operationId 的 DEM/WBM 下载、生成、校验与 ready |
 | POST | `/api/delete-cache-region` | 引用安全的区域删除 |
-| POST | `/api/calculate` | 真实 DEM/WBM、ITM 与双 PNG 结果 |
-| POST | `/api/cancel-download` | 取消当前下载类任务 |
-| POST | `/api/cancel-calculation` | 取消当前计算类任务 |
+| POST | `/api/calculate` | 带 operationId 的真实 DEM/WBM、ITM 与同步双 PNG 结果 |
+| POST | `/api/cancel-download` | exact ID + download family 取消 |
+| POST | `/api/cancel-calculation` | exact ID + calculation family 取消 |
 
-没有导出端点。POST JSON 使用与 Tauri 调用相同的包装字段，并拒绝未知字段。服务一次只允许一个共享操作；冲突返回 HTTP 409。当前 validation 适配器没有 Tauri 事件流，因而不记录逐阶段实时进度；取消通过另一条 HTTP 请求设置共享取消令牌。
+没有导出端点、current operation 端点或 operation list。POST JSON 继续拒绝未知字段；服务一次只允许一个共享操作，冲突返回 HTTP 409。
+
+`POST /api/operation-ticket {"kind":…}` 只接受 `estimate-download`、`download`、`calculation`。服务器用密码学安全随机源生成 UUIDv4 `operationId`；客户端不能自选 ID。reserved ticket 最多 32 项、TTL 60 秒。匹配长请求在同一个状态 mutex 内原子消费 ticket；gate 忙时不消费，错 kind、过期或重复 ticket 不能进入 worker。
+
+estimate/download 的长请求包装为 `{"operationId":"…","point":{…}}`，calculate 为 `{"operationId":"…","request":{…}}`。`operation-status`、两个 cancel 和 `operation-ack` 均为带 exact ID 的 POST JSON，capability 不进入 URL。取消还必须匹配 operation family；未知 ID、错 family 或终态操作返回 HTTP 200 与 `cancelled=false`，不允许退化为按 kind 取消 active。
+
+status 只返回 schema version、operation ID、kind、`reserved/running/cancellation-requested/succeeded/failed/cancelled` 状态、单调 sequence 和 calculation/download 白名单进度；不返回结果、PNG、data URL、下载 URL、服务器路径或详细错误。terminal 最多 32 项、TTL 5 分钟；ack 按 exact ID 删除 reserved/terminal，重复或未知 ack 幂等返回 false。
+
+progress、cancel、finish 与 lease Drop 使用同一 mutex，并同时核对 ID/generation。取消先被接受时丢弃后来成功，finish 先完成时迟到取消不能命中下一任务，未正常 finish 的 Drop 发布 failed 终态。同步长请求仍是结果的唯一权威来源，状态端点不承担 PNG 结果恢复。
+
+validation 浏览器在长请求前领取 ticket，以约 250 ms 的递归定时器执行非重叠 status POST，把新 sequence 分发给既有 calculation/download 进度监听器。每个 handle 保存 ticket promise、ID 与客户端 generation；旧 poll 和迟到响应不能更新新任务。长请求 settle 后停止轮询并 best-effort ack。
 
 `/healthz` 是不打开缓存的轻量进程存活检查，只返回 HTTP 状态和协议 schema。需要确认 `CacheStore` 能获得锁、完成重启整理并满足配额时，调用方必须成功执行 `/api/bootstrap`；因此管理脚本的 `health` 结果不能替代数据就绪判断。
 
@@ -85,6 +99,9 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 - canonical path 必须仍位于 `app/dist`；
 - `app/dist` 与运行数据目录不能重叠；
 - 响应包含同源 CSP、`X-Content-Type-Options: nosniff` 和 `Referrer-Policy: no-referrer`。
+- operation ID 作为 bearer capability，只放在同源 POST JSON body；不写 URL，不提供 current/list，不增加 CORS，也不把 ID 视为跨用户认证机制；
+- CSPRNG UUIDv4、60 秒 reserved TTL、5 分钟 terminal TTL、双 32 项上限和 exact-ID ack 共同限制 capability 暴露窗口与内存占用；
+- status 输出按字段白名单构造，不序列化工作结果、PNG、URL、服务器路径或详细错误；HTTP 日志也不应记录请求 body 中的 capability。
 
 validation 模式是一项明确的内部隐私例外：浏览器中的测试坐标、参数和计算请求会离开 Windows 本机并进入用户控制的服务器。不要使用敏感真实位置。服务没有遥测、账号、第三方计算 API或服务器文件导出；数据下载仍只访问既有固定 Copernicus HTTPS 来源。
 
@@ -181,6 +198,12 @@ scripts/validation-platform.sh stop
 
 2026-07-27 的加固版先通过 `bash -n` 与 `self-test`，随后以 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 完成真实 stop/build/start/readiness。旧 PID `214692` 被严格停止，新 PID `1114524` 通过身份、重复 start 和 runner 排他检查；完整运行证据见 9.4 节。
 
+### 8.4 Operation capability 与轮询进度（待补证据）
+
+本切片实现后应新增 server/frontend 回归，覆盖 CSPRNG UUIDv4 ticket、匹配消费、busy 不消费、TTL/容量、状态白名单、sequence、exact-ID + family 取消、ack、同锁线性化、Drop failed、非重叠轮询和 generation 隔离。旧的 11 项 server / 26 项 frontend 数量是上一构建的历史证据，不得在新测试实际运行前改写。
+
+运行验收还需重建受管服务并用更新后的 `validation-recovery-smoke.sh` 验证：错 ID/错 family 不能取消活动任务；正确 ID 取消后可轮询 cancelled 并 ack；下一 ID 能恢复生成两张有效 `401×401` PNG；旧 ID 不影响新任务；真实 calculation progress 至少出现一次 sequence/阶段推进。浏览器可见进度和控制台结果也需单列，不得从 HTTP 单元测试推断。
+
 ## 9. 真实成都验证
 
 中心坐标：`30.5°N, 103.5°E`。
@@ -269,11 +292,12 @@ scripts/validation-platform.sh stop
 结束探针返回业务校验 HTTP 422 而非冲突 409，最终 `/healthz` 为 200。脚本再次输出 `validation recovery smoke passed: cancel=true cancelled_http=422 recovery_http=200`，operation gate 与健康状态恢复，且没有 `validation-recovery-smoke.*` 临时目录残留。
 
 这是应用进程 stop/start 证据，不是 GPU 主机整机重启测试。SSH 隧道访问此前已独立验证；本烟雾脚本直接命中服务器回环地址，以减少浏览器和隧道时序噪声。
+ADR 0013 的 exact operation ID 已在实现层面取代上述单客户端归属推断，但这一段的历史运行数字仍来自旧协议；新 revision 的 smoke、状态进度和浏览器证据待实测后另行补入。
+
 
 ## 10. 尚未关闭
 
-- 多标签页/多客户端并发取消仍没有 operation ID 绑定；当前保障范围是单服务门闩与官方单窗口 UI 正常路径；
-- HTTP 模式的渐进进度显示；
+- operation capability 已在代码切片中处理多标签页错误取消，并加入 HTTP 轮询进度；新构建、受管服务烟雾和真实浏览器可见进度证据尚未回填；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；
 - 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程强制崩溃注入；
 - GPU 主机整机重启后的手动恢复流程；

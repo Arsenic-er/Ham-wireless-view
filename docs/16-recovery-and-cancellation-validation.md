@@ -3,8 +3,8 @@
 - 日期：2026-07-27
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
-- 范围：缓存重启整理、2.5 GB 边界不变量、计算取消结果交付、私有平台管理状态
-- 状态：代码、加固版应用进程重建/重启、readiness 和真实 HTTP 取消恢复已验证；真实 2.5 GB 压力、整机重启、Windows 实机与地图合规待验证
+- 范围：缓存重启整理、2.5 GB 边界不变量、取消结果交付、私有平台管理状态、operation capability 与 HTTP 轮询进度
+- 状态：旧协议代码、加固版应用进程重建/重启、readiness 和真实 HTTP 取消恢复已验证；新 operation 协议的构建/烟雾/浏览器证据，以及真实 2.5 GB 压力、整机重启、Windows 实机与地图合规待验证
 
 ## 1. 本切片要关闭的故障窗口
 
@@ -53,7 +53,7 @@ validation server 的 `OperationLease::finish` 和 Tauri 的 `DesktopOperationLe
 3. 清除 active；
 4. 若取消已经被接受，丢弃 worker 的成功值并返回取消；否则交付原 outcome。
 
-取消只设置同类型 active 操作的标志，不会提前释放门闩。因此旧 worker 真正结束前，新操作仍应被拒绝或由官方 UI 保持不可重试状态。`AppService` 还在传播完成、两张 PNG 编码、Base64 转换和最终结构交付前设置检查点。
+Tauri 取消仍绑定桌面 active lease；validation 新协议同时要求 exact operation ID 与匹配 family。两者都只设置对应 active 的取消标志，不会提前释放门闩。因此旧 worker 真正结束前，新操作仍应被拒绝或由官方 UI 保持不可重试状态。`AppService` 还在传播完成、两张 PNG 编码、Base64 转换和最终结构交付前设置检查点。
 
 ### 3.2 前端结果卫生
 
@@ -64,7 +64,25 @@ validation server 的 `OperationLease::finish` 和 Tauri 的 `DesktopOperationLe
 - 已取消 promise 结束前不把旧成功结果恢复；
 - 操作收尾后可重新计算并显示新结果。
 
-当前 HTTP 取消请求没有 operation ID，也没有把取消请求绑定到发起该计算的浏览器实例。因此不能把上述结果外推为多标签页/多客户端安全；该场景需要未来在协议中加入不可猜测的 operation ID 或等价所有权令牌。
+上述前端结果卫生测试仍成立。旧 HTTP 协议没有 operation ID 的限制由 ADR 0013 的 capability 设计取代；但新 revision 的自动化、受管服务与浏览器证据需按 7.3 节补齐，不能沿用旧烟雾数字推断。
+
+### 3.3 Operation capability、状态与进度
+
+validation 长操作执行如下状态流：
+
+```text
+ticket(kind) → reserved → running → cancellation-requested → cancelled
+                            └───────────────────────────────→ succeeded
+                            └───────────────────────────────→ failed
+```
+
+- `POST /api/operation-ticket` 由服务端 CSPRNG 生成 UUIDv4 capability；reserved 最多 32 项、TTL 60 秒。
+- estimate/download/calculate 带 `operationId`；匹配 ticket 只在 gate 空闲时原子消费，busy 不消费。
+- `operation-status` 按 exact ID 返回 state、单调 sequence 和白名单 progress，不保存结果、PNG、URL、路径或详细错误；terminal 最多 32 项、TTL 5 分钟。
+- cancel 同时匹配 exact ID 与 calculation/download family。未知、错 family 或终态返回 200/false，绝不回退到按 kind 操作当前 lease。
+- progress、cancel、finish 和 Drop 在同一 mutex 下核对 ID/generation。取消先到时成功值被丢弃；finish 先到时迟到 cancel 不影响后来 ID；Drop 进入 failed 并释放 gate。
+- `operation-ack` 按 exact ID 删除 reserved/terminal，重复或未知确认幂等 false。
+- validation 前端用约 250 ms 非重叠 POST 轮询复用既有进度监听器，并以本地 generation 隔离旧响应。同步长请求仍是唯一结果来源；settle 后停止轮询并 best-effort ack。
 
 ## 4. 私有平台管理恢复
 
@@ -104,8 +122,10 @@ owner 记录 PID、Linux 进程 start time 和 boot ID。陈旧目录只有在�
 | 加固版真实恢复运行 | 通过 | stop/build/start/readiness、缓存不变、真实取消与重算 |
 
 离线 workspace 的 77 项由 app-service 12、cache 21、coverage 15、export 6、propagation 6、official reference 1、terrain 5、validation server 11 构成。3 项真实网络测试单列为 ignored，不重复计入 77。
+以上数量和“通过”仅对应 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 的旧 HTTP 协议。operation capability 切片不得复用这些数量；实际 server/frontend 测试、脚本检查和运行证据完成后再新增一行。
 
-## 7. 已完成的真实运行验收
+
+## 7. 真实运行验收：旧协议已完成，新协议待补
 
 本次应用基线提交和 validation build metadata revision 均为 `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`。
 
@@ -132,12 +152,25 @@ owner 记录 PID、Linux 进程 start time 和 boot ID。陈旧目录只有在�
 
 烟雾脚本直接访问服务器 `127.0.0.1:1421`；SSH 隧道路径已由此前浏览器验收独立覆盖。该身份校验只证明受控单 shell/单客户端测试拥有其后台 curl，不能替代多客户端 operation ID。本次是应用进程 stop/start，不是 GPU 主机整机重启。
 
+### 7.3 Operation identity 与轮询进度（待实测）
+
+旧的 curl PID/PPID 归属推断不再是协议安全边界。新烟雾应直接使用服务器签发的 capability，并记录以下证据：
+
+- [ ] 新 revision 的 server/frontend 测试、格式、lint、脚本语法和 managed build 实际结果；
+- [ ] 同一客户端领取的两个 operation ID 不同且均为服务端 UUIDv4；busy 不消费 reserved ticket；
+- [ ] 活动 ID-A 运行时，未知 ID 与错 family 取消均为 false，ID-A 状态与 progress 继续推进；
+- [ ] 正确取消 ID-A 后，calculate 为取消且无双 PNG，status 为 cancelled；ack 后 ID-A 不可再查询；
+- [ ] ID-B 恢复计算为 HTTP 200，两张 `401×401` PNG 完成 Base64/signature/IHDR 验证，终态 succeeded 后 ack；
+- [ ] 旧 ID-A 的 cancel/status 不影响 ID-B 或下一任务，最终 gate、health、bootstrap、cache overview 正常；
+- [ ] 浏览器通过 SSH 隧道显示真实逐阶段进度，轮询不重叠，取消/重试无旧 generation 污染且控制台无新错误。
+
+证据完成前只记录“协议已实现、待实测”，不写新的 revision、PID、测试数量、进度 sequence 或运行通过结论。完成后，HTTP 渐进进度与多标签页错误取消风险可在 validation 平台范围内关闭；Windows WebView2 和公开产品安全边界仍需独立验收。
+
 ## 8. 仍未关闭
 
 - [ ] 使用真实十进制 2.5 GB 数据执行 exact-cap、over-cap、磁盘不足和强制崩溃注入；
 - [ ] GPU 主机整机重启后的手动恢复与缓存 overview 复核；
 - [ ] 弱网下载中断/恢复和日志轮转压力；
-- [ ] HTTP 渐进进度；
-- [ ] 为多标签页/多客户端取消增加 operation ID 或等价所有权令牌；
+- [ ] 第 7.3 节的新构建、HTTP 烟雾和浏览器证据；“缺少 operation ID / 没有 HTTP 进度”的实现待办已由 ADR 0013 切片关闭，不得回退为按 kind 取消；
 - [ ] Windows 10/11 WebView2、安装、原生导出和真实文件系统；
 - [ ] 合规中国大陆底图、审图号、署名、离线/导出授权和公开发布验收。

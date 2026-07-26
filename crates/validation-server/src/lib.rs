@@ -1,5 +1,6 @@
 //! Minimal same-origin HTTP bridge for internal browser validation.
 
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -7,15 +8,21 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use hamheatmap_app_service::{AppService, CalculationRequest, MapPoint};
+use hamheatmap_app_service::{
+    AppService, CalculationProgress, CalculationRequest, DownloadProgressView, MapPoint,
+};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1:1421";
 pub const DEFAULT_REQUEST_BODY_LIMIT: usize = 1_048_576;
 const MAX_HEADER_BYTES: usize = 16_384;
 const MAX_STATIC_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const TICKET_TTL: Duration = Duration::from_secs(60);
+const TERMINAL_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_TICKETS: usize = 32;
+const MAX_TERMINALS: usize = 32;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerConfig {
@@ -212,7 +219,16 @@ impl ValidationServer {
             return ApiError::bad_request("unexpected Host header for validation listener")
                 .into_response();
         }
-        let path = request.target.split('?').next().unwrap_or(&request.target);
+        let (path, has_query) = match request.target.split_once('?') {
+            Some((path, _)) => (path, true),
+            None => (request.target.as_str(), false),
+        };
+        if has_query && (path.starts_with("/api/") || path == "/healthz") {
+            return ApiError::bad_request(
+                "query strings are not accepted by validation capability APIs",
+            )
+            .into_response();
+        }
         let api_response = match (request.method.as_str(), path) {
             ("GET", "/healthz") => Some(json_response(
                 200,
@@ -222,55 +238,60 @@ impl ValidationServer {
                 },
             )),
             ("GET", "/api/bootstrap") => {
-                Some(self.with_operation(OperationKind::Other, |_| self.state.service.bootstrap()))
+                Some(self.with_operation(|_| self.state.service.bootstrap()))
             }
             ("GET", "/api/cache-overview") => {
-                Some(self.with_operation(OperationKind::Other, |_| {
-                    self.state.service.cache_overview()
+                Some(self.with_operation(|_| self.state.service.cache_overview()))
+            }
+            ("POST", "/api/inspect-point") => {
+                Some(self.json_operation(&request, |body: PointBody, _| {
+                    self.state.service.inspect_point(body.point)
                 }))
             }
-            ("POST", "/api/inspect-point") => Some(self.json_operation(
+            ("POST", "/api/operation-ticket") => Some(self.operation_ticket(&request)),
+            ("POST", "/api/operation-status") => Some(self.operation_status(&request)),
+            ("POST", "/api/operation-ack") => Some(self.operation_ack(&request)),
+            ("POST", "/api/estimate-download") => Some(self.json_ticketed_operation(
                 &request,
-                OperationKind::Other,
-                |body: PointBody, _| self.state.service.inspect_point(body.point),
-            )),
-            ("POST", "/api/estimate-download") => Some(self.json_operation(
-                &request,
-                OperationKind::Download,
-                |body: PointBody, cancelled| {
+                TicketKind::EstimateDownload,
+                |body: TicketPointBody, cancelled, _| {
                     self.state
                         .service
                         .estimate_download_with_cancel(body.point, cancelled)
                 },
             )),
-            ("POST", "/api/download-region") => Some(self.json_operation(
+            ("POST", "/api/download-region") => Some(self.json_ticketed_operation(
                 &request,
-                OperationKind::Download,
-                |body: PointBody, cancelled| {
+                TicketKind::Download,
+                |body: TicketPointBody, cancelled, reporter| {
                     self.state
                         .service
-                        .download_region(body.point, cancelled, |_| {})
+                        .download_region(body.point, cancelled, move |progress| {
+                            reporter.report_download(progress)
+                        })
                 },
             )),
-            ("POST", "/api/delete-cache-region") => Some(self.json_operation(
+            ("POST", "/api/delete-cache-region") => {
+                Some(self.json_operation(&request, |body: DeleteRegionBody, _| {
+                    self.state.service.delete_cache_region(&body.region_id)
+                }))
+            }
+            ("POST", "/api/calculate") => Some(self.json_ticketed_operation(
                 &request,
-                OperationKind::Other,
-                |body: DeleteRegionBody, _| self.state.service.delete_cache_region(&body.region_id),
-            )),
-            ("POST", "/api/calculate") => Some(self.json_operation(
-                &request,
-                OperationKind::Calculation,
-                |body: CalculationBody, cancelled| {
+                TicketKind::Calculation,
+                |body: TicketCalculationBody, cancelled, reporter| {
                     self.state
                         .service
-                        .calculate(&body.request, cancelled, |_| {})
+                        .calculate(&body.request, cancelled, move |progress| {
+                            reporter.report_calculation(progress)
+                        })
                 },
             )),
             ("POST", "/api/cancel-calculation") => {
-                Some(self.cancel_operation(&request, OperationKind::Calculation))
+                Some(self.cancel_operation(&request, CancelFamily::Calculation))
             }
             ("POST", "/api/cancel-download") => {
-                Some(self.cancel_operation(&request, OperationKind::Download))
+                Some(self.cancel_operation(&request, CancelFamily::Download))
             }
             (_, path) if path.starts_with("/api/") || path == "/healthz" => {
                 Some(ApiError::method_not_allowed().into_response())
@@ -289,10 +310,9 @@ impl ValidationServer {
 
     fn with_operation<T: Serialize>(
         &self,
-        kind: OperationKind,
         operation: impl FnOnce(&AtomicBool) -> Result<T, String>,
     ) -> Response {
-        let lease = match self.state.operations.begin(kind) {
+        let lease = match self.state.operations.begin_other() {
             Ok(lease) => lease,
             Err(error) => return error.into_response(),
         };
@@ -307,36 +327,84 @@ impl ValidationServer {
     fn json_operation<B: for<'de> Deserialize<'de>, T: Serialize>(
         &self,
         request: &Request,
-        kind: OperationKind,
         operation: impl FnOnce(B, &AtomicBool) -> Result<T, String>,
     ) -> Response {
-        if let Err(error) = require_json_content_type(request) {
-            return error.into_response();
-        }
-        let body = match serde_json::from_slice::<B>(&request.body) {
+        let body = match parse_json::<B>(request) {
             Ok(body) => body,
-            Err(error) => {
-                return ApiError::bad_request(format!("invalid JSON request: {error}"))
-                    .into_response();
-            }
+            Err(error) => return error.into_response(),
         };
-        self.with_operation(kind, |cancelled| operation(body, cancelled))
+        self.with_operation(|cancelled| operation(body, cancelled))
     }
 
-    fn cancel_operation(&self, request: &Request, kind: OperationKind) -> Response {
-        if let Err(error) = require_json_content_type(request) {
-            return error.into_response();
+    fn json_ticketed_operation<B: TicketedBody, T: Serialize>(
+        &self,
+        request: &Request,
+        kind: TicketKind,
+        operation: impl FnOnce(B, &AtomicBool, OperationReporter) -> Result<T, String>,
+    ) -> Response {
+        let body = match parse_json::<B>(request) {
+            Ok(body) => body,
+            Err(error) => return error.into_response(),
+        };
+        let lease = match self
+            .state
+            .operations
+            .begin_ticketed(body.operation_id(), kind)
+        {
+            Ok(lease) => lease,
+            Err(error) => return error.into_response(),
+        };
+        let reporter = lease.reporter().expect("ticketed lease has a reporter");
+        let outcome = operation(body, &lease.cancelled, reporter);
+        match lease.finish(outcome) {
+            Ok(Ok(value)) => json_response(200, &value),
+            Ok(Err(message)) => ApiError::service(message).into_response(),
+            Err(error) => error.into_response(),
         }
-        if !request.body.is_empty() {
-            return ApiError::bad_request("cancellation requests must not have a body")
-                .into_response();
+    }
+
+    fn operation_ticket(&self, request: &Request) -> Response {
+        let body = match parse_json::<TicketRequest>(request) {
+            Ok(body) => body,
+            Err(error) => return error.into_response(),
+        };
+        match self.state.operations.reserve(body.kind) {
+            Ok(ticket) => json_response(200, &ticket),
+            Err(error) => error.into_response(),
         }
-        json_response(
-            200,
-            &CancelResponse {
-                cancelled: self.state.operations.cancel(kind),
-            },
-        )
+    }
+
+    fn operation_status(&self, request: &Request) -> Response {
+        let body = match parse_json::<OperationIdBody>(request) {
+            Ok(body) => body,
+            Err(error) => return error.into_response(),
+        };
+        match self.state.operations.status(&body.operation_id) {
+            Ok(status) => json_response(200, &status),
+            Err(error) => error.into_response(),
+        }
+    }
+
+    fn operation_ack(&self, request: &Request) -> Response {
+        let body = match parse_json::<OperationIdBody>(request) {
+            Ok(body) => body,
+            Err(error) => return error.into_response(),
+        };
+        match self.state.operations.ack(&body.operation_id) {
+            Ok(acknowledged) => json_response(200, &AckResponse { acknowledged }),
+            Err(error) => error.into_response(),
+        }
+    }
+
+    fn cancel_operation(&self, request: &Request, family: CancelFamily) -> Response {
+        let body = match parse_json::<OperationIdBody>(request) {
+            Ok(body) => body,
+            Err(error) => return error.into_response(),
+        };
+        match self.state.operations.cancel(&body.operation_id, family) {
+            Ok(cancelled) => json_response(200, &CancelResponse { cancelled }),
+            Err(error) => error.into_response(),
+        }
     }
 
     fn static_response(&self, url_path: &str, head_only: bool) -> Result<Response, ApiError> {
@@ -362,84 +430,523 @@ impl ValidationServer {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OperationKind {
-    Other,
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum TicketKind {
+    EstimateDownload,
     Download,
     Calculation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CancelFamily {
+    Download,
+    Calculation,
+}
+
+impl TicketKind {
+    fn matches_cancel_family(self, family: CancelFamily) -> bool {
+        match family {
+            CancelFamily::Download => {
+                matches!(self, Self::EstimateDownload | Self::Download)
+            }
+            CancelFamily::Calculation => self == Self::Calculation,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum OperationStateLabel {
+    Reserved,
+    Running,
+    CancellationRequested,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type")]
+enum OperationProgress {
+    #[serde(rename = "estimate-download")]
+    EstimateDownload { stage: &'static str },
+    #[serde(rename = "download")]
+    Download {
+        #[serde(rename = "assetIndex")]
+        asset_index: usize,
+        #[serde(rename = "assetCount")]
+        asset_count: usize,
+        #[serde(rename = "assetDownloadedBytes")]
+        asset_downloaded_bytes: u64,
+        #[serde(rename = "assetExpectedBytes")]
+        asset_expected_bytes: u64,
+        #[serde(rename = "totalDownloadedBytes")]
+        total_downloaded_bytes: u64,
+        #[serde(rename = "totalExpectedBytes")]
+        total_expected_bytes: u64,
+        percent: f64,
+    },
+    #[serde(rename = "calculation")]
+    Calculation {
+        phase: hamheatmap_app_service::CalculationPhase,
+        percent: f64,
+        #[serde(rename = "completedPixelCount")]
+        completed_pixel_count: usize,
+        #[serde(rename = "totalPixelCount")]
+        total_pixel_count: usize,
+    },
+}
+
+impl OperationProgress {
+    fn download(value: DownloadProgressView) -> Self {
+        Self::Download {
+            asset_index: value.asset_index,
+            asset_count: value.asset_count,
+            asset_downloaded_bytes: value.asset_downloaded_bytes,
+            asset_expected_bytes: value.asset_expected_bytes,
+            total_downloaded_bytes: value.total_downloaded_bytes,
+            total_expected_bytes: value.total_expected_bytes,
+            percent: value.percent,
+        }
+    }
+
+    fn calculation(value: CalculationProgress) -> Self {
+        Self::Calculation {
+            phase: value.phase,
+            percent: value.percent,
+            completed_pixel_count: value.completed_pixel_count,
+            total_pixel_count: value.total_pixel_count,
+        }
+    }
+}
+
 #[derive(Default)]
 struct OperationGate {
-    active: Mutex<Option<ActiveOperation>>,
+    inner: Mutex<OperationStore>,
+}
+
+#[derive(Default)]
+struct OperationStore {
+    tickets: HashMap<String, TicketRecord>,
+    active: Option<ActiveOperation>,
+    terminals: HashMap<String, TerminalRecord>,
+    terminal_order: VecDeque<String>,
+    next_generation: u64,
+}
+
+struct TicketRecord {
+    kind: TicketKind,
+    created_at: Instant,
 }
 
 struct ActiveOperation {
-    kind: OperationKind,
+    operation_id: Option<String>,
+    kind: Option<TicketKind>,
+    generation: u64,
     cancelled: Arc<AtomicBool>,
+    sequence: u64,
+    progress: Option<OperationProgress>,
+}
+
+#[derive(Clone)]
+struct TerminalRecord {
+    kind: TicketKind,
+    state: OperationStateLabel,
+    sequence: u64,
+    progress: Option<OperationProgress>,
+    completed_at: Instant,
 }
 
 struct OperationLease {
     gate: Arc<OperationGate>,
+    operation_id: Option<String>,
+    generation: u64,
     cancelled: Arc<AtomicBool>,
     finished: bool,
 }
 
+impl std::fmt::Debug for OperationLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OperationLease")
+            .field("operation_id", &self.operation_id)
+            .field("generation", &self.generation)
+            .field("finished", &self.finished)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
+struct OperationReporter {
+    gate: Arc<OperationGate>,
+    operation_id: String,
+    generation: u64,
+}
+
+impl OperationReporter {
+    fn report(&self, progress: OperationProgress) -> bool {
+        let Ok(mut inner) = self.gate.inner.lock() else {
+            return false;
+        };
+        let Some(active) = inner.active.as_mut() else {
+            return false;
+        };
+        if active.operation_id.as_deref() != Some(&self.operation_id)
+            || active.generation != self.generation
+        {
+            return false;
+        }
+        active.sequence = active.sequence.saturating_add(1);
+        active.progress = Some(progress);
+        true
+    }
+
+    fn report_download(&self, progress: DownloadProgressView) {
+        self.report(OperationProgress::download(progress));
+    }
+
+    fn report_calculation(&self, progress: CalculationProgress) {
+        self.report(OperationProgress::calculation(progress));
+    }
+}
+
+impl OperationStore {
+    fn prune(&mut self, now: Instant) {
+        self.tickets
+            .retain(|_, ticket| !has_expired(now, ticket.created_at, TICKET_TTL));
+        self.terminals
+            .retain(|_, terminal| !has_expired(now, terminal.completed_at, TERMINAL_TTL));
+        self.terminal_order
+            .retain(|operation_id| self.terminals.contains_key(operation_id));
+    }
+
+    fn next_generation(&mut self) -> u64 {
+        self.next_generation = self.next_generation.wrapping_add(1).max(1);
+        self.next_generation
+    }
+
+    fn insert_terminal(&mut self, operation_id: String, terminal: TerminalRecord) {
+        while self.terminals.len() >= MAX_TERMINALS {
+            let Some(oldest) = self.terminal_order.pop_front() else {
+                self.terminals.clear();
+                break;
+            };
+            self.terminals.remove(&oldest);
+        }
+        self.terminal_order.push_back(operation_id.clone());
+        self.terminals.insert(operation_id, terminal);
+    }
+}
+
 impl OperationGate {
-    fn begin(self: &Arc<Self>, kind: OperationKind) -> Result<OperationLease, ApiError> {
-        let mut active = self
-            .active
+    fn reserve(&self, kind: TicketKind) -> Result<TicketResponse, ApiError> {
+        for _ in 0..8 {
+            let operation_id = generate_operation_id()?;
+            match self.reserve_with_id_at(kind, operation_id, Instant::now()) {
+                Ok(ticket) => return Ok(ticket),
+                Err(error) if error.status == 409 && error.message == "operation id collision" => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(ApiError::internal(
+            "cannot allocate a unique operation identifier",
+        ))
+    }
+
+    fn reserve_with_id_at(
+        &self,
+        kind: TicketKind,
+        operation_id: String,
+        now: Instant,
+    ) -> Result<TicketResponse, ApiError> {
+        let mut inner = self
+            .inner
             .lock()
             .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
-        if active.is_some() {
+        inner.prune(now);
+        let collides = inner.tickets.contains_key(&operation_id)
+            || inner.terminals.contains_key(&operation_id)
+            || inner
+                .active
+                .as_ref()
+                .and_then(|active| active.operation_id.as_deref())
+                == Some(operation_id.as_str());
+        if collides {
+            return Err(ApiError::operation_id_collision());
+        }
+        if inner.tickets.len() >= MAX_TICKETS {
+            return Err(ApiError::too_many_tickets());
+        }
+        inner.tickets.insert(
+            operation_id.clone(),
+            TicketRecord {
+                kind,
+                created_at: now,
+            },
+        );
+        Ok(TicketResponse {
+            schema_version: 1,
+            operation_id,
+            kind,
+            state: "reserved",
+        })
+    }
+
+    fn begin_other(self: &Arc<Self>) -> Result<OperationLease, ApiError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
+        inner.prune(Instant::now());
+        if inner.active.is_some() {
             return Err(ApiError::busy());
         }
+        let generation = inner.next_generation();
         let cancelled = Arc::new(AtomicBool::new(false));
-        *active = Some(ActiveOperation {
-            kind,
+        inner.active = Some(ActiveOperation {
+            operation_id: None,
+            kind: None,
+            generation,
             cancelled: cancelled.clone(),
+            sequence: 0,
+            progress: None,
         });
         Ok(OperationLease {
             gate: self.clone(),
+            operation_id: None,
+            generation,
             cancelled,
             finished: false,
         })
     }
 
-    fn cancel(&self, kind: OperationKind) -> bool {
-        let Ok(active) = self.active.lock() else {
-            return false;
-        };
-        let Some(operation) = active.as_ref() else {
-            return false;
-        };
-        if operation.kind != kind {
-            return false;
+    fn begin_ticketed(
+        self: &Arc<Self>,
+        operation_id: &str,
+        kind: TicketKind,
+    ) -> Result<OperationLease, ApiError> {
+        validate_operation_id(operation_id)?;
+        self.begin_ticketed_at(operation_id, kind, Instant::now())
+    }
+
+    fn begin_ticketed_at(
+        self: &Arc<Self>,
+        operation_id: &str,
+        kind: TicketKind,
+        now: Instant,
+    ) -> Result<OperationLease, ApiError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
+        inner.prune(now);
+        if inner.active.is_some() {
+            return Err(ApiError::busy());
         }
-        operation.cancelled.store(true, Ordering::Release);
-        true
+        let ticket = inner
+            .tickets
+            .get(operation_id)
+            .ok_or_else(ApiError::unknown_operation)?;
+        if ticket.kind != kind {
+            return Err(ApiError::ticket_kind_mismatch());
+        }
+        inner.tickets.remove(operation_id);
+        let generation = inner.next_generation();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let progress =
+            (kind == TicketKind::EstimateDownload).then_some(OperationProgress::EstimateDownload {
+                stage: "estimating",
+            });
+        inner.active = Some(ActiveOperation {
+            operation_id: Some(operation_id.to_owned()),
+            kind: Some(kind),
+            generation,
+            cancelled: cancelled.clone(),
+            sequence: 1,
+            progress,
+        });
+        Ok(OperationLease {
+            gate: self.clone(),
+            operation_id: Some(operation_id.to_owned()),
+            generation,
+            cancelled,
+            finished: false,
+        })
+    }
+
+    fn status(&self, operation_id: &str) -> Result<OperationStatusResponse, ApiError> {
+        validate_operation_id(operation_id)?;
+        self.status_at(operation_id, Instant::now())
+    }
+
+    fn status_at(
+        &self,
+        operation_id: &str,
+        now: Instant,
+    ) -> Result<OperationStatusResponse, ApiError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
+        inner.prune(now);
+        if let Some(ticket) = inner.tickets.get(operation_id) {
+            return Ok(OperationStatusResponse {
+                schema_version: 1,
+                operation_id: operation_id.to_owned(),
+                kind: ticket.kind,
+                state: OperationStateLabel::Reserved,
+                sequence: 0,
+                progress: None,
+            });
+        }
+
+        if let Some(active) = inner
+            .active
+            .as_ref()
+            .filter(|active| active.operation_id.as_deref() == Some(operation_id))
+        {
+            let kind = active
+                .kind
+                .expect("an identified operation always has a ticket kind");
+            let state = if active.cancelled.load(Ordering::Acquire) {
+                OperationStateLabel::CancellationRequested
+            } else {
+                OperationStateLabel::Running
+            };
+            return Ok(OperationStatusResponse {
+                schema_version: 1,
+                operation_id: operation_id.to_owned(),
+                kind,
+                state,
+                sequence: active.sequence,
+                progress: active.progress.clone(),
+            });
+        }
+        let terminal = inner
+            .terminals
+            .get(operation_id)
+            .ok_or_else(ApiError::unknown_operation)?;
+        Ok(OperationStatusResponse {
+            schema_version: 1,
+            operation_id: operation_id.to_owned(),
+            kind: terminal.kind,
+            state: terminal.state,
+            sequence: terminal.sequence,
+            progress: terminal.progress.clone(),
+        })
+    }
+
+    fn cancel(&self, operation_id: &str, family: CancelFamily) -> Result<bool, ApiError> {
+        validate_operation_id(operation_id)?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
+        inner.prune(Instant::now());
+        let Some(active) = inner.active.as_mut() else {
+            return Ok(false);
+        };
+        if active.operation_id.as_deref() != Some(operation_id)
+            || !active
+                .kind
+                .is_some_and(|kind| kind.matches_cancel_family(family))
+        {
+            return Ok(false);
+        }
+        if !active.cancelled.swap(true, Ordering::AcqRel) {
+            active.sequence = active.sequence.saturating_add(1);
+        }
+        Ok(true)
+    }
+
+    fn ack(&self, operation_id: &str) -> Result<bool, ApiError> {
+        validate_operation_id(operation_id)?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
+        inner.prune(Instant::now());
+        if inner
+            .active
+            .as_ref()
+            .is_some_and(|active| active.operation_id.as_deref() == Some(operation_id))
+        {
+            return Ok(false);
+        }
+        let acknowledged = inner.tickets.remove(operation_id).is_some()
+            | inner.terminals.remove(operation_id).is_some();
+        if acknowledged {
+            inner
+                .terminal_order
+                .retain(|candidate| candidate != operation_id);
+        }
+        Ok(acknowledged)
     }
 }
 
 impl OperationLease {
-    fn finish<T>(mut self, outcome: Result<T, String>) -> Result<Result<T, String>, ApiError> {
-        let mut active = self
+    fn reporter(&self) -> Option<OperationReporter> {
+        self.operation_id
+            .as_ref()
+            .map(|operation_id| OperationReporter {
+                gate: self.gate.clone(),
+                operation_id: operation_id.clone(),
+                generation: self.generation,
+            })
+    }
+
+    fn finish<T>(self, outcome: Result<T, String>) -> Result<Result<T, String>, ApiError> {
+        self.finish_at(outcome, Instant::now())
+    }
+
+    fn finish_at<T>(
+        mut self,
+        outcome: Result<T, String>,
+        now: Instant,
+    ) -> Result<Result<T, String>, ApiError> {
+        let mut inner = self
             .gate
-            .active
+            .inner
             .lock()
             .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
-        let is_current = active
-            .as_ref()
-            .is_some_and(|operation| Arc::ptr_eq(&operation.cancelled, &self.cancelled));
+        let Some(active) = inner.active.take() else {
+            return Err(ApiError::internal(
+                "operation lease lost its active identity",
+            ));
+        };
+        let is_current = active.generation == self.generation
+            && active.operation_id == self.operation_id
+            && Arc::ptr_eq(&active.cancelled, &self.cancelled);
         if !is_current {
+            inner.active = Some(active);
             return Err(ApiError::internal(
                 "operation lease lost its active identity",
             ));
         }
-        let was_cancelled = self.cancelled.load(Ordering::Acquire);
-        *active = None;
+        let was_cancelled = active.cancelled.load(Ordering::Acquire);
+        if let (Some(operation_id), Some(kind)) = (active.operation_id, active.kind) {
+            let state = if was_cancelled {
+                OperationStateLabel::Cancelled
+            } else if outcome.is_ok() {
+                OperationStateLabel::Succeeded
+            } else {
+                OperationStateLabel::Failed
+            };
+            inner.prune(now);
+            inner.insert_terminal(
+                operation_id,
+                TerminalRecord {
+                    kind,
+                    state,
+                    sequence: active.sequence.saturating_add(1),
+                    progress: active.progress,
+                    completed_at: now,
+                },
+            );
+        }
         self.finished = true;
-        drop(active);
+        drop(inner);
         if was_cancelled {
             Ok(Err("operation cancelled".into()))
         } else {
@@ -453,15 +960,100 @@ impl Drop for OperationLease {
         if self.finished {
             return;
         }
-        if let Ok(mut active) = self.gate.active.lock() {
-            let is_current = active
-                .as_ref()
-                .is_some_and(|operation| Arc::ptr_eq(&operation.cancelled, &self.cancelled));
-            if is_current {
-                *active = None;
-            }
+        let Ok(mut inner) = self.gate.inner.lock() else {
+            return;
+        };
+        let is_current = inner.active.as_ref().is_some_and(|active| {
+            active.generation == self.generation
+                && active.operation_id == self.operation_id
+                && Arc::ptr_eq(&active.cancelled, &self.cancelled)
+        });
+        if !is_current {
+            return;
+        }
+        let active = inner.active.take().expect("checked active operation");
+        if let (Some(operation_id), Some(kind)) = (active.operation_id, active.kind) {
+            let now = Instant::now();
+            inner.prune(now);
+            inner.insert_terminal(
+                operation_id,
+                TerminalRecord {
+                    kind,
+                    state: OperationStateLabel::Failed,
+                    sequence: active.sequence.saturating_add(1),
+                    progress: active.progress,
+                    completed_at: now,
+                },
+            );
         }
     }
+}
+
+fn has_expired(now: Instant, created_at: Instant, ttl: Duration) -> bool {
+    now.checked_duration_since(created_at)
+        .is_some_and(|elapsed| elapsed >= ttl)
+}
+
+fn generate_operation_id() -> Result<String, ApiError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| ApiError::internal(format!("cannot generate operation id: {error}")))?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
+    ))
+}
+
+fn validate_operation_id(operation_id: &str) -> Result<(), ApiError> {
+    let bytes = operation_id.as_bytes();
+    let valid_shape = bytes.len() == 36
+        && bytes[8] == b'-'
+        && bytes[13] == b'-'
+        && bytes[18] == b'-'
+        && bytes[23] == b'-'
+        && bytes[14] == b'4'
+        && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f')
+            }
+        });
+    if valid_shape {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(
+            "operationId must be a canonical lowercase UUIDv4",
+        ))
+    }
+}
+
+fn parse_json<B: for<'de> Deserialize<'de>>(request: &Request) -> Result<B, ApiError> {
+    require_json_content_type(request)?;
+    serde_json::from_slice::<B>(&request.body)
+        .map_err(|error| ApiError::bad_request(format!("invalid JSON request: {error}")))
+}
+
+trait TicketedBody: for<'de> Deserialize<'de> {
+    fn operation_id(&self) -> &str;
 }
 
 #[derive(Deserialize)]
@@ -472,14 +1064,66 @@ struct PointBody {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TicketPointBody {
+    operation_id: String,
+    point: MapPoint,
+}
+
+impl TicketedBody for TicketPointBody {
+    fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeleteRegionBody {
     region_id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CalculationBody {
+struct TicketCalculationBody {
+    operation_id: String,
     request: CalculationRequest,
+}
+
+impl TicketedBody for TicketCalculationBody {
+    fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TicketRequest {
+    kind: TicketKind,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OperationIdBody {
+    operation_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TicketResponse {
+    schema_version: u32,
+    operation_id: String,
+    kind: TicketKind,
+    state: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperationStatusResponse {
+    schema_version: u32,
+    operation_id: String,
+    kind: TicketKind,
+    state: OperationStateLabel,
+    sequence: u64,
+    progress: Option<OperationProgress>,
 }
 
 #[derive(Serialize)]
@@ -493,6 +1137,12 @@ struct HealthResponse {
 #[serde(rename_all = "camelCase")]
 struct CancelResponse {
     cancelled: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AckResponse {
+    acknowledged: bool,
 }
 
 #[derive(Debug)]
@@ -768,6 +1418,20 @@ impl ApiError {
         }
     }
 
+    fn unknown_operation() -> Self {
+        Self {
+            status: 404,
+            message: "operation not found".into(),
+        }
+    }
+
+    fn ticket_kind_mismatch() -> Self {
+        Self {
+            status: 400,
+            message: "operation ticket kind does not match this endpoint".into(),
+        }
+    }
+
     fn method_not_allowed() -> Self {
         Self {
             status: 405,
@@ -779,6 +1443,20 @@ impl ApiError {
         Self {
             status: 409,
             message: "another validation operation is already running".into(),
+        }
+    }
+
+    fn too_many_tickets() -> Self {
+        Self {
+            status: 409,
+            message: "too many reserved operation tickets".into(),
+        }
+    }
+
+    fn operation_id_collision() -> Self {
+        Self {
+            status: 409,
+            message: "operation id collision".into(),
         }
     }
 
@@ -910,40 +1588,272 @@ mod tests {
         assert!(!host_matches_listen_address("127.0.0.1:1421", ipv6));
     }
 
-    #[test]
-    fn operation_gate_is_exclusive_and_cancellable_by_kind() {
-        let gate = Arc::new(OperationGate::default());
-        let lease = gate.begin(OperationKind::Calculation).unwrap();
-        let busy = match gate.begin(OperationKind::Other) {
-            Ok(_) => panic!("operation gate unexpectedly allowed concurrent work"),
-            Err(error) => error,
-        };
-        assert_eq!(busy.status, 409);
-        assert!(!gate.cancel(OperationKind::Download));
-        assert!(gate.cancel(OperationKind::Calculation));
-        assert!(lease.cancelled.load(Ordering::Acquire));
-        drop(lease);
-        assert!(gate.begin(OperationKind::Other).is_ok());
+    fn test_operation_id(value: u64) -> String {
+        format!("00000000-0000-4000-8000-{value:012x}")
     }
 
     #[test]
-    fn operation_completion_and_cancellation_are_linearized() {
+    fn generated_operation_ids_are_lowercase_uuid_v4() {
+        for _ in 0..32 {
+            let operation_id = generate_operation_id().unwrap();
+            assert_eq!(operation_id.len(), 36);
+            assert_eq!(&operation_id[8..9], "-");
+            assert_eq!(&operation_id[13..14], "-");
+            assert_eq!(&operation_id[18..19], "-");
+            assert_eq!(&operation_id[23..24], "-");
+            assert_eq!(&operation_id[14..15], "4");
+            assert!("89ab".contains(&operation_id[19..20]));
+            assert!(
+                operation_id
+                    .chars()
+                    .all(|character| character == '-' || character.is_ascii_hexdigit())
+            );
+            assert_eq!(operation_id, operation_id.to_ascii_lowercase());
+        }
+    }
+
+    #[test]
+    fn inbound_operation_ids_require_canonical_lowercase_uuid_v4() {
+        assert!(validate_operation_id("00000000-0000-4000-8000-000000000001").is_ok());
+        for invalid in [
+            "",
+            "00000000-0000-4000-8000-00000000001",
+            "00000000-0000-4000-8000-000000000001x",
+            "000000000000-4000-8000-000000000001",
+            "00000000-0000-5000-8000-000000000001",
+            "00000000-0000-4000-7000-000000000001",
+            "00000000-0000-4000-C000-000000000001",
+            "00000000-0000-4000-8000-00000000000g",
+        ] {
+            let error = validate_operation_id(invalid).unwrap_err();
+            assert_eq!(error.status, 400, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn tickets_are_single_use_kind_bound_and_not_consumed_while_busy() {
         let gate = Arc::new(OperationGate::default());
-        let cancelled_lease = gate.begin(OperationKind::Calculation).unwrap();
-        assert!(gate.cancel(OperationKind::Calculation));
-        let cancelled_outcome = match cancelled_lease.finish(Ok(42)) {
-            Ok(outcome) => outcome,
-            Err(_) => panic!("operation lease unexpectedly lost its identity"),
-        };
+        let calculation_id = test_operation_id(1);
+        let download_id = test_operation_id(2);
+        gate.reserve_with_id_at(
+            TicketKind::Calculation,
+            calculation_id.clone(),
+            Instant::now(),
+        )
+        .unwrap();
+        let collision = gate
+            .reserve_with_id_at(TicketKind::Download, calculation_id.clone(), Instant::now())
+            .unwrap_err();
+        assert_eq!(collision.status, 409);
+        gate.reserve_with_id_at(TicketKind::Download, download_id.clone(), Instant::now())
+            .unwrap();
+
+        let reserved = gate.status(&calculation_id).unwrap();
+        assert_eq!(reserved.state, OperationStateLabel::Reserved);
+        assert_eq!(reserved.sequence, 0);
+        assert_eq!(reserved.progress, None);
+        let wrong_kind = gate
+            .begin_ticketed(&calculation_id, TicketKind::Download)
+            .unwrap_err();
+        assert_eq!(wrong_kind.status, 400);
+        let calculation = gate
+            .begin_ticketed(&calculation_id, TicketKind::Calculation)
+            .unwrap();
+        let busy = gate
+            .begin_ticketed(&download_id, TicketKind::Download)
+            .unwrap_err();
+        assert_eq!(busy.status, 409);
+        assert_eq!(calculation.finish(Ok(())).unwrap(), Ok(()));
+        assert_eq!(
+            gate.begin_ticketed(&calculation_id, TicketKind::Calculation)
+                .unwrap_err()
+                .status,
+            404
+        );
+        let download = gate
+            .begin_ticketed(&download_id, TicketKind::Download)
+            .unwrap();
+        assert_eq!(download.finish(Ok(())).unwrap(), Ok(()));
+    }
+
+    #[test]
+    fn cancellation_is_exact_id_family_scoped_and_linearized_with_finish() {
+        let gate = Arc::new(OperationGate::default());
+        let first_id = test_operation_id(10);
+        gate.reserve_with_id_at(TicketKind::Calculation, first_id.clone(), Instant::now())
+            .unwrap();
+        let cancelled_lease = gate
+            .begin_ticketed(&first_id, TicketKind::Calculation)
+            .unwrap();
+        assert!(!gate.cancel(&first_id, CancelFamily::Download).unwrap());
+        assert!(
+            !gate
+                .cancel(&test_operation_id(999), CancelFamily::Calculation)
+                .unwrap()
+        );
+        assert!(gate.cancel(&first_id, CancelFamily::Calculation).unwrap());
+        assert!(gate.cancel(&first_id, CancelFamily::Calculation).unwrap());
+        let cancelling = gate.status(&first_id).unwrap();
+        assert_eq!(cancelling.state, OperationStateLabel::CancellationRequested);
+        assert_eq!(cancelling.sequence, 2);
+        let cancelled_outcome = cancelled_lease.finish(Ok(42)).unwrap();
         assert_eq!(cancelled_outcome.unwrap_err(), "operation cancelled");
-        assert!(!gate.cancel(OperationKind::Calculation));
-        let completed_lease = gate.begin(OperationKind::Calculation).unwrap();
-        let completed_outcome = match completed_lease.finish(Ok(42)) {
-            Ok(outcome) => outcome,
-            Err(_) => panic!("operation lease unexpectedly lost its identity"),
-        };
-        assert_eq!(completed_outcome.unwrap(), 42);
-        assert!(!gate.cancel(OperationKind::Calculation));
+        assert_eq!(
+            gate.status(&first_id).unwrap().state,
+            OperationStateLabel::Cancelled
+        );
+
+        let second_id = test_operation_id(11);
+        gate.reserve_with_id_at(TicketKind::Calculation, second_id.clone(), Instant::now())
+            .unwrap();
+        let completed_lease = gate
+            .begin_ticketed(&second_id, TicketKind::Calculation)
+            .unwrap();
+        assert!(!gate.cancel(&first_id, CancelFamily::Calculation).unwrap());
+        assert!(!completed_lease.cancelled.load(Ordering::Acquire));
+        assert_eq!(completed_lease.finish(Ok(42)).unwrap(), Ok(42));
+        assert!(!gate.cancel(&second_id, CancelFamily::Calculation).unwrap());
+        assert_eq!(
+            gate.status(&second_id).unwrap().state,
+            OperationStateLabel::Succeeded
+        );
+    }
+
+    #[test]
+    fn progress_is_whitelisted_sequenced_terminal_and_acknowledgeable() {
+        let gate = Arc::new(OperationGate::default());
+        let operation_id = test_operation_id(20);
+        gate.reserve_with_id_at(TicketKind::Download, operation_id.clone(), Instant::now())
+            .unwrap();
+        let lease = gate
+            .begin_ticketed(&operation_id, TicketKind::Download)
+            .unwrap();
+        let reporter = lease.reporter().unwrap();
+        reporter.report_download(DownloadProgressView {
+            asset_index: 2,
+            asset_count: 5,
+            asset_key: "must-not-leak".into(),
+            asset_downloaded_bytes: 10,
+            asset_expected_bytes: 20,
+            total_downloaded_bytes: 30,
+            total_expected_bytes: 100,
+            percent: 30.0,
+        });
+        let running = gate.status(&operation_id).unwrap();
+        assert_eq!(running.state, OperationStateLabel::Running);
+        assert_eq!(running.sequence, 2);
+        let running_json = serde_json::to_value(&running).unwrap();
+        assert_eq!(running_json["progress"]["type"], "download");
+        assert!(running_json.to_string().find("assetKey").is_none());
+        assert!(running_json.to_string().find("must-not-leak").is_none());
+
+        assert_eq!(
+            lease.finish::<()>(Err("private detail".into())).unwrap(),
+            Err("private detail".into())
+        );
+        let terminal = gate.status(&operation_id).unwrap();
+        assert_eq!(terminal.state, OperationStateLabel::Failed);
+        assert_eq!(terminal.sequence, 3);
+        let terminal_json = serde_json::to_string(&terminal).unwrap();
+        assert!(!terminal_json.contains("private detail"));
+        assert!(gate.ack(&operation_id).unwrap());
+        assert!(!gate.ack(&operation_id).unwrap());
+        assert_eq!(gate.status(&operation_id).unwrap_err().status, 404);
+    }
+
+    #[test]
+    fn stale_reporter_cannot_mutate_the_next_operation() {
+        let gate = Arc::new(OperationGate::default());
+        let first_id = test_operation_id(21);
+        gate.reserve_with_id_at(TicketKind::Download, first_id.clone(), Instant::now())
+            .unwrap();
+        let first_lease = gate
+            .begin_ticketed(&first_id, TicketKind::Download)
+            .unwrap();
+        let stale_reporter = first_lease.reporter().unwrap();
+        first_lease.finish(Ok(())).unwrap().unwrap();
+
+        let second_id = test_operation_id(22);
+        gate.reserve_with_id_at(TicketKind::Calculation, second_id.clone(), Instant::now())
+            .unwrap();
+        let second_lease = gate
+            .begin_ticketed(&second_id, TicketKind::Calculation)
+            .unwrap();
+        let before = gate.status(&second_id).unwrap();
+        assert_eq!(before.sequence, 1);
+        assert_eq!(before.progress, None);
+
+        assert!(!stale_reporter.report(OperationProgress::EstimateDownload {
+            stage: "estimating",
+        }));
+        let after = gate.status(&second_id).unwrap();
+        assert_eq!(after.sequence, before.sequence);
+        assert_eq!(after.progress, before.progress);
+        assert!(!second_lease.cancelled.load(Ordering::Acquire));
+        second_lease.finish(Ok(())).unwrap().unwrap();
+    }
+
+    #[test]
+    fn ticket_and_terminal_ttl_limits_and_drop_failure_are_enforced() {
+        let gate = Arc::new(OperationGate::default());
+        let now = Instant::now();
+        let expired_ticket = test_operation_id(30);
+        gate.reserve_with_id_at(TicketKind::Download, expired_ticket.clone(), now)
+            .unwrap();
+        assert_eq!(
+            gate.begin_ticketed_at(&expired_ticket, TicketKind::Download, now + TICKET_TTL)
+                .unwrap_err()
+                .status,
+            404
+        );
+
+        for value in 100..100 + MAX_TICKETS as u64 {
+            gate.reserve_with_id_at(TicketKind::Download, test_operation_id(value), now)
+                .unwrap();
+        }
+        assert_eq!(
+            gate.reserve_with_id_at(TicketKind::Download, test_operation_id(999), now)
+                .unwrap_err()
+                .status,
+            409
+        );
+        for value in 100..100 + MAX_TICKETS as u64 {
+            assert!(gate.ack(&test_operation_id(value)).unwrap());
+        }
+
+        for value in 200..=200 + MAX_TERMINALS as u64 {
+            let operation_id = test_operation_id(value);
+            gate.reserve_with_id_at(TicketKind::Calculation, operation_id.clone(), now)
+                .unwrap();
+            let lease = gate
+                .begin_ticketed_at(&operation_id, TicketKind::Calculation, now)
+                .unwrap();
+            lease.finish_at(Ok(()), now).unwrap().unwrap();
+        }
+        assert_eq!(
+            gate.status(&test_operation_id(200)).unwrap_err().status,
+            404
+        );
+        let newest = test_operation_id(200 + MAX_TERMINALS as u64);
+        assert_eq!(
+            gate.status_at(&newest, now + TERMINAL_TTL)
+                .unwrap_err()
+                .status,
+            404
+        );
+
+        let dropped_id = test_operation_id(500);
+        gate.reserve_with_id_at(TicketKind::Download, dropped_id.clone(), Instant::now())
+            .unwrap();
+        let dropped = gate
+            .begin_ticketed(&dropped_id, TicketKind::Download)
+            .unwrap();
+        drop(dropped);
+        assert_eq!(
+            gate.status(&dropped_id).unwrap().state,
+            OperationStateLabel::Failed
+        );
+        assert!(gate.begin_other().is_ok());
     }
 
     static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1121,7 +2031,7 @@ mod tests {
             "POST",
             "/api/cancel-calculation",
             Some("application/json"),
-            b"",
+            br#"{"operationId":"00000000-0000-4000-8000-000000000001"}"#,
         );
         assert_eq!(cancel.status, 200);
         assert_eq!(response_json(&cancel)["cancelled"], false);
@@ -1149,6 +2059,287 @@ mod tests {
                     "/api/cancel-download",
                     Some("application/json"),
                     b"not-empty",
+                )
+                .status,
+            400
+        );
+    }
+
+    #[test]
+    fn operation_http_contract_is_strict_identity_bound_and_acknowledgeable() {
+        fn issue_ticket(fixture: &ServerFixture, kind: &str) -> String {
+            let body = format!(r#"{{"kind":"{kind}"}}"#);
+            let response = fixture.request(
+                "POST",
+                "/api/operation-ticket",
+                Some("application/json"),
+                body.as_bytes(),
+            );
+            assert_eq!(response.status, 200);
+            let payload = response_json(&response);
+            assert_eq!(payload["schemaVersion"], 1);
+            assert_eq!(payload["kind"], kind);
+            assert_eq!(payload["state"], "reserved");
+            let operation_id = payload["operationId"].as_str().unwrap().to_owned();
+            validate_operation_id(&operation_id).unwrap();
+            operation_id
+        }
+
+        fn id_body(operation_id: &str) -> Vec<u8> {
+            format!(r#"{{"operationId":"{operation_id}"}}"#).into_bytes()
+        }
+
+        let fixture = ServerFixture::new();
+        let reserved_id = issue_ticket(&fixture, "download");
+        let reserved_status = fixture.request(
+            "POST",
+            "/api/operation-status",
+            Some("application/json"),
+            &id_body(&reserved_id),
+        );
+        assert_eq!(reserved_status.status, 200);
+        let reserved_json = response_json(&reserved_status);
+        assert_eq!(reserved_json["operationId"], reserved_id);
+        assert_eq!(reserved_json["kind"], "download");
+        assert_eq!(reserved_json["state"], "reserved");
+        assert_eq!(reserved_json["sequence"], 0);
+        assert!(reserved_json["progress"].is_null());
+
+        let query_status = fixture.request(
+            "POST",
+            "/api/operation-status?operationId=attacker-controlled",
+            Some("application/json"),
+            &id_body(&reserved_id),
+        );
+        assert_eq!(query_status.status, 400);
+        let query_ack = fixture.request(
+            "POST",
+            "/api/operation-ack?operationId=attacker-controlled",
+            Some("application/json"),
+            &id_body(&reserved_id),
+        );
+        assert_eq!(query_ack.status, 400);
+        assert_eq!(
+            fixture.request("GET", "/healthz?probe=1", None, b"").status,
+            400
+        );
+        let still_reserved = fixture.request(
+            "POST",
+            "/api/operation-status",
+            Some("application/json"),
+            &id_body(&reserved_id),
+        );
+        assert_eq!(still_reserved.status, 200);
+        assert_eq!(response_json(&still_reserved)["state"], "reserved");
+
+        let ack = fixture.request(
+            "POST",
+            "/api/operation-ack",
+            Some("application/json"),
+            &id_body(&reserved_id),
+        );
+        assert_eq!(ack.status, 200);
+        assert_eq!(response_json(&ack)["acknowledged"], true);
+        let second_ack = fixture.request(
+            "POST",
+            "/api/operation-ack",
+            Some("application/json"),
+            &id_body(&reserved_id),
+        );
+        assert_eq!(response_json(&second_ack)["acknowledged"], false);
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/operation-status",
+                    Some("application/json"),
+                    &id_body(&reserved_id),
+                )
+                .status,
+            404
+        );
+
+        let wrong_kind_id = issue_ticket(&fixture, "calculation");
+        let wrong_kind_body =
+            format!(r#"{{"operationId":"{wrong_kind_id}","point":{{"lat":30.5,"lon":103.5}}}}"#);
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/estimate-download",
+                    Some("application/json"),
+                    wrong_kind_body.as_bytes(),
+                )
+                .status,
+            400
+        );
+        let preserved = fixture.request(
+            "POST",
+            "/api/operation-status",
+            Some("application/json"),
+            &id_body(&wrong_kind_id),
+        );
+        assert_eq!(response_json(&preserved)["state"], "reserved");
+
+        let consumed_id = issue_ticket(&fixture, "estimate-download");
+        let invalid_point_body =
+            format!(r#"{{"operationId":"{consumed_id}","point":{{"lat":999.0,"lon":103.5}}}}"#);
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/estimate-download",
+                    Some("application/json"),
+                    invalid_point_body.as_bytes(),
+                )
+                .status,
+            422
+        );
+        let failed = fixture.request(
+            "POST",
+            "/api/operation-status",
+            Some("application/json"),
+            &id_body(&consumed_id),
+        );
+        assert_eq!(response_json(&failed)["state"], "failed");
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/estimate-download",
+                    Some("application/json"),
+                    invalid_point_body.as_bytes(),
+                )
+                .status,
+            404
+        );
+
+        let active_id = test_operation_id(700);
+        fixture
+            .server
+            .state
+            .operations
+            .reserve_with_id_at(
+                TicketKind::EstimateDownload,
+                active_id.clone(),
+                Instant::now(),
+            )
+            .unwrap();
+        let lease = fixture
+            .server
+            .state
+            .operations
+            .begin_ticketed(&active_id, TicketKind::EstimateDownload)
+            .unwrap();
+        let cancel = fixture.request(
+            "POST",
+            "/api/cancel-download",
+            Some("application/json"),
+            &id_body(&active_id),
+        );
+        assert_eq!(response_json(&cancel)["cancelled"], true);
+        let repeated_cancel = fixture.request(
+            "POST",
+            "/api/cancel-download",
+            Some("application/json"),
+            &id_body(&active_id),
+        );
+        assert_eq!(response_json(&repeated_cancel)["cancelled"], true);
+        let wrong_cancel = fixture.request(
+            "POST",
+            "/api/cancel-calculation",
+            Some("application/json"),
+            &id_body(&active_id),
+        );
+        assert_eq!(response_json(&wrong_cancel)["cancelled"], false);
+        let active_ack = fixture.request(
+            "POST",
+            "/api/operation-ack",
+            Some("application/json"),
+            &id_body(&active_id),
+        );
+        assert_eq!(response_json(&active_ack)["acknowledged"], false);
+        let cancelling = fixture.request(
+            "POST",
+            "/api/operation-status",
+            Some("application/json"),
+            &id_body(&active_id),
+        );
+        assert_eq!(
+            response_json(&cancelling)["state"],
+            "cancellation-requested"
+        );
+        assert_eq!(
+            lease.finish(Ok(())).unwrap(),
+            Err("operation cancelled".into())
+        );
+
+        for endpoint in [
+            "/api/operation-ticket",
+            "/api/operation-status",
+            "/api/cancel-download",
+            "/api/operation-ack",
+        ] {
+            assert_eq!(
+                fixture
+                    .request("POST", endpoint, Some("text/plain"), b"{}")
+                    .status,
+                415,
+                "{endpoint}"
+            );
+        }
+        for (endpoint, body) in [
+            (
+                "/api/operation-ticket",
+                br#"{"kind":"download","extra":true}"#.as_slice(),
+            ),
+            (
+                "/api/operation-status",
+                br#"{"operationId":"00000000-0000-4000-8000-000000000001","extra":true}"#
+                    .as_slice(),
+            ),
+            (
+                "/api/cancel-download",
+                br#"{"operationId":"00000000-0000-4000-8000-000000000001","extra":true}"#
+                    .as_slice(),
+            ),
+            (
+                "/api/operation-ack",
+                br#"{"operationId":"00000000-0000-4000-8000-000000000001","extra":true}"#
+                    .as_slice(),
+            ),
+        ] {
+            assert_eq!(
+                fixture
+                    .request("POST", endpoint, Some("application/json"), body)
+                    .status,
+                400,
+                "{endpoint}"
+            );
+        }
+
+        let invalid_id_body = br#"{"operationId":"00000000-0000-5000-8000-000000000001"}"#;
+        for endpoint in [
+            "/api/operation-status",
+            "/api/cancel-calculation",
+            "/api/cancel-download",
+            "/api/operation-ack",
+        ] {
+            assert_eq!(
+                fixture
+                    .request("POST", endpoint, Some("application/json"), invalid_id_body,)
+                    .status,
+                400,
+                "{endpoint}"
+            );
+        }
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/estimate-download",
+                    Some("application/json"),
+                    br#"{"operationId":"BAD","point":{"lat":30.5,"lon":103.5}}"#,
                 )
                 .status,
             400

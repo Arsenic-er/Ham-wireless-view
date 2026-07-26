@@ -4,10 +4,17 @@ import {
   backendCapabilities,
   backendMode,
   bootstrap,
+  calculate,
   cancelCalculation,
+  cancelDownload,
+  downloadRegion,
+  estimateDownload,
   exportReport,
   inspectPoint,
+  listenCalculationProgress,
+  listenDownloadProgress,
 } from "./backend";
+import type { CalculationRequest, CalculationResult, DownloadResult } from "./types";
 
 function removeTauriInternals(): void {
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
@@ -17,6 +24,7 @@ afterEach(() => {
   removeTauriInternals();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("backend mode", () => {
@@ -110,8 +118,7 @@ describe("validation server adapter", () => {
           }),
           { headers: { "content-type": "application/json" } },
         ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await bootstrap();
@@ -131,15 +138,7 @@ describe("validation server adapter", () => {
         body: JSON.stringify({ point: { lat: 30.5, lon: 103.5 } }),
       }),
     );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "/api/cancel-calculation",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ "Content-Type": "application/json" }),
-        body: undefined,
-      }),
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces JSON API errors and refuses server-side export", async () => {
@@ -159,5 +158,1038 @@ describe("validation server adapter", () => {
     await expect(
       exportReport({ format: "png", suggestedFileName: "x.png", reportPngDataUrl: "data:" }),
     ).rejects.toThrow("Tauri Windows");
+  });
+});
+
+const OPERATION_ID_1 = "11111111-1111-4111-8111-111111111111";
+const OPERATION_ID_2 = "22222222-2222-4222-8222-222222222222";
+
+const CALCULATION_REQUEST: CalculationRequest = {
+  center: { lat: 30.5, lon: 103.5 },
+  band: "vhf-144",
+  frequencyMhz: 145.5,
+  powerValue: 5,
+  powerUnit: "watt",
+  txGainValue: 2,
+  txGainUnit: "dbi",
+  txHeightM: 10,
+  rxGainValue: 2,
+  rxGainUnit: "dbi",
+  rxHeightM: 1.5,
+  polarization: "vertical",
+};
+
+const CALCULATION_RESULT: CalculationResult = {
+  schemaVersion: 2,
+  modelName: "model",
+  modelVersion: "version",
+  center: CALCULATION_REQUEST.center,
+  imageWidth: 1,
+  imageHeight: 1,
+  imageCorners: [
+    [103, 31],
+    [104, 31],
+    [104, 30],
+    [103, 30],
+  ],
+  heatmapPngDataUrl: "data:image/png;base64,AA==",
+  mapOverlayProjection: "EPSG:3857",
+  mapOverlayWidth: 1,
+  mapOverlayHeight: 1,
+  mapOverlayCorners: [
+    [103, 31],
+    [104, 31],
+    [104, 30],
+    [103, 30],
+  ],
+  mapOverlayPngDataUrl: "data:image/png;base64,AA==",
+  statistics: {
+    validPixelCount: 1,
+    belowThresholdPixelCount: 0,
+    warningPixelCount: 0,
+    minimumDbm: -80,
+    maximumDbm: -80,
+    meanDbm: -80,
+    waterAffectedPixelCount: 0,
+    meanPathWaterFraction: 0,
+    propagationSeconds: 1,
+    totalSeconds: 1,
+  },
+};
+
+const DOWNLOAD_RESULT: DownloadResult = {
+  inspection: {
+    point: { lat: 30.5, lon: 103.5 },
+    regionId: "region",
+    tileCount: 1,
+    readyDemCount: 1,
+    readyWaterCount: 1,
+    missingAssetCount: 0,
+    dataReady: true,
+    elevationM: 500,
+    cacheUsage: {
+      totalBytes: 2,
+      demBytes: 1,
+      waterBytes: 1,
+      partialBytes: 0,
+      metadataBytes: 0,
+      remainingBytes: 2_499_999_998,
+      capBytes: 2_500_000_000,
+    },
+  },
+  preparedAssetCount: 2,
+  downloadedBytes: 2,
+};
+
+function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+}
+
+function callBody(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, path: string): unknown {
+  const call = fetchMock.mock.calls.find(([input]) => String(input) === path);
+  if (!call || typeof call[1]?.body !== "string") return null;
+  return JSON.parse(call[1].body) as unknown;
+}
+
+describe("validation operation protocol", () => {
+  it("uses ticket, primary request, polling progress, final status, and ack", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    let statusCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        return Promise.resolve(
+          jsonResponse(
+            statusCalls === 1
+              ? {
+                  schemaVersion: 1,
+                  operationId: OPERATION_ID_1,
+                  kind: "calculation",
+                  state: "running",
+                  sequence: 1,
+                  progress: {
+                    type: "calculation",
+                    phase: "computing",
+                    percent: 40,
+                    completedPixelCount: 40,
+                    totalPixelCount: 100,
+                  },
+                }
+              : {
+                  schemaVersion: 1,
+                  operationId: OPERATION_ID_1,
+                  kind: "calculation",
+                  state: "succeeded",
+                  sequence: 2,
+                  progress: {
+                    type: "calculation",
+                    phase: "complete",
+                    percent: 100,
+                    completedPixelCount: 100,
+                    totalPixelCount: 100,
+                  },
+                },
+          ),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const progressHandler = vi.fn();
+    const unlisten = await listenCalculationProgress(progressHandler);
+
+    const resultPromise = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    expect(callBody(fetchMock, "/api/operation-ticket")).toEqual({
+      kind: "calculation",
+    });
+    expect(callBody(fetchMock, "/api/calculate")).toEqual({
+      operationId: OPERATION_ID_1,
+      request: CALCULATION_REQUEST,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(progressHandler).toHaveBeenCalledWith({
+      phase: "computing",
+      percent: 40,
+      completedPixelCount: 40,
+      totalPixelCount: 100,
+    });
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await expect(resultPromise).resolves.toEqual(CALCULATION_RESULT);
+    expect(statusCalls).toBe(2);
+    expect(callBody(fetchMock, "/api/operation-ack")).toEqual({
+      operationId: OPERATION_ID_1,
+    });
+    expect(progressHandler).toHaveBeenLastCalledWith(
+      expect.objectContaining({ phase: "complete", percent: 100 }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    unlisten();
+  });
+
+  it("accepts reserved snapshots and ignores repeated, wrong-id, and out-of-order progress", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    const snapshots = [
+      {
+        schemaVersion: 1,
+        operationId: OPERATION_ID_1,
+        kind: "calculation",
+        state: "reserved",
+        sequence: 0,
+        progress: null,
+      },
+      {
+        schemaVersion: 1,
+        operationId: OPERATION_ID_1,
+        kind: "calculation",
+        state: "running",
+        sequence: 0,
+        progress: {
+          type: "calculation",
+          phase: "computing",
+          percent: 99,
+          completedPixelCount: 99,
+          totalPixelCount: 100,
+        },
+      },
+      {
+        schemaVersion: 1,
+        operationId: OPERATION_ID_1,
+        kind: "calculation",
+        state: "running",
+        sequence: 2,
+        progress: {
+          type: "calculation",
+          phase: "computing",
+          percent: 20,
+          completedPixelCount: 20,
+          totalPixelCount: 100,
+        },
+      },
+      {
+        schemaVersion: 1,
+        operationId: OPERATION_ID_2,
+        kind: "calculation",
+        state: "running",
+        sequence: 3,
+        progress: {
+          type: "calculation",
+          phase: "computing",
+          percent: 90,
+          completedPixelCount: 90,
+          totalPixelCount: 100,
+        },
+      },
+      {
+        schemaVersion: 1,
+        operationId: OPERATION_ID_1,
+        kind: "calculation",
+        state: "running",
+        sequence: 1,
+        progress: {
+          type: "calculation",
+          phase: "computing",
+          percent: 10,
+          completedPixelCount: 10,
+          totalPixelCount: 100,
+        },
+      },
+    ];
+    let statusIndex = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/operation-status") {
+        const snapshot =
+          snapshots[statusIndex++] ?? {
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "succeeded",
+            sequence: 3,
+            progress: null,
+          };
+        return Promise.resolve(jsonResponse(snapshot));
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const progressHandler = vi.fn();
+    const unlisten = await listenCalculationProgress(progressHandler);
+
+    const resultPromise = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    for (let index = 0; index < snapshots.length; index += 1) {
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    expect(progressHandler).toHaveBeenCalledTimes(1);
+    expect(progressHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ percent: 20 }),
+    );
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await resultPromise;
+    expect(vi.getTimerCount()).toBe(0);
+    unlisten();
+  });
+
+  it("never overlaps polling requests", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    const firstStatus = deferred<Response>();
+    let statusCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        if (statusCalls === 1) return firstStatus.promise;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "succeeded",
+            sequence: 2,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const resultPromise = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(statusCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(statusCalls).toBe(1);
+
+    firstStatus.resolve(
+      jsonResponse({
+        schemaVersion: 1,
+        operationId: OPERATION_ID_1,
+        kind: "calculation",
+        state: "running",
+        sequence: 1,
+        progress: null,
+      }),
+    );
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(statusCalls).toBe(1);
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await resultPromise;
+    expect(statusCalls).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops polling after primary failure while preserving the primary error", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    let statusCalls = 0;
+    let ackCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") {
+        return Promise.resolve(jsonResponse({ message: "primary boom" }, 500));
+      }
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "failed",
+            sequence: 1,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        ackCalls += 1;
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calculate(CALCULATION_REQUEST)).rejects.toThrow("primary boom");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(statusCalls).toBe(1);
+    expect(ackCalls).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("maps download progress without exposing an asset key", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    let statusCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "download",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/download-region") return primary.promise;
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "download",
+            state: statusCalls === 1 ? "running" : "succeeded",
+            sequence: statusCalls,
+            progress:
+              statusCalls === 1
+                ? {
+                    type: "download",
+                    assetIndex: 1,
+                    assetCount: 2,
+                    assetDownloadedBytes: 10,
+                    assetExpectedBytes: 20,
+                    totalDownloadedBytes: 10,
+                    totalExpectedBytes: 40,
+                    percent: 25,
+                  }
+                : null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const progressHandler = vi.fn();
+    const unlisten = await listenDownloadProgress(progressHandler);
+
+    const resultPromise = downloadRegion({ lat: 30.5, lon: 103.5 });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(progressHandler).toHaveBeenCalledWith({
+      assetIndex: 1,
+      assetCount: 2,
+      assetKey: "",
+      assetDownloadedBytes: 10,
+      assetExpectedBytes: 20,
+      totalDownloadedBytes: 10,
+      totalExpectedBytes: 40,
+      percent: 25,
+    });
+
+    primary.resolve(jsonResponse(DOWNLOAD_RESULT));
+    await expect(resultPromise).resolves.toEqual(DOWNLOAD_RESULT);
+    expect(callBody(fetchMock, "/api/download-region")).toEqual({
+      operationId: OPERATION_ID_1,
+      point: { lat: 30.5, lon: 103.5 },
+    });
+    unlisten();
+  });
+
+  it("uses a separate estimate ticket and does not let ack failure replace the result", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    const estimate = { point: { lat: 30.5, lon: 103.5 }, regionId: "region" };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "estimate-download",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/estimate-download") return Promise.resolve(jsonResponse(estimate));
+      if (path === "/api/operation-status") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "estimate-download",
+            state: "succeeded",
+            sequence: 1,
+            progress: { type: "estimate-download", stage: "estimating" },
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ message: "ack lost" }, 503));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(estimateDownload({ lat: 30.5, lon: 103.5 })).resolves.toEqual(estimate);
+    expect(callBody(fetchMock, "/api/operation-ticket")).toEqual({
+      kind: "estimate-download",
+    });
+    expect(callBody(fetchMock, "/api/estimate-download")).toEqual({
+      operationId: OPERATION_ID_1,
+      point: { lat: 30.5, lon: 103.5 },
+    });
+  });
+
+  it("keeps a delayed old cancellation bound to the captured operation id", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary1 = deferred<Response>();
+    const primary2 = deferred<Response>();
+    const delayedCancel = deferred<Response>();
+    let ticketCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        ticketCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: ticketCalls === 1 ? OPERATION_ID_1 : OPERATION_ID_2,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") {
+        const body = JSON.parse(String(init?.body)) as { operationId: string };
+        return body.operationId === OPERATION_ID_1 ? primary1.promise : primary2.promise;
+      }
+      if (path === "/api/cancel-calculation") return delayedCancel.promise;
+      if (path === "/api/operation-status") {
+        const body = JSON.parse(String(init?.body)) as { operationId: string };
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: body.operationId,
+            kind: "calculation",
+            state: "succeeded",
+            sequence: 1,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    const cancellation = cancelCalculation();
+    await flushMicrotasks();
+
+    primary1.resolve(jsonResponse(CALCULATION_RESULT));
+    await first;
+    const second = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+
+    const cancelCall = fetchMock.mock.calls.find(
+      ([input]) => String(input) === "/api/cancel-calculation",
+    );
+    expect(JSON.parse(String(cancelCall?.[1]?.body))).toEqual({
+      operationId: OPERATION_ID_1,
+    });
+    expect(callBody(fetchMock, "/api/calculate")).toEqual({
+      operationId: OPERATION_ID_1,
+      request: CALCULATION_REQUEST,
+    });
+
+    delayedCancel.resolve(jsonResponse({ cancelled: false }));
+    await cancellation;
+    primary2.resolve(jsonResponse(CALCULATION_RESULT));
+    await second;
+    const calculationBodies = fetchMock.mock.calls
+      .filter(([input]) => String(input) === "/api/calculate")
+      .map(([, init]) => JSON.parse(String(init?.body)) as { operationId: string });
+    expect(calculationBodies.map(({ operationId }) => operationId)).toEqual([
+      OPERATION_ID_1,
+      OPERATION_ID_2,
+    ]);
+  });
+
+  it("rejects non-canonical uppercase UUID tickets and clears the active handle", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: 1,
+        operationId: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+        kind: "calculation",
+        state: "reserved",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calculate(CALCULATION_REQUEST)).rejects.toThrow("invalid operation ticket");
+    await cancelCalculation();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not issue HTTP requests in Tauri mode", async () => {
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    const invokeMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: { invoke: invokeMock },
+    });
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cancelCalculation();
+    await cancelDownload();
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "cancel_calculation", {}, undefined);
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "cancel_download", {}, undefined);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("treats cancellation without an active validation operation as a no-op", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cancelCalculation();
+    await cancelDownload();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("validation operation recovery edges", () => {
+  it("continues polling after a transient status failure", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    let statusCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return Promise.resolve(jsonResponse({ message: "temporary" }, 503));
+        }
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: statusCalls === 2 ? "running" : "succeeded",
+            sequence: statusCalls,
+            progress:
+              statusCalls === 2
+                ? {
+                    type: "calculation",
+                    phase: "computing",
+                    percent: 50,
+                    completedPixelCount: 50,
+                    totalPixelCount: 100,
+                  }
+                : null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const progressHandler = vi.fn();
+    const unlisten = await listenCalculationProgress(progressHandler);
+
+    const resultPromise = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(progressHandler).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(progressHandler).toHaveBeenCalledWith(expect.objectContaining({ percent: 50 }));
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await expect(resultPromise).resolves.toEqual(CALCULATION_RESULT);
+    expect(statusCalls).toBe(3);
+    unlisten();
+  });
+
+  it("waits for the captured ticket before sending cancellation", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const ticketResponse = deferred<Response>();
+    const primary = deferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") return ticketResponse.promise;
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/cancel-calculation") {
+        return Promise.resolve(jsonResponse({ cancelled: true }));
+      }
+      if (path === "/api/operation-status") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "cancelled",
+            sequence: 1,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path} ${String(init?.body)}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const calculation = calculate(CALCULATION_REQUEST);
+    const cancellation = cancelCalculation();
+    await flushMicrotasks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    ticketResponse.resolve(
+      jsonResponse({
+        schemaVersion: 1,
+        operationId: OPERATION_ID_1,
+        kind: "calculation",
+        state: "reserved",
+      }),
+    );
+    await flushMicrotasks();
+    expect(callBody(fetchMock, "/api/calculate")).toEqual({
+      operationId: OPERATION_ID_1,
+      request: CALCULATION_REQUEST,
+    });
+    expect(callBody(fetchMock, "/api/cancel-calculation")).toEqual({
+      operationId: OPERATION_ID_1,
+    });
+    await cancellation;
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await calculation;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+function abortableNever(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    const rejectAbort = () => reject(new DOMException("Aborted", "AbortError"));
+    if (signal?.aborted) {
+      rejectAbort();
+    } else {
+      signal?.addEventListener("abort", rejectAbort, { once: true });
+    }
+  });
+}
+
+describe("validation operation bounded cleanup", () => {
+  it("bounds final status and ack while allowing the next generation to start", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    let ticketCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        ticketCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: ticketCalls === 1 ? OPERATION_ID_1 : OPERATION_ID_2,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") {
+        return Promise.resolve(jsonResponse(CALCULATION_RESULT));
+      }
+      if (path === "/api/operation-status") {
+        const body = JSON.parse(String(init?.body)) as { operationId: string };
+        if (body.operationId === OPERATION_ID_1) return abortableNever(init?.signal);
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_2,
+            kind: "calculation",
+            state: "succeeded",
+            sequence: 1,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        const body = JSON.parse(String(init?.body)) as { operationId: string };
+        if (body.operationId === OPERATION_ID_1) return abortableNever(init?.signal);
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let firstSettled = false;
+    const first = calculate(CALCULATION_REQUEST).then((result) => {
+      firstSettled = true;
+      return result;
+    });
+    await flushMicrotasks();
+    expect(firstSettled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(firstSettled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+    expect(firstSettled).toBe(false);
+    expect(callBody(fetchMock, "/api/operation-ack")).toEqual({
+      operationId: OPERATION_ID_1,
+    });
+
+    const second = calculate(CALCULATION_REQUEST);
+    await expect(second).resolves.toEqual(CALCULATION_RESULT);
+    expect(ticketCalls).toBe(2);
+    expect(firstSettled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(first).resolves.toEqual(CALCULATION_RESULT);
+    expect(firstSettled).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retries the exact cancellation after a reserved false response", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    let cancelCalls = 0;
+    let statusCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/cancel-calculation") {
+        cancelCalls += 1;
+        return Promise.resolve(jsonResponse({ cancelled: cancelCalls > 1 }));
+      }
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: statusCalls === 1 ? "reserved" : "cancelled",
+            sequence: statusCalls,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const calculation = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    const cancellation = cancelCalculation();
+    await flushMicrotasks();
+    expect(cancelCalls).toBe(1);
+    expect(statusCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(cancellation).resolves.toBeUndefined();
+    expect(cancelCalls).toBe(2);
+    const cancelBodies = fetchMock.mock.calls
+      .filter(([input]) => String(input) === "/api/cancel-calculation")
+      .map(([, init]) => JSON.parse(String(init?.body)) as { operationId: string });
+    expect(cancelBodies).toEqual([
+      { operationId: OPERATION_ID_1 },
+      { operationId: OPERATION_ID_1 },
+    ]);
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await calculation;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a bounded cancellation timeout while retaining exact-id isolation", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    const cancelBodies: { operationId: string }[] = [];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/cancel-calculation") {
+        cancelBodies.push(JSON.parse(String(init?.body)) as { operationId: string });
+        return Promise.resolve(jsonResponse({ cancelled: false }));
+      }
+      if (path === "/api/operation-status") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+            sequence: 0,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const calculation = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    const cancellationExpectation = expect(cancelCalculation()).rejects.toThrow(
+      "Cancellation timed out",
+    );
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await cancellationExpectation;
+    expect(cancelBodies.length).toBeGreaterThan(1);
+    expect(cancelBodies.every(({ operationId }) => operationId === OPERATION_ID_1)).toBe(true);
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await calculation;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -52,6 +52,11 @@
 - Preserve the three frontend modes: Tauri has download/cache/calculate/export; validation-server has download/cache/calculate but no export; ordinary preview is interface-only and must not perform real mutation or calculation.
 - Never add server-side export or arbitrary filesystem paths to the validation API. PNG/PDF export remains a Windows/Tauri native-save workflow.
 - Validation mode is an explicit privacy exception: test coordinates and requests leave the Windows browser for the user-controlled server through SSH. Keep the disclosure banner and do not use sensitive real coordinates.
+- Every validation-server calculation or download-family operation must begin with a server-generated CSPRNG UUIDv4 capability from `POST /api/operation-ticket`; a long request may atomically consume only a matching reserved ticket, and a busy response must not consume it.
+- Status, cancellation, progress, finish, drop cleanup, and acknowledgement must bind to the exact operation ID. Never fall back to "the current operation" or cancel by kind alone, and never add a current/list endpoint.
+- Keep reserved tickets bounded to 32 entries with a 60-second TTL and terminal snapshots bounded to 32 entries with a 5-minute TTL. Terminal/status payloads may contain only whitelisted state and progress metadata; never results, PNG data, URLs, filesystem paths, or detailed errors.
+- Serialize progress, cancellation, and finish through the same operation-state mutex. Cancellation accepted before finish wins; a dropped lease publishes a failed terminal snapshot; an old poll or cancel must never affect a later operation.
+- Validation-browser progress uses non-overlapping same-origin POST polling and reuses the existing calculation/download progress listeners. Keep the synchronous long request as the authoritative result, isolate stale polls by operation ID and client generation, and acknowledge completed tickets best-effort.
 - Do not start or stop the persistent validation process unless the root task explicitly requests it. Do not describe code tests, a real Chengdu calculation, browser visuals, Windows behavior, or map compliance as passed until the corresponding evidence has actually been recorded.
 
 ## Documentation
