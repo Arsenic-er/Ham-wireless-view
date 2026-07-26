@@ -10,7 +10,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 2026-07-27 的恢复与取消切片补强了缓存重启整理、精确配额边界、操作取消线性化，以及私有平台管理锁和 runner 生命周期声明。基于提交和构建 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`，加固版已完成真实 `stop → build → start`、重复启动、readiness 和 HTTP 取消后重算验收；十进制 2.5 GB 实体压力、整机重启、Windows 实机和地图合规仍是独立门槛。
 
-后续私有平台协议切片为计算与下载引入服务端生成的 operation capability、精确 ID 取消、有限期状态快照和约 250 ms 的非重叠 HTTP 进度轮询，用来隔离多标签页操作并复用现有进度界面。同步长请求仍是结果的唯一权威来源，状态端点不保存 PNG 或错误详情；该协议的新构建、受管服务烟雾和真实浏览器进度证据仍待完成，不能沿用上一构建的通过结论。
+后续私有平台协议切片为计算与下载引入服务端生成的 operation capability、精确 ID 取消、有限期状态快照和约 250 ms 的非重叠 HTTP 进度轮询，用来隔离多标签页操作并复用现有进度界面。同步长请求仍是结果的唯一权威来源，状态端点不保存 PNG 或错误详情。该协议已在 full build revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 上完成代码回归、受管 `stop → build → start`、readiness 与两次真实回环烟雾；通过 SSH 隧道确认浏览器可见进度和控制台状态仍待执行，不能从受管 HTTP 结果外推。
 
 首轮结果见 `docs/05-phase0-validation-report.md`，真实地形最小可行性结果见 `docs/06-minimum-viability-validation.md`，缓存闭环见 `docs/07-phase1-cache-validation.md`，陆地/水体结果见 `docs/08-land-water-validation.md`，桌面首切片见 `docs/09-phase2-desktop-slice.md`，下载与缓存交互见 `docs/10-phase2-download-cache-slice.md`。通过桌面服务契约运行成都真实缓存时，125,628 个像素约 9.75 秒完成；下载状态烟雾测试确认 50 个 DEM/WBM 资产无需重复下载并正确进入 ready。上述数字仍不是 Windows 整机验收。
 
@@ -152,7 +152,7 @@ scripts/validation-platform.sh stop
 
 验证模式会把坐标、无线电参数和计算请求发送到用户控制的 JAIST 服务器，因此它是桌面“坐标和结果只留本机”原则的明确内部测试例外。只使用测试坐标，不要输入不愿离开本机的敏感位置。服务器仍通过共享 `AppService` 执行固定来源、2.5 GB 配额、DEM/WBM 完整性和 ITM 规则；浏览器没有服务器文件路径权限，服务端也没有导出端点。
 
-所有运行数据、PID、日志和构建元数据都在项目的 `.runtime/validation-platform/`，不会写入 Windows 本机，也不使用 Docker、系统服务或系统级运行目录。`start` 可安全重复执行并在 SSH 断开后继续运行，但服务器整机重启后仍需要手动执行；`self-test` 检查脚本不变量，`validation-recovery-smoke.sh` 在适配新协议后还需验证 ticket 消费、错 ID 不可取消、状态进度、终态确认、无半结果和重算恢复。日志、进程控制与运行证据见 `docs/15-private-validation-platform.md` 和 `docs/16-recovery-and-cancellation-validation.md`。
+所有运行数据、PID、日志和构建元数据都在项目的 `.runtime/validation-platform/`，不会写入 Windows 本机，也不使用 Docker、系统服务或系统级运行目录。`start` 可安全重复执行并在 SSH 断开后继续运行，但服务器整机重启后仍需要手动执行；`self-test` 检查脚本不变量。适配新协议后的 `validation-recovery-smoke.sh` 已连续两次验证 ticket 消费、未知 ID/错 family 不可取消、busy 不消费 reserved ticket、状态进度、终态确认、无半结果、同票重算恢复、唯一可解码 `401×401` 双 PNG，以及最终 gate/health 与临时目录清理；浏览器可见进度仍单列待验。日志、进程控制与运行证据见 `docs/15-private-validation-platform.md` 和 `docs/16-recovery-and-cancellation-validation.md`。
 
 Tauri 壳层位于 `app/src-tauri/`。JAIST Linux 负责前端、共享 Rust 服务、浏览器视觉回归和内部 Windows 交叉构建；正式发布仍必须在 Windows 10/11 验证 WebView2、安装包和文件系统行为。
 

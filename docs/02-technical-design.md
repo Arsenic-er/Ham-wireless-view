@@ -140,7 +140,9 @@ validation 浏览器在启动长请求前领取 ticket，保留 ticket promise�
 
 取消捕获本次 handle，即使 ticket 尚未返回也只等待该 ID，并受 3 秒总 deadline 约束。若 exact cancel 返回 false，立即查询同一 ID 的 exact status；`reserved` 或 `running` 时每 100 ms 重试相同 ID，`cancellation-requested`、任何 terminal、404 或原 handle settle 时停止。deadline 超时必须向 UI 返回明确取消超时错误，不能静默报告已取消或退化为按 kind 操作。
 
-该协议只用于回环 validation 平台。Tauri 继续使用原生事件和桌面 operation lease，普通 preview 继续禁止真实操作。设计依据见 ADR 0013；新构建、真实回环烟雾和浏览器可见进度需要另行记录后才能宣称通过。
+该协议只用于回环 validation 平台。Tauri 继续使用原生事件和桌面 operation lease，普通 preview 继续禁止真实操作。设计依据见 ADR 0013。
+
+2026-07-27 的 full build revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 已完成 server/frontend 回归和两次真实回环烟雾。每次烟雾都为 ID-A 与 ID-B 各至少观察到一个真实 calculation progress snapshot，观测时 `sequence=2`；同时通过 exact-ID/family 取消、reserved ticket 复用、terminal/ack 隔离与双 PNG 恢复。该证据只关闭受管 HTTP 协议与进度快照；通过 SSH 隧道看到浏览器中的逐阶段进度、取消屏障和无控制台错误仍待实测。
 
 ### 4.3 原生传播层
 

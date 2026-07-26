@@ -339,37 +339,40 @@
 
 本记录验证的是受管应用进程 stop/start，不是 GPU 主机整机重启。整机重启后的手动恢复仍保留为待办。
 
-## 21. Operation identity 与 HTTP 渐进进度检查点（待实测）
+## 21. Operation identity 与 HTTP 渐进进度检查点（受管 HTTP 已实测）
 
-ADR 0013 用服务端签发的短期 UUIDv4 capability 取代“按 kind 取消当前任务”，并让 validation 浏览器通过状态轮询复用现有进度 UI。第 20 节记录的是旧协议历史证据；新切片只有在下列证据全部记录后，才可关闭 HTTP 渐进进度和多标签页错误取消风险。
+ADR 0013 用服务端签发的短期 UUIDv4 capability 取代“按 kind 取消当前任务”，并让 validation 浏览器通过状态轮询复用现有进度 UI。第 20 节仍是 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 的旧协议历史证据；本节记录 revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 的新证据，二者不混算。
+
+新基线完成 full build，`built_at=2026-07-26T19:02:43Z`，server SHA-256 为 `e80c8890ebcd2059341cd495e78546d51287a916776f0a1991e8d99f062afa0c`。代码门禁结果为 Rust workspace offline `83 passed / 3 ignored`、真实 HTTPS `3/3`、validation server `17/17`、前端 `6 files / 41 tests`（其中 backend 专项 20），并通过 fmt、clippy `-D warnings`、TypeScript check、Vite build、xwin、Tauri 纯状态 `4/4`、`bash -n`、`self-test` 与 `git diff --check`。
 
 ### 21.1 Rust 协议回归
 
-- [ ] ticket 仅接受 `estimate-download`、`download`、`calculation`，ID 来自服务端密码学安全随机源并具有 UUIDv4 形状。
-- [ ] 匹配长请求在同一状态锁中原子消费 reserved ticket；busy 不消费，错 kind、过期和重复消费失败。
-- [ ] reserved 最多 32 项/TTL 60 秒，terminal 最多 32 项/TTL 5 分钟；确定性边界测试覆盖过期和容量回收。
-- [ ] status 覆盖 `reserved/running/cancellation-requested/succeeded/failed/cancelled`、单调 sequence 和 calculation/download 白名单 progress。
-- [ ] status/terminal 序列化检查不存在结果、PNG/data URL、下载 URL、文件路径或详细错误，也不存在 current/list 路由。
-- [ ] cancel 同时匹配 exact ID 与 family；未知、错 family、终态和迟到取消返回 200/false，不能影响后来操作。
-- [ ] ack 按 exact ID 回收 reserved/terminal；重复、未知和过期 ack 幂等返回 false。
-- [ ] progress、cancel、finish 与 Drop 在同一 mutex 下线性化；取消先到丢弃成功，finish 先到隔离迟到取消，Drop 发布 failed 并释放 gate。
+- [x] ticket 仅接受 `estimate-download`、`download`、`calculation`，ID 来自服务端密码学安全随机源并具有 UUIDv4 形状。
+- [x] 匹配长请求在同一状态锁中原子消费 reserved ticket；busy 不消费，错 kind、过期和重复消费失败。
+- [x] reserved 最多 32 项/TTL 60 秒，terminal 最多 32 项/TTL 5 分钟；确定性边界测试覆盖过期和容量回收。
+- [x] status 覆盖 `reserved/running/cancellation-requested/succeeded/failed/cancelled`、单调 sequence，以及 estimate-download/download/calculation 三类 tagged 白名单 progress。
+- [x] status/terminal 序列化检查不存在结果、PNG/data URL、下载 URL、文件路径或详细错误，也不存在 current/list 路由。
+- [x] cancel 同时匹配 exact ID 与 family；未知、错 family、终态和迟到取消返回 200/false，不能影响后来操作。
+- [x] ack 按 exact ID 回收 reserved/terminal；重复、未知和过期 ack 幂等返回 false。
+- [x] progress、cancel、finish 与 Drop 在同一 mutex 下线性化；取消先到丢弃成功，finish 先到隔离迟到取消，Drop 发布 failed 并释放 gate。
 
 ### 21.2 前端回归
 
-- [ ] validation 长请求先领取 ticket，再发送带 `operationId` 的包装 body；导出、preview 和 Tauri 能力边界不变。
-- [ ] 状态轮询使用约 250 ms 递归定时器且不重叠，只分发相同 ID/generation 的新 sequence。
-- [ ] calculation/download progress 复用现有监听器；旧 poll、临时 poll 错误和旧终态不能污染新任务。
-- [ ] ticket 未返回前立即取消仍等待并绑定原 handle；长请求 settle 后停止轮询并 best-effort ack。
-- [ ] 同步长响应仍是唯一结果来源；status 成功不能恢复丢失的 PNG 或绕过正式 calculate/download response。
+- [x] validation 长请求先领取 ticket，再发送带 `operationId` 的包装 body；导出、preview 和 Tauri 能力边界不变。
+- [x] 状态轮询使用约 250 ms 递归定时器且不重叠，只分发相同 ID/generation 的新 sequence。
+- [x] calculation/download progress 复用现有监听器；旧 poll、临时 poll 错误和旧终态不能污染新任务。
+- [x] ticket 未返回前立即取消仍等待并绑定原 handle；取消受 3 秒总 deadline 约束；settle 后停止轮询，final status 与 ack 各有 1.5 秒上限并按 handle identity 清理。
+- [x] 同步长响应仍是唯一结果来源；status 成功不能恢复丢失的 PNG 或绕过正式 calculate/download response。
 
 ### 21.3 受管服务与浏览器验收
 
-- [ ] 使用 `scripts/validation-platform.sh build` 生成新 revision，并记录 `stop → build → start → status/health → bootstrap/cache-overview`。
-- [ ] HTTP 烟雾验证服务端签发两个不同 ID；错 ID/错 family 不能取消活动计算，正确 ID 能取消且被取消响应不含双 PNG。
-- [ ] 取消终态可按同一 ID 轮询、ack 后不可再查询；旧 ID 的 status/cancel 不影响下一 ID 的恢复计算。
-- [ ] 恢复计算 HTTP 200，两个 `401×401` PNG 仍完成签名/IHDR/Base64 检查；终态为 succeeded 后可 ack。
-- [ ] 至少观察一项真实 calculation progress 的 sequence/阶段变化，并确认轮询请求不重叠；若验证下载进度，另记录实际字节/资产推进。
+- [x] 完成 `stop → full build → start → status/health → bootstrap/cache-overview`；旧 PID `1114524` 更新为 `1185566`，重复 `start` 后 PID 不变。
+- [x] `validation-recovery-smoke.sh` 连续两次通过；两个 ID 均由服务器签发且不同，未知 ID/错 family 返回 false，正确 ID-A 取消返回 true。
+- [x] ID-A 的 calculate 返回 HTTP 422 且无双 PNG；terminal 为 cancelled，ack 首次 true、再次 false，随后 status 为 404。
+- [x] ID-A 活动时 ID-B calculate 返回 409，ID-B 保持 reserved、`sequence=0`、`progress=null`；随后复用同一 ID-B 成功返回 HTTP 200。
+- [x] 旧且已 ack 的 ID-A cancel 返回 false且不影响活动 ID-B；两张唯一、可解码 PNG 均通过 signature/IHDR `401×401` 检查，ID-B terminal 为 succeeded 且不含 PNG，ack 后 status 为 404。
+- [x] 两次烟雾均为 ID-A/ID-B 各至少观察到一个真实 calculation progress snapshot，观测时 `sequence=2`；前端自动化另行覆盖轮询非重叠和 generation 隔离。未把该证据写成真实下载字节进度。
 - [ ] 通过 SSH 隧道在浏览器确认可见进度、取消屏障、重试和无控制台错误；不得把这项证据外推为 Windows WebView2。
-- [ ] 运行后 gate 为空、`/healthz` 仍为 200、缓存用量/partial/区域 ready 不变，临时烟雾目录被清理。
+- [x] 运行后 gate 为空、`/healthz` 仍为 200；缓存前后均为 `133,071,416 bytes`、`partial=0`，两个区域各 `50/50 ready`，且没有烟雾临时目录残留。
 
-在这些复选框回填前，文档只能陈述协议已设计或代码已实现，不能填入新的通过数量、PID、revision、进度序列或浏览器结论。即使全部通过，Windows 10/11 实机、2.5 GB 实体压力、GPU 整机重启和中国大陆地图合规仍是独立门槛。
+本节只关闭代码级 operation identity/轮询协议与受管 HTTP 烟雾。浏览器通过 SSH 隧道的可见进度和控制台仍待实测；Windows 10/11 实机、十进制 2.5 GB 实体压力、GPU 整机重启和中国大陆地图合规也仍是独立门槛。

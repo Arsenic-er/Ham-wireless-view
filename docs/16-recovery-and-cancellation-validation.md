@@ -4,7 +4,7 @@
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 范围：缓存重启整理、2.5 GB 边界不变量、取消结果交付、私有平台管理状态、operation capability 与 HTTP 轮询进度
-- 状态：旧协议代码、加固版应用进程重建/重启、readiness 和真实 HTTP 取消恢复已验证；新 operation 协议的构建/烟雾/浏览器证据，以及真实 2.5 GB 压力、整机重启、Windows 实机与地图合规待验证
+- 状态：旧协议证据保留；新 operation 协议的代码回归、full build、受管应用进程重建/readiness 和两次真实 HTTP identity/progress 烟雾已验证；SSH 隧道浏览器可见进度、真实 2.5 GB 压力、整机重启、Windows 实机与地图合规待验证
 
 ## 1. 本切片要关闭的故障窗口
 
@@ -122,12 +122,24 @@ owner 记录 PID、Linux 进程 start time 和 boot ID。陈旧目录只有在�
 | 加固版真实恢复运行 | 通过 | stop/build/start/readiness、缓存不变、真实取消与重算 |
 
 离线 workspace 的 77 项由 app-service 12、cache 21、coverage 15、export 6、propagation 6、official reference 1、terrain 5、validation server 11 构成。3 项真实网络测试单列为 ignored，不重复计入 77。
-以上数量和“通过”仅对应 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 的旧 HTTP 协议。operation capability 切片不得复用这些数量；实际 server/frontend 测试、脚本检查和运行证据完成后再新增一行。
+以上数量和“通过”仅对应 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d` 的旧 HTTP 协议，不与新切片混算。
+
+revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 的新增证据如下：
+
+| 检查 | 结果 | 边界 |
+|---|---:|---|
+| Rust workspace 离线 | 83 passed / 3 ignored | ignored 仍为显式真实网络测试 |
+| 真实 GLO-90 HTTPS | 3/3 | 另行联网运行 |
+| validation server | 17/17 | operation ticket/status/cancel/ack 与线性化 |
+| 前端 | 6 files / 41 tests | backend 专项 20；含非重叠轮询、generation 与有界 cleanup/cancel |
+| Tauri 纯状态控制器 | 4/4 | 不等于 Windows WebView2 实机 |
+| 质量门禁 | 全部通过 | fmt、clippy `-D warnings`、TypeScript check、Vite build、xwin、`bash -n`、`self-test`、`git diff --check` |
+| full build | 通过 | `built_at=2026-07-26T19:02:43Z`；server SHA-256 `e80c8890ebcd2059341cd495e78546d51287a916776f0a1991e8d99f062afa0c` |
 
 
-## 7. 真实运行验收：旧协议已完成，新协议待补
+## 7. 真实运行验收：旧协议与新受管 HTTP 已完成，浏览器可见进度待补
 
-本次应用基线提交和 validation build metadata revision 均为 `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`。
+第 7.1—7.2 节的应用基线和 build metadata revision 均为 `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`；第 7.3 节单列 revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 的新协议证据。
 
 ### 7.1 进程与缓存恢复
 
@@ -152,25 +164,25 @@ owner 记录 PID、Linux 进程 start time 和 boot ID。陈旧目录只有在�
 
 烟雾脚本直接访问服务器 `127.0.0.1:1421`；SSH 隧道路径已由此前浏览器验收独立覆盖。该身份校验只证明受控单 shell/单客户端测试拥有其后台 curl，不能替代多客户端 operation ID。本次是应用进程 stop/start，不是 GPU 主机整机重启。
 
-### 7.3 Operation identity 与轮询进度（待实测）
+### 7.3 Operation identity 与轮询进度（受管 HTTP 已实测）
 
-旧的 curl PID/PPID 归属推断不再是协议安全边界。新烟雾应直接使用服务器签发的 capability，并记录以下证据：
+旧的 curl PID/PPID 归属推断不再是协议安全边界。新烟雾直接使用服务器签发的 capability，并完成以下证据：
 
-- [ ] 新 revision 的 server/frontend 测试、格式、lint、脚本语法和 managed build 实际结果；
-- [ ] 同一客户端领取的两个 operation ID 不同且均为服务端 UUIDv4；busy 不消费 reserved ticket；
-- [ ] 活动 ID-A 运行时，未知 ID 与错 family 取消均为 false，ID-A 状态与 progress 继续推进；
-- [ ] 正确取消 ID-A 后，calculate 为取消且无双 PNG，status 为 cancelled；ack 后 ID-A 不可再查询；
-- [ ] ID-B 恢复计算为 HTTP 200，两张 `401×401` PNG 完成 Base64/signature/IHDR 验证，终态 succeeded 后 ack；
-- [ ] 旧 ID-A 的 cancel/status 不影响 ID-B 或下一任务，最终 gate、health、bootstrap、cache overview 正常；
+- [x] revision、server/frontend 测试、格式/lint、脚本检查和 full managed build 均通过；旧 PID `1114524` 更新为 `1185566`，重复 start 后 PID 不变；
+- [x] 服务器签发两个不同 ID；ID-A 活动时 ID-B calculate 返回 409，ID-B 仍为 `reserved`、`sequence=0`、`progress=null`，随后复用同一 ID-B；
+- [x] canonical 未知 ID 和错 family cancel 均为 false；ID-A 至少观察到一个真实 calculation progress snapshot，观测时 `sequence=2`；
+- [x] 正确取消 ID-A 返回 true，calculate 为 HTTP 422且无双 PNG，terminal 为 cancelled；ack 首次 true、再次 false，随后 status 为 404；
+- [x] 同一 ID-B 恢复计算为 HTTP 200，两张各自唯一的 PNG 均通过 Base64/signature/IHDR `401×401` 验证；至少观察到一个真实 calculation progress snapshot，观测时 `sequence=2`，terminal succeeded 不含 PNG，ack 后 status 为 404；
+- [x] 已 ack 的旧 ID-A cancel 为 false且不影响活动 ID-B；最终 gate、health、bootstrap、cache overview 正常，缓存/区域状态不变且没有临时烟雾目录；
 - [ ] 浏览器通过 SSH 隧道显示真实逐阶段进度，轮询不重叠，取消/重试无旧 generation 污染且控制台无新错误。
 
-证据完成前只记录“协议已实现、待实测”，不写新的 revision、PID、测试数量、进度 sequence 或运行通过结论。完成后，HTTP 渐进进度与多标签页错误取消风险可在 validation 平台范围内关闭；Windows WebView2 和公开产品安全边界仍需独立验收。
+`validation-recovery-smoke.sh` 连续两次输出 `ticket_a_cancelled=true ticket_b_http=200 progress_a=2 progress_b=2`；其中 `progress_a/progress_b` 记录的是所观察 progress snapshot 的 sequence 值，不是快照数量。因此 operation identity、白名单 progress 快照和恢复语义只在受管服务器 HTTP 范围内关闭；浏览器可见轮询仍待实测，Windows WebView2 和公开产品安全边界仍需独立验收。
 
 ## 8. 仍未关闭
 
 - [ ] 使用真实十进制 2.5 GB 数据执行 exact-cap、over-cap、磁盘不足和强制崩溃注入；
 - [ ] GPU 主机整机重启后的手动恢复与缓存 overview 复核；
 - [ ] 弱网下载中断/恢复和日志轮转压力；
-- [ ] 第 7.3 节的新构建、HTTP 烟雾和浏览器证据；“缺少 operation ID / 没有 HTTP 进度”的实现待办已由 ADR 0013 切片关闭，不得回退为按 kind 取消；
+- [ ] 第 7.3 节的 SSH 隧道浏览器可见进度、取消/重试 UI 和控制台证据；新构建与受管 HTTP 烟雾已关闭，“缺少 operation ID / 没有 HTTP 进度”的实现不得回退为按 kind 取消；
 - [ ] Windows 10/11 WebView2、安装、原生导出和真实文件系统；
 - [ ] 合规中国大陆底图、审图号、署名、离线/导出授权和公开发布验收。

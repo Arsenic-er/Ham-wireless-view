@@ -1,7 +1,7 @@
 # ADR-0013：服务端 operation capability 与轮询进度
 
 - 日期：2026-07-27
-- 状态：已采纳；新构建与真实运行证据待补
+- 状态：已采纳；代码回归与受管 HTTP 运行已验证，SSH 隧道浏览器可见进度待补
 - 替代：ADR-0012 决策 9 中“按任务类型取消当前任务”和“HTTP 模式无渐进进度”的部分
 - 保留：ADR-0012 的回环监听、SSH 隧道、三态前端、无导出和单共享操作边界
 
@@ -164,6 +164,10 @@ validation 前端保留公开 backend 函数与现有 calculation/download progr
 
 ## 验收与记录
 
-实现必须覆盖 ticket kind/UUIDv4、busy 不消费、TTL/容量、exact-ID + family 取消、状态白名单、sequence、ack、取消/finish/Drop 线性化，以及前端非重叠轮询和 generation 隔离。
+实现回归已覆盖 ticket kind/UUIDv4、busy 不消费、TTL/容量、exact-ID + family 取消、三类 tagged 状态白名单、sequence、ack、取消/finish/Drop 线性化，以及前端非重叠轮询、generation 隔离、有界 final/ack 和 3 秒取消 deadline。revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 的实际结果为 Rust workspace offline `83 passed / 3 ignored`、真实 HTTPS `3/3`、validation server `17/17`、前端 `6 files / 41 tests`（backend 专项 20）和 Tauri 纯状态 `4/4`；fmt、clippy `-D warnings`、TypeScript check、Vite build、xwin、`bash -n`、`self-test` 与 `git diff --check` 均通过。
 
-新 revision 还必须通过受管 `stop → build → start`、readiness、真实错 ID/正确 ID 取消、terminal/ack、恢复双 PNG 和浏览器可见进度。实际数量、revision、PID 和 sequence 只在运行后写入 `../04-test-plan.md`、`../15-private-validation-platform.md` 与 `../16-recovery-and-cancellation-validation.md`；本 ADR 不把待执行验证写成通过。
+同一 revision 已完成 full managed build，`built_at=2026-07-26T19:02:43Z`，server SHA-256 为 `e80c8890ebcd2059341cd495e78546d51287a916776f0a1991e8d99f062afa0c`；stop/start 将 PID `1114524` 更新为 `1185566`，重复 start 后 PID 不变，health/bootstrap/cache readiness 通过，缓存前后均为 `133,071,416 bytes`、`partial=0`，两个区域各 `50/50 ready`。
+
+更新后的 `validation-recovery-smoke.sh` 连续两次通过，均输出 `ticket_a_cancelled=true ticket_b_http=200 progress_a=2 progress_b=2`；`progress_a/progress_b` 是所观察 progress snapshot 的 sequence 值，不是快照数量。内部断言覆盖未知 ID/错 family 为 false、ID-B 忙时 409 且保持 reserved `sequence=0/progress=null`、ID-A correct cancel true 后 HTTP 422无 PNG、cancelled terminal 与 ack true/false/404、同一 ID-B 复用为 HTTP 200、旧 ID-A 不影响 ID-B、唯一可解码 `401×401` 双 PNG、succeeded terminal 无 PNG、ack/404，以及最终 gate/health、缓存不变和无临时目录残留。
+
+这些证据只关闭受管回环 HTTP 的 operation identity 与白名单 progress 快照。通过 SSH 隧道确认浏览器中的可见逐阶段进度、取消屏障、重试和无控制台错误仍待执行；Windows 10/11 WebView2、十进制 2.5 GB 实体压力、GPU 整机重启和中国大陆地图合规也仍是独立门槛。
