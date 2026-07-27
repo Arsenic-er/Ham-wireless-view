@@ -500,3 +500,30 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 最终构建的 health schema 1、bootstrap schema 2、管理 self-test 与 recovery smoke 均通过；recovery 仍为 `ticket_a_cancelled=true ticket_b_http=200 progress_a=2 progress_b=2`。成都 progressive smoke 得到 2 张不同预览，最后完成 `120400 / 125628`，首帧 `5452 ms`、总耗时 `7041 ms`。缓存保持 `133,071,416 bytes`、partial `0`，两个区域各 `50/50 ready`。
 
 纯文档证据提交不重建已验证的 `93b96ab` 二进制；运行 metadata 继续精确指向该代码 revision。
+
+## 25. 生产缓存硬上限与崩溃恢复压力门禁（2026-07-28）
+
+本门禁只验证缓存存储，不启动、停止或替换受管验证平台。压力目录固定在项目的 `.runtime/cache-stress/`，与 `.runtime/validation-platform/data/` 隔离。
+
+### 25.1 生产不变量
+
+- [x] partial 文件每次完成 `sync_all` 后，SQLite checkpoint 之前重新扫描整个缓存目录；只要实体数据超过十进制 `2,500,000,000` 字节，就在任何 SQLite 写入前返回 `QuotaExceeded`。
+- [x] 超限一字节时 `connection.total_changes()`、asset 行和 region→asset 关系均不变；重开只截掉未被索引信任的尾字节，缓存恢复到精确上限并保持 `Downloading`。
+- [x] 磁盘空间查询可在私有预检辅助函数中注入；`Ok(0)` 稳定得到 `DiskSpaceInsufficient { available_bytes: 0, requested_additional_bytes: 1 }`，且索引和用量不变。
+- [x] 普通 cache 单元测试现为 `30 passed / 1 ignored`；真实压力测试保持显式 opt-in，不进入日常测试。
+
+### 25.2 实体压力与强制退出证据
+
+- [x] `scripts/cache-durability-stress.sh` 先要求至少 4 GB 可用空间，并拒绝非空压力目录。
+- [x] 测试顺序写入非零 8 MiB 块，不使用 `set_len`；Linux `st_blocks × 512` 必须不少于文件长度，缓存目录总字节精确等于 `2,500,000,000`。
+- [x] 在精确上限追加并同步一字节后，checkpoint 立即被拒绝，SQLite 不变；重开截回可信长度并重新达到精确上限。
+- [x] 三个独立子进程以退出码 97 模拟：partial 已同步但索引未更新、partial 已同步且索引已更新、原子 rename 已完成但 ready 索引未更新。重开分别截回旧前缀、保留新前缀、恢复 `Ready`。
+- [x] 最终加固版服务器实跑 `1 passed`，父测试耗时 `5.264 s`、脚本总耗时 `6 s`；结束后 `.runtime/cache-stress/` 不存在。
+- [x] 真实验证缓存前后均为 `133,079,734` 文件系统字节，内容清单哈希前后同为 `ac69d2ecf509bf6faf80d08570a480bbee34950c26f1f702d79eb325c0dd76f8`。
+- [x] 全工作区 `104 passed / 4 ignored`；rustfmt、Clippy `--all-targets -D warnings`、Windows x64 cargo-xwin workspace/all-targets、`bash -n` 与 `git diff --check` 均通过。
+
+### 25.3 仍未外推
+
+- [ ] 注入的零可用空间证明错误映射与无索引副作用，不等同于真实文件系统 ENOSPC、EIO、断电或存储设备掉线。
+- [ ] Linux 子进程强制退出不替代 Windows 10/11 上 NTFS、休眠、杀进程、安装/卸载与用户提示实机验收。
+- [ ] 本门禁不改变或证明中国大陆合规底图、审图号、离线授权和导出授权。

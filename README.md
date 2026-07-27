@@ -77,6 +77,14 @@ scripts/cargo-project.sh run --release --locked -p hamheatmap-phase0 -- single-p
 scripts/cargo-project.sh run --release --locked -p hamheatmap-phase0 -- benchmark --threads 4 --terrain flat --frequency 145
 ```
 
+十进制 2.5 GB 硬上限与崩溃恢复压力测试不会包含在普通测试中。它要求服务器至少有 4 GB 可用空间，会在项目的 `.runtime/cache-stress/` 顺序写入真实非稀疏数据、强制子进程退出，并在结束时删除专用运行目录：
+
+```bash
+scripts/cache-durability-stress.sh
+```
+
+脚本拒绝使用非空的压力测试目录，不会读取、修改或清理 `.runtime/validation-platform/data/` 的真实验证缓存。
+
 真实 DEM 样本不提交到 Git。可重复下载并验证后运行：
 
 ```bash

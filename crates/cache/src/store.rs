@@ -584,7 +584,7 @@ impl CacheStore {
                             }
                             Some(_) => {}
                             None if asset.size_bytes > 0 => self.mark_corrupt(&asset.asset_key)?,
-                            None => self.update_partial_size(&asset.asset_key, 0)?,
+                            None => self.record_partial_size(&asset.asset_key, 0)?,
                         }
                     }
                 }
@@ -847,6 +847,11 @@ impl CacheStore {
         asset_key: &str,
         size_bytes: u64,
     ) -> Result<(), CacheError> {
+        self.enforce_existing_cap()?;
+        self.record_partial_size(asset_key, size_bytes)
+    }
+
+    fn record_partial_size(&self, asset_key: &str, size_bytes: u64) -> Result<(), CacheError> {
         self.connection.execute(
             "UPDATE assets SET size_bytes=?2, last_used_unix=?3 WHERE asset_key=?1",
             params![asset_key, to_i64(size_bytes)?, now_unix()],
@@ -898,6 +903,17 @@ impl CacheStore {
     }
 
     fn preflight_additional_bytes(&self, additional_bytes: u64) -> Result<(), CacheError> {
+        self.preflight_additional_bytes_with(additional_bytes, |root| fs4::available_space(root))
+    }
+
+    fn preflight_additional_bytes_with<F>(
+        &self,
+        additional_bytes: u64,
+        available_space: F,
+    ) -> Result<(), CacheError>
+    where
+        F: FnOnce(&Path) -> std::io::Result<u64>,
+    {
         let usage = self.usage()?;
         let headroom = (self.cap_bytes / 100).min(16_000_000);
         if usage
@@ -912,7 +928,7 @@ impl CacheStore {
                 cap_bytes: self.cap_bytes,
             });
         }
-        let available_bytes = fs4::available_space(&self.root)?;
+        let available_bytes = available_space(&self.root)?;
         if available_bytes < additional_bytes.saturating_add(headroom) {
             return Err(CacheError::DiskSpaceInsufficient {
                 available_bytes,
@@ -1686,6 +1702,35 @@ mod tests {
     }
 
     #[test]
+    fn restart_cleanup_can_record_zero_while_temporarily_over_cap() {
+        const TEST_CAP_BYTES: u64 = 100_000;
+        let directory = TestDirectory::new("restart-over-cap-zero-record");
+        let plan = one_tile_plan("restart-over-cap-zero-record");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let orphan_path = directory.0.join("orphan.partial");
+        {
+            let mut store = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+            store.upsert_region(&plan).unwrap();
+            store
+                .prepare_download(&descriptor, 10, None, Some("\"v1\""), 0)
+                .unwrap();
+            let usage = store.usage().unwrap();
+            File::create(&orphan_path)
+                .unwrap()
+                .set_len(TEST_CAP_BYTES - usage.total_bytes + 1)
+                .unwrap();
+            assert!(store.usage().unwrap().total_bytes > TEST_CAP_BYTES);
+        }
+
+        let reopened = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+        assert!(!orphan_path.exists());
+        assert!(reopened.usage().unwrap().total_bytes <= TEST_CAP_BYTES);
+        let asset = reopened.asset(&descriptor.asset_key).unwrap().unwrap();
+        assert_eq!(asset.state, CacheState::Downloading);
+        assert_eq!(asset.size_bytes, 0);
+    }
+
+    #[test]
     fn restart_finishes_atomic_rename_left_before_index_update() {
         let directory = TestDirectory::new("restart-after-rename");
         let plan = one_tile_plan("restart-after-rename");
@@ -1713,7 +1758,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_partial_at_cap_reopens_but_one_byte_more_is_rejected() {
+    fn trusted_partial_at_cap_reopens_and_rejected_checkpoint_keeps_index() {
         const TEST_CAP_BYTES: u64 = 100_000;
         let directory = TestDirectory::new("trusted-partial-hard-cap");
         let plan = one_tile_plan("trusted-partial-hard-cap");
@@ -1776,17 +1821,19 @@ mod tests {
         );
         assert_eq!(reopened.usage().unwrap().total_bytes, TEST_CAP_BYTES);
 
-        OpenOptions::new()
-            .write(true)
-            .open(&partial_path)
-            .unwrap()
-            .set_len(current_partial_bytes + 1)
+        let assets_before = reopened.list_assets().unwrap();
+        let region_asset_keys_before = reopened
+            .region_asset_keys("trusted-partial-hard-cap")
             .unwrap();
-        reopened
+        let total_changes_before = reopened.connection.total_changes();
+        let mut output = OpenOptions::new().append(true).open(&partial_path).unwrap();
+        output.write_all(&[0]).unwrap();
+        output.sync_all().unwrap();
+        drop(output);
+
+        let error = reopened
             .update_partial_size(&descriptor.asset_key, current_partial_bytes + 1)
-            .unwrap();
-        drop(reopened);
-        let error = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap_err();
+            .unwrap_err();
         assert!(matches!(
             error,
             CacheError::QuotaExceeded {
@@ -1795,7 +1842,56 @@ mod tests {
                 cap_bytes: TEST_CAP_BYTES,
             } if current_bytes == TEST_CAP_BYTES + 1
         ));
-        assert!(partial_path.is_file());
+        assert_eq!(reopened.connection.total_changes(), total_changes_before);
+        assert_eq!(reopened.list_assets().unwrap(), assets_before);
+        assert_eq!(
+            reopened
+                .region_asset_keys("trusted-partial-hard-cap")
+                .unwrap(),
+            region_asset_keys_before
+        );
+        assert_eq!(
+            reopened
+                .asset(&descriptor.asset_key)
+                .unwrap()
+                .unwrap()
+                .size_bytes,
+            current_partial_bytes
+        );
+        drop(reopened);
+
+        let reopened = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+        assert_eq!(
+            partial_path.metadata().unwrap().len(),
+            current_partial_bytes
+        );
+        assert_eq!(reopened.usage().unwrap().total_bytes, TEST_CAP_BYTES);
+        let asset = reopened.asset(&descriptor.asset_key).unwrap().unwrap();
+        assert_eq!(asset.state, CacheState::Downloading);
+        assert_eq!(asset.size_bytes, current_partial_bytes);
+    }
+
+    #[test]
+    fn injected_disk_space_probe_is_stable_and_leaves_index_unchanged() {
+        let directory = TestDirectory::new("disk-space-probe");
+        let store = CacheStore::open_with_cap(&directory.0, 100_000).unwrap();
+        let usage_before = store.usage().unwrap();
+        let total_changes_before = store.connection.total_changes();
+
+        let error = store
+            .preflight_additional_bytes_with(1, |_root| Ok(0))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CacheError::DiskSpaceInsufficient {
+                available_bytes: 0,
+                requested_additional_bytes: 1,
+            }
+        ));
+        assert_eq!(store.connection.total_changes(), total_changes_before);
+        assert_eq!(store.usage().unwrap(), usage_before);
+        assert!(store.list_regions().unwrap().is_empty());
+        assert!(store.list_assets().unwrap().is_empty());
     }
 
     #[test]
@@ -1861,5 +1957,331 @@ mod tests {
         assert_eq!(store.usage().unwrap(), usage_before);
         assert!(store.list_regions().unwrap().is_empty());
         assert!(store.list_assets().unwrap().is_empty());
+    }
+
+    const CACHE_STRESS_RUN_ENV: &str = "HAMHEATMAP_RUN_2_5GB_CACHE_STRESS";
+    const CACHE_STRESS_ROOT_ENV: &str = "HAMHEATMAP_CACHE_STRESS_ROOT";
+    const CACHE_STRESS_CHILD_ENV: &str = "HAMHEATMAP_CACHE_STRESS_CHILD";
+    const CACHE_STRESS_SCENARIO_ROOT_ENV: &str = "HAMHEATMAP_CACHE_STRESS_SCENARIO_ROOT";
+    const CACHE_STRESS_CHILD_EXIT: i32 = 97;
+
+    struct StressRunDirectory(PathBuf);
+
+    impl StressRunDirectory {
+        fn new() -> Self {
+            let base = PathBuf::from(
+                std::env::var(CACHE_STRESS_ROOT_ENV)
+                    .expect("set HAMHEATMAP_CACHE_STRESS_ROOT to the project runtime directory"),
+            );
+            assert!(base.is_absolute(), "cache stress root must be absolute");
+            assert!(
+                base.ends_with(Path::new(".runtime").join("cache-stress")),
+                "cache stress root must end in .runtime/cache-stress"
+            );
+            fs::create_dir_all(&base).unwrap();
+            let base = fs::canonicalize(base).unwrap();
+            let root = base.join(format!("run-{}", std::process::id()));
+            if root.exists() {
+                fs::remove_dir_all(&root).unwrap();
+            }
+            fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+    }
+
+    impl Drop for StressRunDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn crash_plan() -> DemRegionPlan {
+        one_tile_plan("cache-stress-crash-recovery")
+    }
+
+    fn prepare_checkpointed_partial(root: &Path, bytes: &[u8], expected_size: u64) -> PathBuf {
+        let mut store = CacheStore::open(root).unwrap();
+        let plan = crash_plan();
+        store.upsert_region(&plan).unwrap();
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let (partial_path, offset) = store
+            .prepare_download(&descriptor, expected_size, None, Some("\"stress-v1\""), 0)
+            .unwrap();
+        assert_eq!(offset, 0);
+        let mut output = File::create(&partial_path).unwrap();
+        output.write_all(bytes).unwrap();
+        output.sync_all().unwrap();
+        store
+            .update_partial_size(&descriptor.asset_key, bytes.len() as u64)
+            .unwrap();
+        partial_path
+    }
+
+    fn validated_cache_stress_child_root(role: &str) -> PathBuf {
+        assert_eq!(
+            std::env::var(CACHE_STRESS_RUN_ENV).as_deref(),
+            Ok("1"),
+            "cache stress child requires the explicit run gate"
+        );
+        let base = PathBuf::from(
+            std::env::var(CACHE_STRESS_ROOT_ENV).expect("cache stress child root is required"),
+        );
+        assert!(base.is_absolute(), "cache stress root must be absolute");
+        assert!(
+            base.ends_with(Path::new(".runtime").join("cache-stress")),
+            "cache stress root must end in .runtime/cache-stress"
+        );
+        let base = fs::canonicalize(base).expect("cache stress root must exist");
+        let root = PathBuf::from(
+            std::env::var(CACHE_STRESS_SCENARIO_ROOT_ENV)
+                .expect("cache stress child scenario root is required"),
+        );
+        let root = fs::canonicalize(root).expect("cache stress child scenario root must exist");
+        let relative = root
+            .strip_prefix(&base)
+            .expect("cache stress child scenario must stay under the stress root");
+        let components = relative.components().collect::<Vec<_>>();
+        assert_eq!(
+            components.len(),
+            2,
+            "cache stress child scenario must be run-<pid>/<scenario>"
+        );
+        let run_name = components[0]
+            .as_os_str()
+            .to_str()
+            .expect("cache stress run directory must be UTF-8");
+        let pid = run_name
+            .strip_prefix("run-")
+            .expect("cache stress run directory must start with run-");
+        assert!(
+            !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()),
+            "cache stress run directory must end in a numeric PID"
+        );
+        let expected_scenario = match role {
+            "partial-before-index" | "partial-after-index" => "partial-checkpoints",
+            "rename-before-index" => "rename-checkpoint",
+            other => panic!("unknown cache stress child role {other:?}"),
+        };
+        assert_eq!(
+            components[1].as_os_str(),
+            std::ffi::OsStr::new(expected_scenario)
+        );
+        root
+    }
+
+    fn run_cache_stress_child(role: &str, root: &Path) -> ! {
+        let store = CacheStore::open(root).unwrap();
+        let plan = crash_plan();
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let partial_path = store
+            .partial_path_for_relative(&descriptor.relative_path)
+            .unwrap();
+
+        match role {
+            "partial-before-index" => {
+                let mut output = OpenOptions::new().append(true).open(&partial_path).unwrap();
+                output.write_all(&[0x22; 8]).unwrap();
+                output.sync_all().unwrap();
+            }
+            "partial-after-index" => {
+                let mut output = OpenOptions::new().append(true).open(&partial_path).unwrap();
+                output.write_all(&[0x33; 8]).unwrap();
+                output.sync_all().unwrap();
+                let length = output.metadata().unwrap().len();
+                drop(output);
+                store
+                    .update_partial_size(&descriptor.asset_key, length)
+                    .unwrap();
+            }
+            "rename-before-index" => {
+                let final_path = store.absolute_path(&descriptor.relative_path).unwrap();
+                fs::rename(&partial_path, &final_path).unwrap();
+                #[cfg(target_family = "unix")]
+                File::open(final_path.parent().unwrap())
+                    .unwrap()
+                    .sync_all()
+                    .unwrap();
+            }
+            other => panic!("unknown cache stress child role {other:?}"),
+        }
+
+        drop(store);
+        std::process::exit(CACHE_STRESS_CHILD_EXIT);
+    }
+
+    fn spawn_cache_stress_child(role: &str, root: &Path) {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("store::tests::production_hard_cap_crash_recovery_stress")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(CACHE_STRESS_RUN_ENV, "1")
+            .env(CACHE_STRESS_CHILD_ENV, role)
+            .env(CACHE_STRESS_SCENARIO_ROOT_ENV, root)
+            .status()
+            .unwrap();
+        assert_eq!(
+            status.code(),
+            Some(CACHE_STRESS_CHILD_EXIT),
+            "cache stress child {role:?} did not exit at its crash checkpoint"
+        );
+    }
+
+    fn write_non_sparse(output: &mut File, byte_count: u64) {
+        const BLOCK_BYTES: usize = 8 * 1024 * 1024;
+        let block = vec![0xa5; BLOCK_BYTES];
+        let mut remaining = byte_count;
+        while remaining > 0 {
+            let count = remaining.min(BLOCK_BYTES as u64) as usize;
+            output.write_all(&block[..count]).unwrap();
+            remaining -= count as u64;
+        }
+        output.sync_all().unwrap();
+    }
+
+    fn verify_crash_recovery(run_root: &Path) {
+        let partial_root = run_root.join("partial-checkpoints");
+        let partial_path = prepare_checkpointed_partial(&partial_root, &[0x11; 8], 64);
+
+        spawn_cache_stress_child("partial-before-index", &partial_root);
+        let reopened = CacheStore::open(&partial_root).unwrap();
+        let descriptor = glo90_asset(crash_plan().tiles[0]).unwrap();
+        assert_eq!(partial_path.metadata().unwrap().len(), 8);
+        assert_eq!(
+            reopened
+                .asset(&descriptor.asset_key)
+                .unwrap()
+                .unwrap()
+                .size_bytes,
+            8
+        );
+        drop(reopened);
+
+        spawn_cache_stress_child("partial-after-index", &partial_root);
+        let reopened = CacheStore::open(&partial_root).unwrap();
+        assert_eq!(partial_path.metadata().unwrap().len(), 16);
+        assert_eq!(
+            reopened
+                .asset(&descriptor.asset_key)
+                .unwrap()
+                .unwrap()
+                .size_bytes,
+            16
+        );
+        drop(reopened);
+
+        let rename_root = run_root.join("rename-checkpoint");
+        let rename_partial = prepare_checkpointed_partial(&rename_root, b"hello", 5);
+        spawn_cache_stress_child("rename-before-index", &rename_root);
+        let reopened = CacheStore::open(&rename_root).unwrap();
+        let rename_descriptor = glo90_asset(crash_plan().tiles[0]).unwrap();
+        let asset = reopened
+            .asset(&rename_descriptor.asset_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(asset.state, CacheState::Ready);
+        assert_eq!(asset.size_bytes, 5);
+        assert!(!rename_partial.exists());
+        assert!(
+            reopened
+                .absolute_path(&rename_descriptor.relative_path)
+                .unwrap()
+                .is_file()
+        );
+    }
+
+    fn verify_real_production_cap(run_root: &Path) {
+        let cap_root = run_root.join("production-hard-cap");
+        let plan = one_tile_plan("production-hard-cap");
+        let descriptor = glo90_asset(plan.tiles[0]).unwrap();
+        let mut store = CacheStore::open(&cap_root).unwrap();
+        store.upsert_region(&plan).unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE assets SET
+                     expected_size_bytes=?2,
+                     size_bytes=0,
+                     source_etag='\"stress-v1\"',
+                     state='downloading'
+                 WHERE asset_key=?1",
+                params![
+                    descriptor.asset_key,
+                    to_i64(TOTAL_CACHE_CAP_BYTES * 2).unwrap()
+                ],
+            )
+            .unwrap();
+        let partial_path = store
+            .partial_path_for_relative(&descriptor.relative_path)
+            .unwrap();
+        fs::create_dir_all(partial_path.parent().unwrap()).unwrap();
+        let baseline = store.usage().unwrap().total_bytes;
+        let payload_bytes = TOTAL_CACHE_CAP_BYTES - baseline;
+        assert!(payload_bytes > 2_400_000_000);
+
+        let mut output = File::create(&partial_path).unwrap();
+        write_non_sparse(&mut output, payload_bytes);
+        drop(output);
+        #[cfg(target_family = "unix")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = partial_path.metadata().unwrap();
+            assert!(metadata.blocks().saturating_mul(512) >= metadata.len());
+        }
+        store
+            .update_partial_size(&descriptor.asset_key, payload_bytes)
+            .unwrap();
+        assert_eq!(store.usage().unwrap().total_bytes, TOTAL_CACHE_CAP_BYTES);
+        drop(store);
+
+        let reopened = CacheStore::open(&cap_root).unwrap();
+        assert_eq!(reopened.usage().unwrap().total_bytes, TOTAL_CACHE_CAP_BYTES);
+        let assets_before = reopened.list_assets().unwrap();
+        let total_changes_before = reopened.connection.total_changes();
+        let mut output = OpenOptions::new().append(true).open(&partial_path).unwrap();
+        output.write_all(&[0x5a]).unwrap();
+        output.sync_all().unwrap();
+        drop(output);
+        let error = reopened
+            .update_partial_size(&descriptor.asset_key, payload_bytes + 1)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CacheError::QuotaExceeded {
+                current_bytes,
+                requested_additional_bytes: 0,
+                cap_bytes: TOTAL_CACHE_CAP_BYTES,
+            } if current_bytes == TOTAL_CACHE_CAP_BYTES + 1
+        ));
+        assert_eq!(reopened.connection.total_changes(), total_changes_before);
+        assert_eq!(reopened.list_assets().unwrap(), assets_before);
+        drop(reopened);
+
+        let reopened = CacheStore::open(&cap_root).unwrap();
+        assert_eq!(partial_path.metadata().unwrap().len(), payload_bytes);
+        assert_eq!(reopened.usage().unwrap().total_bytes, TOTAL_CACHE_CAP_BYTES);
+    }
+
+    #[test]
+    #[ignore = "writes a real non-sparse 2.5 GB cache and forces child-process crash windows"]
+    fn production_hard_cap_crash_recovery_stress() {
+        if let Ok(role) = std::env::var(CACHE_STRESS_CHILD_ENV) {
+            let root = validated_cache_stress_child_root(&role);
+            run_cache_stress_child(&role, &root);
+        }
+        assert_eq!(
+            std::env::var(CACHE_STRESS_RUN_ENV).as_deref(),
+            Ok("1"),
+            "run this test only through scripts/cache-durability-stress.sh"
+        );
+        let started = std::time::Instant::now();
+        let run = StressRunDirectory::new();
+        verify_crash_recovery(&run.0);
+        verify_real_production_cap(&run.0);
+        eprintln!(
+            "production cache hard-cap and crash-recovery stress passed in {:?}",
+            started.elapsed()
+        );
     }
 }
