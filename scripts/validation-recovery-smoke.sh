@@ -246,7 +246,7 @@ write_calculation_request() {
   local request_file=$2
   is_uuid_v4 "$operation_id" || fail "cannot write calculation request with an unsafe id"
   printf '%s\n' \
-    "{\"operationId\":\"$operation_id\",\"request\":{\"center\":{\"lat\":30.5,\"lon\":103.5},\"band\":\"vhf-144\",\"frequencyMhz\":145.0,\"powerValue\":25.0,\"powerUnit\":\"watt\",\"txGainValue\":6.0,\"txGainUnit\":\"dbi\",\"txHeightM\":20.0,\"rxGainValue\":-3.0,\"rxGainUnit\":\"dbi\",\"rxHeightM\":1.5,\"polarization\":\"vertical\"}}" \
+    "{\"operationId\":\"$operation_id\",\"request\":{\"center\":{\"lat\":30.5,\"lon\":103.5},\"band\":\"vhf-144\",\"frequencyMhz\":145.0,\"powerValue\":25.0,\"powerUnit\":\"watt\",\"txGainValue\":6.0,\"txGainUnit\":\"dbi\",\"txHeightM\":20.0,\"txGroundElevationOverrideM\":null,\"rxGainValue\":-3.0,\"rxGainUnit\":\"dbi\",\"rxHeightM\":1.5,\"polarization\":\"vertical\"}}" \
     >"$request_file"
 }
 
@@ -605,7 +605,9 @@ curl_job_is_owned_and_running ||
 
 wait_for_tracked_calculation "recovery calculation"
 require_status "$calculation_b_status" "200" "recovery calculation"
-require_contains "$calculation_b_body" '"schemaVersion"[[:space:]]*:[[:space:]]*2([,}])' "schema"
+require_contains "$calculation_b_body" '"schemaVersion"[[:space:]]*:[[:space:]]*3([,}])' "schema"
+require_contains "$calculation_b_body" '"txGroundElevationSource"[[:space:]]*:[[:space:]]*"dem"' "transmitter ground elevation source"
+require_contains "$calculation_b_body" '"txGroundElevationM"[[:space:]]*:[[:space:]]*-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?([,}])' "finite transmitter ground elevation"
 require_contains "$calculation_b_body" '"imageWidth"[[:space:]]*:[[:space:]]*401([,}])' "image width"
 require_contains "$calculation_b_body" '"imageHeight"[[:space:]]*:[[:space:]]*401([,}])' "image height"
 require_contains "$calculation_b_body" '"mapOverlayWidth"[[:space:]]*:[[:space:]]*401([,}])' \

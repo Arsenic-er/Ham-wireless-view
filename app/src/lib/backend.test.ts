@@ -173,6 +173,7 @@ const CALCULATION_REQUEST: CalculationRequest = {
   txGainValue: 2,
   txGainUnit: "dbi",
   txHeightM: 10,
+  txGroundElevationOverrideM: null,
   rxGainValue: 2,
   rxGainUnit: "dbi",
   rxHeightM: 1.5,
@@ -180,10 +181,12 @@ const CALCULATION_REQUEST: CalculationRequest = {
 };
 
 const CALCULATION_RESULT: CalculationResult = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   modelName: "model",
   modelVersion: "version",
   center: CALCULATION_REQUEST.center,
+  txGroundElevationM: 512,
+  txGroundElevationSource: "dem",
   imageWidth: 1,
   imageHeight: 1,
   imageCorners: [

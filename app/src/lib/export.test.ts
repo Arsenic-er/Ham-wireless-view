@@ -8,10 +8,12 @@ import {
 import type { CalculationResult, RadioParameters } from "./types";
 
 const result: CalculationResult = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   modelName: "NTIA ITM Point-to-Point",
   modelVersion: "land-water-v1",
   center: { lat: 30.5, lon: 103.5 },
+  txGroundElevationM: 512.25,
+  txGroundElevationSource: "manual",
   imageWidth: 401,
   imageHeight: 401,
   imageCorners: [
@@ -54,6 +56,7 @@ const parameters: RadioParameters = {
   txGainValue: 6,
   txGainUnit: "dbi",
   txHeightM: 20,
+  txGroundElevationOverrideM: 1000,
   rxGainValue: -3,
   rxGainUnit: "dbi",
   rxHeightM: 1.5,
@@ -66,6 +69,10 @@ describe("export report model", () => {
     expect(model.generatedAt).toMatch(/^2026-07-16 12:34:56 UTC[+-]\d{2}:\d{2}$/);
     expect(model.center).toBe("30.50000°, 103.50000°");
     expect(model.parameterRows).toContainEqual(["频段 / 频率", "144 MHz / 145.25 MHz"]);
+    expect(model.parameterRows).toContainEqual([
+      "发射点地面海拔",
+      "512.3 m AMSL（手动覆盖）",
+    ]);
     expect(model.parameterRows).toContainEqual(["极化", "垂直"]);
     expect(model.statisticRows).toContainEqual(["受水体影响路径", "10.0%"]);
     expect(model.warning).toContain("内部测试，不得公开发布");

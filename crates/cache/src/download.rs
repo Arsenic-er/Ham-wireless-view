@@ -17,6 +17,12 @@ const ALLOWED_GLO90_URL_PREFIX: &str = "https://copernicus-dem-90m.s3.amazonaws.
 const COPY_BUFFER_BYTES: usize = 128 * 1024;
 const GENERATED_OCEAN_ETAG: &str = "generated:uniform-ocean-v1";
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
+const NETWORK_GLOBAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const DNS_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(15);
+const RESPONSE_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AssetTransfer {
@@ -68,6 +74,95 @@ pub struct DownloadProgress {
     pub total_expected_bytes: u64,
 }
 
+struct PartialDownloadStream<'a, F> {
+    store: &'a CacheStore,
+    asset: &'a ProbedAsset,
+    cancelled: &'a AtomicBool,
+    asset_index: usize,
+    asset_count: usize,
+    total_downloaded_bytes: &'a mut u64,
+    total_expected_bytes: u64,
+    on_progress: &'a mut F,
+}
+
+impl<F> PartialDownloadStream<'_, F>
+where
+    F: FnMut(&DownloadProgress),
+{
+    fn checkpoint(&self, output: &mut File, written: u64) -> Result<(), CacheError> {
+        output.sync_all()?;
+        self.store
+            .update_partial_size(&self.asset.descriptor.asset_key, written)
+    }
+
+    fn copy_from<R: Read>(
+        &mut self,
+        reader: &mut R,
+        mut output: File,
+        partial_path: &std::path::Path,
+        offset: u64,
+    ) -> Result<u64, CacheError> {
+        let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
+        let mut written = offset;
+        loop {
+            if self.cancelled.load(Ordering::Acquire) {
+                self.checkpoint(&mut output, written)?;
+                return Err(CacheError::Cancelled);
+            }
+            let count = match reader.read(&mut buffer) {
+                Ok(count) => count,
+                Err(error) => {
+                    self.checkpoint(&mut output, written)?;
+                    return Err(CacheError::Network(format!(
+                        "GET {} body read failed after {written} bytes: {error}",
+                        self.asset.descriptor.url
+                    )));
+                }
+            };
+            if count == 0 {
+                self.checkpoint(&mut output, written)?;
+                if written != self.asset.expected_size_bytes {
+                    return Err(CacheError::Network(format!(
+                        "GET {} ended early after {written} of {} bytes",
+                        self.asset.descriptor.url, self.asset.expected_size_bytes
+                    )));
+                }
+                return Ok(written);
+            }
+            written = written
+                .checked_add(count as u64)
+                .ok_or_else(|| CacheError::Integrity {
+                    asset_key: self.asset.descriptor.asset_key.clone(),
+                    message: "download byte counter overflowed".into(),
+                })?;
+            if written > self.asset.expected_size_bytes {
+                output.sync_all()?;
+                drop(output);
+                std::fs::remove_file(partial_path)?;
+                self.store.mark_corrupt(&self.asset.descriptor.asset_key)?;
+                return Err(CacheError::Integrity {
+                    asset_key: self.asset.descriptor.asset_key.clone(),
+                    message: format!(
+                        "server sent more bytes than declared: {written} > {}",
+                        self.asset.expected_size_bytes
+                    ),
+                });
+            }
+            output.write_all(&buffer[..count])?;
+            *self.total_downloaded_bytes += count as u64;
+            (self.on_progress)(&DownloadProgress {
+                asset_index: self.asset_index,
+                asset_count: self.asset_count,
+                asset_key: self.asset.descriptor.asset_key.clone(),
+                asset_downloaded_bytes: written,
+                asset_expected_bytes: self.asset.expected_size_bytes,
+                total_downloaded_bytes: *self.total_downloaded_bytes,
+                total_expected_bytes: self.total_expected_bytes,
+            });
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Glo90DownloadService {
     agent: ureq::Agent,
@@ -82,7 +177,18 @@ impl Default for Glo90DownloadService {
 impl Glo90DownloadService {
     pub fn new() -> Self {
         Self {
-            agent: ureq::Agent::new_with_defaults(),
+            agent: ureq::Agent::config_builder()
+                .https_only(true)
+                .max_redirects(0)
+                .timeout_global(Some(NETWORK_GLOBAL_TIMEOUT))
+                .timeout_resolve(Some(DNS_TIMEOUT))
+                .timeout_connect(Some(CONNECT_TIMEOUT))
+                .timeout_send_request(Some(SEND_TIMEOUT))
+                .timeout_send_body(Some(SEND_TIMEOUT))
+                .timeout_recv_response(Some(RESPONSE_HEADER_TIMEOUT))
+                .timeout_recv_body(Some(RESPONSE_BODY_TIMEOUT))
+                .build()
+                .into(),
         }
     }
 
@@ -228,6 +334,8 @@ impl Glo90DownloadService {
                 )));
             }
         };
+        let status = response.status().as_u16();
+        validate_head_status(&descriptor.url, status)?;
         let expected_size_bytes =
             header_u64(response.headers(), "content-length")?.ok_or_else(|| {
                 CacheError::Network(format!("HEAD {} omitted Content-Length", descriptor.url))
@@ -383,52 +491,17 @@ impl Glo90DownloadService {
             output.seek(SeekFrom::Start(offset))?;
             output.set_len(offset)?;
             let mut reader = response.body_mut().as_reader();
-            let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
-            let mut written = offset;
-            loop {
-                if cancelled.load(Ordering::Acquire) {
-                    output.sync_all()?;
-                    store.update_partial_size(&asset.descriptor.asset_key, written)?;
-                    return Err(CacheError::Cancelled);
-                }
-                let count = reader.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                written =
-                    written
-                        .checked_add(count as u64)
-                        .ok_or_else(|| CacheError::Integrity {
-                            asset_key: asset.descriptor.asset_key.clone(),
-                            message: "download byte counter overflowed".into(),
-                        })?;
-                if written > asset.expected_size_bytes {
-                    output.sync_all()?;
-                    drop(output);
-                    std::fs::remove_file(&partial_path)?;
-                    store.mark_corrupt(&asset.descriptor.asset_key)?;
-                    return Err(CacheError::Integrity {
-                        asset_key: asset.descriptor.asset_key.clone(),
-                        message: format!(
-                            "server sent more bytes than declared: {written} > {}",
-                            asset.expected_size_bytes
-                        ),
-                    });
-                }
-                output.write_all(&buffer[..count])?;
-                total_downloaded_bytes += count as u64;
-                on_progress(&DownloadProgress {
-                    asset_index,
-                    asset_count: plan.assets.len(),
-                    asset_key: asset.descriptor.asset_key.clone(),
-                    asset_downloaded_bytes: written,
-                    asset_expected_bytes: asset.expected_size_bytes,
-                    total_downloaded_bytes,
-                    total_expected_bytes,
-                });
-            }
-            output.sync_all()?;
-            store.update_partial_size(&asset.descriptor.asset_key, written)?;
+            let mut stream = PartialDownloadStream {
+                store,
+                asset,
+                cancelled,
+                asset_index,
+                asset_count: plan.assets.len(),
+                total_downloaded_bytes: &mut total_downloaded_bytes,
+                total_expected_bytes,
+                on_progress: &mut on_progress,
+            };
+            stream.copy_from(&mut reader, output, &partial_path, offset)?;
             ready_paths.push(store.finalize_download(
                 &asset.descriptor,
                 asset.expected_size_bytes,
@@ -465,6 +538,15 @@ fn content_range_matches(value: &str, offset: u64, expected_size_bytes: u64) -> 
     start.parse::<u64>().ok() == Some(offset)
         && end.parse::<u64>().ok().and_then(|end| end.checked_add(1)) == Some(expected_size_bytes)
         && total.parse::<u64>().ok() == Some(expected_size_bytes)
+}
+
+fn validate_head_status(url: &str, status: u16) -> Result<(), CacheError> {
+    if status == 200 {
+        return Ok(());
+    }
+    Err(CacheError::Network(format!(
+        "HEAD {url} returned HTTP {status}; redirects are not allowed"
+    )))
 }
 
 fn validate_download_url(url: &str) -> Result<(), CacheError> {
@@ -528,6 +610,124 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    use std::collections::VecDeque;
+    use std::fs;
+    use std::io;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+
+    use crate::planner::{GeoPoint, plan_glo90_region};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new(name: &str) -> Self {
+            let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "hamheatmap-download-{name}-{}-{unique}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    enum ReadStep {
+        Bytes(Vec<u8>),
+        Error,
+    }
+
+    struct ScriptedReader {
+        steps: VecDeque<ReadStep>,
+    }
+
+    impl ScriptedReader {
+        fn new(steps: impl IntoIterator<Item = ReadStep>) -> Self {
+            Self {
+                steps: steps.into_iter().collect(),
+            }
+        }
+    }
+
+    impl Read for ScriptedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            match self.steps.pop_front() {
+                Some(ReadStep::Bytes(bytes)) => {
+                    assert!(bytes.len() <= buffer.len());
+                    buffer[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Some(ReadStep::Error) => {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, "scripted timeout"))
+                }
+                None => Ok(0),
+            }
+        }
+    }
+
+    struct CancelAfterFirstRead<'a> {
+        bytes: Option<Vec<u8>>,
+        cancelled: &'a AtomicBool,
+    }
+
+    impl Read for CancelAfterFirstRead<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let bytes = self
+                .bytes
+                .take()
+                .expect("cancellation must be observed before a second read");
+            buffer[..bytes.len()].copy_from_slice(&bytes);
+            self.cancelled.store(true, Ordering::Release);
+            Ok(bytes.len())
+        }
+    }
+
+    fn prepared_stream(
+        name: &str,
+        expected_size_bytes: u64,
+    ) -> (TestDirectory, CacheStore, ProbedAsset, PathBuf, File) {
+        let directory = TestDirectory::new(name);
+        let mut store = CacheStore::open(&directory.0).unwrap();
+        let mut region = plan_glo90_region(GeoPoint {
+            lat: 30.5,
+            lon: 103.5,
+        })
+        .unwrap();
+        region.region_id = format!("{name}-region");
+        region.tiles.truncate(1);
+        store.upsert_region(&region).unwrap();
+        let descriptor = glo90_assets(region.tiles[0]).unwrap()[0].clone();
+        let (partial_path, offset) = store
+            .prepare_download(&descriptor, expected_size_bytes, None, Some("\"test\""), 0)
+            .unwrap();
+        assert_eq!(offset, 0);
+        let output = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&partial_path)
+            .unwrap();
+        let asset = ProbedAsset {
+            descriptor,
+            expected_size_bytes,
+            expected_sha256: None,
+            source_etag: Some("\"test\"".into()),
+            accepts_ranges: true,
+            resumable_bytes: 0,
+            transfer: AssetTransfer::Https,
+        };
+        (directory, store, asset, partial_path, output)
+    }
+
     #[test]
     fn download_allowlist_rejects_host_confusion_and_queries() {
         assert!(
@@ -555,5 +755,166 @@ mod tests {
         assert!(!content_range_matches("bytes 39-99/100", 40, 100));
         assert!(!content_range_matches("bytes 40-98/100", 40, 100));
         assert!(!content_range_matches("bytes 40-99/101", 40, 100));
+    }
+
+    #[test]
+    fn download_agent_enforces_transport_policy_and_finite_timeouts() {
+        let service = Glo90DownloadService::new();
+        let config = service.agent.config();
+        let timeouts = config.timeouts();
+
+        assert!(config.https_only());
+        assert_eq!(config.max_redirects(), 0);
+        assert_eq!(timeouts.global, Some(NETWORK_GLOBAL_TIMEOUT));
+        assert_eq!(timeouts.resolve, Some(DNS_TIMEOUT));
+        assert_eq!(timeouts.connect, Some(CONNECT_TIMEOUT));
+        assert_eq!(timeouts.send_request, Some(SEND_TIMEOUT));
+        assert_eq!(timeouts.send_body, Some(SEND_TIMEOUT));
+        assert_eq!(timeouts.recv_response, Some(RESPONSE_HEADER_TIMEOUT));
+        assert_eq!(timeouts.recv_body, Some(RESPONSE_BODY_TIMEOUT));
+    }
+
+    #[test]
+    fn head_accepts_only_http_200() {
+        assert!(validate_head_status("https://example.invalid", 200).is_ok());
+        for status in [204, 301, 302, 307, 308, 404] {
+            assert!(
+                validate_head_status("https://example.invalid", status).is_err(),
+                "HTTP {status} must not be accepted as HEAD metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn body_read_error_checkpoints_recoverable_partial() {
+        let (_directory, mut store, asset, partial_path, output) = prepared_stream("read-error", 8);
+        let cancelled = AtomicBool::new(false);
+        let mut reader = ScriptedReader::new([ReadStep::Bytes(b"abcd".to_vec()), ReadStep::Error]);
+        let mut total = 0;
+        let mut progress = Vec::new();
+        let error = {
+            let mut stream = PartialDownloadStream {
+                store: &store,
+                asset: &asset,
+                cancelled: &cancelled,
+                asset_index: 0,
+                asset_count: 1,
+                total_downloaded_bytes: &mut total,
+                total_expected_bytes: 8,
+                on_progress: &mut |value: &DownloadProgress| progress.push(value.clone()),
+            };
+            stream
+                .copy_from(&mut reader, output, &partial_path, 0)
+                .unwrap_err()
+        };
+
+        let CacheError::Network(message) = error else {
+            panic!("read failure must map to a network error");
+        };
+        assert!(message.contains("body read failed after 4 bytes"));
+        assert_eq!(partial_path.metadata().unwrap().len(), 4);
+        let stored = store.asset(&asset.descriptor.asset_key).unwrap().unwrap();
+        assert_eq!(stored.state, crate::CacheState::Downloading);
+        assert_eq!(stored.size_bytes, 4);
+        assert_eq!(total, 4);
+        assert_eq!(progress.len(), 1);
+        assert_eq!(
+            store
+                .resumable_bytes_for_probe(&asset.descriptor, 8, Some("\"test\""), true)
+                .unwrap(),
+            4
+        );
+    }
+
+    #[test]
+    fn early_eof_checkpoints_recoverable_partial() {
+        let (_directory, mut store, asset, partial_path, output) = prepared_stream("early-eof", 8);
+        let cancelled = AtomicBool::new(false);
+        let mut reader = ScriptedReader::new([ReadStep::Bytes(b"abc".to_vec())]);
+        let mut total = 0;
+        let mut progress = Vec::new();
+        let error = {
+            let mut stream = PartialDownloadStream {
+                store: &store,
+                asset: &asset,
+                cancelled: &cancelled,
+                asset_index: 0,
+                asset_count: 1,
+                total_downloaded_bytes: &mut total,
+                total_expected_bytes: 8,
+                on_progress: &mut |value: &DownloadProgress| progress.push(value.clone()),
+            };
+            stream
+                .copy_from(&mut reader, output, &partial_path, 0)
+                .unwrap_err()
+        };
+
+        let CacheError::Network(message) = error else {
+            panic!("early EOF must map to a network error");
+        };
+        assert!(message.contains("ended early after 3 of 8 bytes"));
+        assert_eq!(partial_path.metadata().unwrap().len(), 3);
+        assert_eq!(
+            store
+                .asset(&asset.descriptor.asset_key)
+                .unwrap()
+                .unwrap()
+                .size_bytes,
+            3
+        );
+        assert_eq!(total, 3);
+        assert_eq!(progress.len(), 1);
+        assert_eq!(
+            store
+                .resumable_bytes_for_probe(&asset.descriptor, 8, Some("\"test\""), true)
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn cancellation_checkpoints_recoverable_partial() {
+        let (_directory, mut store, asset, partial_path, output) = prepared_stream("cancel", 8);
+        let cancelled = AtomicBool::new(false);
+        let mut reader = CancelAfterFirstRead {
+            bytes: Some(b"abcd".to_vec()),
+            cancelled: &cancelled,
+        };
+        let mut total = 0;
+        let mut progress = Vec::new();
+        let error = {
+            let mut stream = PartialDownloadStream {
+                store: &store,
+                asset: &asset,
+                cancelled: &cancelled,
+                asset_index: 0,
+                asset_count: 1,
+                total_downloaded_bytes: &mut total,
+                total_expected_bytes: 8,
+                on_progress: &mut |value: &DownloadProgress| progress.push(value.clone()),
+            };
+            stream
+                .copy_from(&mut reader, output, &partial_path, 0)
+                .unwrap_err()
+        };
+
+        assert!(matches!(error, CacheError::Cancelled));
+        assert_eq!(partial_path.metadata().unwrap().len(), 4);
+        assert_eq!(
+            store
+                .asset(&asset.descriptor.asset_key)
+                .unwrap()
+                .unwrap()
+                .size_bytes,
+            4
+        );
+        assert_eq!(total, 4);
+        assert_eq!(progress.len(), 1);
+        assert_eq!(
+            store
+                .resumable_bytes_for_probe(&asset.descriptor, 8, Some("\"test\""), true)
+                .unwrap(),
+            4
+        );
     }
 }

@@ -66,7 +66,7 @@ hamheatmap/
 ### 4.1 前端层
 
 - `MapView`：合规底图、发射点、200 km 圆、不可检查的热力图和图例；不渲染高程视觉层。
-- `ParameterPanel`：场景、频率、功率、增益、高度、极化。
+- `ParameterPanel`：场景、频率、功率、增益、AGL 天线高度、发射点地面海拔来源和值、极化。
 - `CalculationPanel`：开始、取消、进度、状态、模型名称。
 - `CacheManager`：已缓存区域、分类大小、删除和 2.5 GB 硬限制。
 - `ExportDialog`：PNG/PDF 预览和保存。
@@ -105,7 +105,22 @@ cancel_calculation → 原子取消令牌
 
 下载估算只接受 `MapPoint`，URL、资产键和版本全部由 Rust 从固定瓦片计划生成。估算阶段不创建区域引用；用户确认后 `download_region` 在后端重新探测并执行，以避免信任前端回传的 URL 或大小。下载进度由 `download-progress` 事件报告，并按至少 0.5% 变化、250 ms 或资产完成节流。Tauri 用同一个 operation mutex 串行化初始化、点检查、估算、下载、概览、计算、删除和导出命令，避免缓存锁及报告快照竞态。
 
-### 4.2.1 私有 validation server 操作协议
+### 4.2.1 发射点地面海拔计算契约
+
+`CalculationRequest.txGroundElevationOverrideM` 是可空字段；字段缺失或 `null` 均表示 DEM 自动，有限数值表示手动覆盖。Rust 在应用服务与覆盖引擎两层都验证手动值位于 `-500..=9000 m AMSL`，从而兼容旧请求但不信任前端验证。
+
+覆盖引擎在建立 worker 前始终读取并校验中心 DEM。手动模式不能绕过缺瓦片、NoData、损坏或非有限值检查；校验成功后才选择“手动值或中心 DEM”作为本次计算的有效发射点地面海拔。该有效值只替换每条 ITM PFL 的第一个发射端地形样点；`txHeightM` 继续表示独立 AGL，后续剖面/接收点高程继续读取 DEM，全部 WBM 样点和陆水比例语义不变。
+
+前端默认发送 `null`，DEM/手动模式切换只改变该字段。场景预设保留它；选择不同地图点重置为 `null`，清空热力图则保留当前点和字段。有效天线 AMSL 只用于界面说明，不成为新的传播输入。
+
+`CalculationResult` 独立升级为 schema 3，并冻结：
+
+- `txGroundElevationM`：本次计算实际使用的有限 AMSL 数值；
+- `txGroundElevationSource`：严格为 `dem` 或 `manual`。
+
+`bootstrap` 和其他 AppService 契约仍保持 schema 2。内部报告只读取 schema 3 的冻结结果值与来源，不能用计算后的表单或再次读取的 DEM 重建该字段。决策依据见 ADR 0014。
+
+### 4.2.2 私有 validation server 操作协议
 
 validation HTTP 桥接器保留同步长请求作为结果的唯一权威来源，但为计算和下载类长操作增加服务端签发的 capability：
 
@@ -207,7 +222,9 @@ WBM 只参与传播计算，不作为可见底图。正式底图仍通过 `Compl
 - WBM 采用包含采样点的原始分类像素，不对分类值做双线性插值。
 - 经 DEM/WBM 成对 `404` 确认的纯海洋单元高程为 0 m、水体为真；其他水面仍读取正式 DEM/WBM，不能把一般缺数据误当水面。
 - NoData、瓦片损坏或版本混用均作为计算阻断错误。
-- 发射点海拔可由用户覆盖；接收点海拔不可全局覆盖。
+- 发射点地面海拔可由用户覆盖，但中心 DEM 在两种模式下都必须先读取并验证。
+- 手动值只替换 PFL 首样点；发射天线 AGL、其余 DEM 与整条路径 WBM 采样不变。
+- 接收点海拔不可全局覆盖。
 
 ## 7. 传播计算
 
@@ -308,6 +325,7 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - 热力图图层设置为无交互；不向前端暴露按像素查询命令。
 - 结果元数据包含输入哈希、模型版本、数据版本、计算时间和 warning 统计。
 - 当前会话只保留一个完整结果。
+- 计算结果 schema 3 冻结有效发射点地面海拔与 `dem/manual` 来源；bootstrap schema 仍为 2。
 - 同一结果包含两个固定 `401×401` 渲染产品：局部等距原始 PNG 用于内部报告；反向重采样、轴对齐 EPSG:3857 PNG 用于 MapLibre。
 - 地图覆盖层元数据显式记录 `EPSG:3857`、宽高和 WGS-84 四角；四角对应扩展半个像素后的图像外边缘。
 - 重采样只消费内存中的 dBm 栅格，不重新运行 ITM，也不把 Web Mercator 像素回写为计算结果。
@@ -332,8 +350,13 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - 原子改名后才把数据库状态标为 ready。
 - 应用异常退出后，下次启动清理失效的 partial 文件。
 - 下载 URL 由瓦片 ID 内部生成，只允许固定的 AWS GLO-90 HTTPS 主机；拒绝用户信息、查询参数、片段和相似域名。
+- HTTP Agent 在 URL 校验之外强制 `https_only`、`max_redirects = 0`，并为 DNS 解析、连接、发送、响应头、响应体以及整次请求设置有限超时。重定向不会被跟随，因此白名单不能被 3xx 跳转绕过。
+- HEAD 元数据只有 HTTP 200 可作为存在对象；HTTP 404 只进入既有的 DEM/WBM 成对海洋判定，其他 2xx/3xx/4xx/5xx 都是网络/完整性错误。
 - AWS 公开对象提供 Content-Length 和 Range，但当前没有逐瓦片、经认证的 SHA-256 清单。首次下载以 HTTPS、域名白名单和长度验证为基础，完成后记录本地 SHA-256，之后每次计算前复核。公开发行前仍应生成并签名应用自己的固定版本清单。
 - 每个地理单元同时规划 DEM 与 WBM。只有同单元的两个固定 URL 都返回 `404` 才生成纯海洋资产；单边 `404`、超时或服务器错误均不可降级。生成资产也经过 SHA-256、原子提交和配额核算。
+- 取消、响应体读取错误和早于 Content-Length 的 EOF 都先对 partial 执行 `sync_all` 并把实际长度写回 SQLite，再返回取消或网络错误。系统不自动重试；用户再次发起准备时，只有强 ETag、Range 能力、期望大小和磁盘/索引长度全部一致才继续该 partial，否则按既有完整性规则安全重下。
+
+传输加固决策见 ADR 0015。
 
 ### 10.3 缓存键
 
@@ -347,6 +370,7 @@ water_dataset_version
 tx_lat_lon
 frequency
 polarization
+tx_ground_elevation_override
 tx/rx heights
 tx/rx gains
 tx power
@@ -375,7 +399,7 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 下载请求只包含数据瓦片标识和应用 User-Agent。
 - 不在代码中硬编码第三方账号、密码或长期令牌。
 - Tauri 命令采用最小权限白名单，前端不能执行任意系统命令。
-- 下载 URL 必须在允许域名列表内并使用 HTTPS。
+- 下载 URL 必须在允许域名列表内并使用 HTTPS；Agent 同时拒绝 HTTP 与重定向并使用有限分阶段/总超时。
 - 对远端清单和下载内容进行校验，防止缓存投毒。
 - 私有 validation 模式是坐标离开 Windows 本机的显式例外；仍只允许同源回环/SSH 隧道访问，不新增 CORS 或公网入口。
 - operation ID 作为短期 capability，只能由服务器生成并放在 JSON body 中；禁止放入 URL、提供 current/list 枚举或在状态响应泄露结果与基础设施细节。
@@ -404,6 +428,12 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - status 状态转换与 sequence 单调；progress 仅含白名单字段，序列化中不存在 PNG、data URL、下载 URL、路径或错误详情。
 - exact-ID + family 取消覆盖未知 ID、错 family、终态、取消先于完成、完成先于迟到取消、Drop failed 及旧 generation 回调。
 - 前端轮询非重叠，临时失败可恢复；旧 generation/ID 不分发进度，取消在 ticket 返回前仍绑定原 handle，settle 后停止并 best-effort ack。
+- 发射点地面海拔字段缺失、`null` 和有限手动值的反序列化；`-500/9000` 边界与非有限/越界拒绝。
+- 手动模式仍读取中心 DEM，且只替换 PFL 首样点；DEM 自动基线、AGL、后续 DEM 与 WBM 语义保持不变。
+- schema 3 的 `txGroundElevationM` 与 `txGroundElevationSource` 序列化，以及 bootstrap schema 2 不变。
+- 场景预设保留覆盖、新点重置 DEM 自动、清空热力图保留覆盖、冻结导出读取结果而非表单。
+- 下载 Agent 的 HTTPS-only、零重定向与有限超时配置；HEAD 只接受 200 元数据。
+- 取消、读取错误和 early EOF 都同步文件并更新 partial 索引，合法强 ETag/Range 重试可续传。
 
 ### 13.2 ITM 回归
 

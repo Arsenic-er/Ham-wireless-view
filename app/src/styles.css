@@ -725,6 +725,13 @@ fieldset {
   font-weight: 600;
 }
 
+.field-help {
+  margin: -4px 2px 14px;
+  color: var(--text-soft);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
 .validation-message,
 .dock-validation {
   margin: 4px 0 0;

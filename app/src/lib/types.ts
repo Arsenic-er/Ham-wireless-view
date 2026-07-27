@@ -156,6 +156,7 @@ export interface RadioParameters {
   txGainValue: number;
   txGainUnit: GainUnit;
   txHeightM: number;
+  txGroundElevationOverrideM: number | null;
   rxGainValue: number;
   rxGainUnit: GainUnit;
   rxHeightM: number;
@@ -171,6 +172,7 @@ export interface CalculationRequest {
   txGainValue: number;
   txGainUnit: GainUnit;
   txHeightM: number;
+  txGroundElevationOverrideM: number | null;
   rxGainValue: number;
   rxGainUnit: GainUnit;
   rxHeightM: number;
@@ -203,11 +205,15 @@ export interface CalculationStatistics {
   totalSeconds: number;
 }
 
+export type TxGroundElevationSource = "dem" | "manual";
+
 export interface CalculationResult {
-  schemaVersion: number;
+  schemaVersion: 3;
   modelName: string;
   modelVersion: string;
   center: MapPoint;
+  txGroundElevationM: number;
+  txGroundElevationSource: TxGroundElevationSource;
   imageWidth: number;
   imageHeight: number;
   imageCorners: [number, number][];

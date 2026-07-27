@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendMode } from "./lib/backend";
-import type { CalculationResult } from "./lib/types";
+import type { CalculationResult, RadioParameters } from "./lib/types";
 
 const backendMocks = vi.hoisted(() => ({
   mode: "validation-server" as BackendMode,
@@ -50,6 +50,9 @@ vi.mock("./components/MapView", () => ({
       <button type="button" onClick={() => onPointSelect({ lat: 30.5, lon: 103.5 })}>
         select-point
       </button>
+      <button type="button" onClick={() => onPointSelect({ lat: 31, lon: 104 })}>
+        select-new-point
+      </button>
       <span data-testid="selected-point">{point ? `${point.lat},${point.lon}` : "none"}</span>
       <span data-testid="heatmap">{heatmap ? "present" : "none"}</span>
     </div>
@@ -57,7 +60,33 @@ vi.mock("./components/MapView", () => ({
 }));
 
 vi.mock("./components/ParameterPanel", () => ({
-  ParameterPanel: () => <div>parameter-panel</div>,
+  ParameterPanel: ({
+    parameters,
+    onChange,
+  }: {
+    parameters: RadioParameters;
+    onChange: (parameters: RadioParameters) => void;
+  }) => (
+    <div>
+      <span data-testid="ground-elevation-override">
+        {parameters.txGroundElevationOverrideM === null
+          ? "automatic"
+          : String(parameters.txGroundElevationOverrideM)}
+      </span>
+      <button
+        type="button"
+        onClick={() => onChange({ ...parameters, txGroundElevationOverrideM: 800 })}
+      >
+        set-manual-override
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange({ ...parameters, txGroundElevationOverrideM: 900 })}
+      >
+        change-manual-override
+      </button>
+    </div>
+  ),
 }));
 
 import { App } from "./App";
@@ -73,10 +102,12 @@ const cacheUsage = {
 };
 
 const result: CalculationResult = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   modelName: "NTIA ITM Point-to-Point",
   modelVersion: "land-water-v1",
   center: { lat: 30.5, lon: 103.5 },
+  txGroundElevationM: 512,
+  txGroundElevationSource: "dem",
   imageWidth: 401,
   imageHeight: 401,
   imageCorners: [[0, 0], [1, 0], [1, 1], [0, 1]],
@@ -183,6 +214,9 @@ describe("validation server UI", () => {
     await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
     expect(screen.getByTestId("selected-point").textContent).toBe("30.5,103.5");
 
+    fireEvent.click(screen.getByRole("button", { name: "set-manual-override" }));
+    expect(screen.getByTestId("ground-elevation-override").textContent).toBe("800");
+
     fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
     await screen.findByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210");
     expect(screen.getByTestId("heatmap").textContent).toBe("present");
@@ -191,13 +225,42 @@ describe("validation server UI", () => {
 
     expect(screen.getByTestId("heatmap").textContent).toBe("none");
     expect(screen.getByTestId("selected-point").textContent).toBe("30.5,103.5");
+    expect(screen.getByTestId("ground-elevation-override").textContent).toBe("800");
     expect(screen.getByText("\u6570\u636e\u5df2\u5c31\u7eea")).toBeTruthy();
     expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(1);
+    expect(backendMocks.calculate).toHaveBeenCalledWith(
+      expect.objectContaining({ txGroundElevationOverrideM: 800 }),
+    );
 
     const calculateButton = screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ });
     expect((calculateButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(calculateButton);
     await waitFor(() => expect(backendMocks.calculate).toHaveBeenCalledTimes(2));
+  });
+
+  it("marks a result stale after an override change and resets the override for a new point", async () => {
+    render(<App />);
+
+    await screen.findByText("\u7b49\u5f85\u9009\u62e9\u53d1\u5c04\u70b9");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
+    expect(screen.getByTestId("ground-elevation-override").textContent).toBe("automatic");
+
+    fireEvent.click(screen.getByRole("button", { name: "set-manual-override" }));
+    fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
+    await screen.findByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210");
+    expect(backendMocks.calculate).toHaveBeenCalledWith(
+      expect.objectContaining({ txGroundElevationOverrideM: 800 }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "change-manual-override" }));
+    expect(screen.getByText("\u53c2\u6570\u5df2\u53d8\u5316\uff0c\u7ed3\u679c\u5df2\u8fc7\u671f")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "select-new-point" }));
+    await waitFor(() => expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(2));
+    await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
+    expect(screen.getByTestId("ground-elevation-override").textContent).toBe("automatic");
+    expect(screen.getByTestId("heatmap").textContent).toBe("none");
   });
 
   it("discards an older result when a recalculation is cancelled and allows a clean retry", async () => {

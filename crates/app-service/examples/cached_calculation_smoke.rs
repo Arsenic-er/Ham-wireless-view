@@ -34,6 +34,7 @@ fn main() -> Result<(), String> {
             tx_gain_value: 6.0,
             tx_gain_unit: GainUnit::Dbi,
             tx_height_m: 20.0,
+            tx_ground_elevation_override_m: None,
             rx_gain_value: -3.0,
             rx_gain_unit: GainUnit::Dbi,
             rx_height_m: 1.5,

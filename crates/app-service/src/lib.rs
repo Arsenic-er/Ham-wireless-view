@@ -21,6 +21,7 @@ use hamheatmap_terrain::{DemTileId, DemTileSet, WaterTileSet};
 use serde::{Deserialize, Serialize};
 
 pub const APP_SERVICE_SCHEMA_VERSION: u32 = 2;
+pub const CALCULATION_RESULT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +59,13 @@ pub enum PolarizationChoice {
     Vertical,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TxGroundElevationSource {
+    Dem,
+    Manual,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalculationRequest {
@@ -69,6 +77,8 @@ pub struct CalculationRequest {
     pub tx_gain_value: f64,
     pub tx_gain_unit: GainUnit,
     pub tx_height_m: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_ground_elevation_override_m: Option<f64>,
     pub rx_gain_value: f64,
     pub rx_gain_unit: GainUnit,
     pub rx_height_m: f64,
@@ -270,6 +280,8 @@ pub struct CalculationResult {
     pub model_name: &'static str,
     pub model_version: &'static str,
     pub center: MapPoint,
+    pub tx_ground_elevation_m: f64,
+    pub tx_ground_elevation_source: TxGroundElevationSource,
     pub image_width: usize,
     pub image_height: usize,
     pub image_corners: [[f64; 2]; 4],
@@ -598,10 +610,17 @@ impl AppService {
                 total_seconds: started.elapsed().as_secs_f64(),
             };
             let result = CalculationResult {
-                schema_version: APP_SERVICE_SCHEMA_VERSION,
+                schema_version: CALCULATION_RESULT_SCHEMA_VERSION,
                 model_name: "NTIA ITM Point-to-Point",
                 model_version: MODEL_DEFAULTS_VERSION,
                 center: request.center,
+                tx_ground_elevation_m: grid.tx_ground_elevation_m,
+                tx_ground_elevation_source: if grid.config.tx_ground_elevation_override_m.is_some()
+                {
+                    TxGroundElevationSource::Manual
+                } else {
+                    TxGroundElevationSource::Dem
+                },
                 image_width: GRID_SIZE,
                 image_height: GRID_SIZE,
                 image_corners: heatmap_image_corners(request.center),
@@ -710,6 +729,9 @@ fn request_to_config(request: &CalculationRequest) -> Result<CoverageConfig, Str
     validate_range("接收天线增益", rx_gain_dbi, -20.0, 30.0)?;
     validate_range("发射天线高度", request.tx_height_m, 0.5, 500.0)?;
     validate_range("接收天线高度", request.rx_height_m, 0.5, 500.0)?;
+    if let Some(elevation_m) = request.tx_ground_elevation_override_m {
+        validate_range("发射点地面高程", elevation_m, -500.0, 9000.0)?;
+    }
     let threads = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(1);
@@ -727,6 +749,7 @@ fn request_to_config(request: &CalculationRequest) -> Result<CoverageConfig, Str
         tx_gain_dbi,
         rx_gain_dbi,
         tx_height_m: request.tx_height_m,
+        tx_ground_elevation_override_m: request.tx_ground_elevation_override_m,
         rx_height_m: request.rx_height_m,
         threads,
         profile_sample_spacing_m: hamheatmap_coverage::PROFILE_SAMPLE_SPACING_M,
@@ -812,6 +835,7 @@ mod tests {
             tx_gain_value: 6.0,
             tx_gain_unit: GainUnit::Dbi,
             tx_height_m: 20.0,
+            tx_ground_elevation_override_m: None,
             rx_gain_value: -3.0,
             rx_gain_unit: GainUnit::Dbi,
             rx_height_m: 1.5,
@@ -827,6 +851,7 @@ mod tests {
         assert_eq!(config.tx_gain_dbi, 6.0);
         assert_eq!(config.rx_gain_dbi, -3.0);
         assert_eq!(config.polarization, Polarization::Vertical);
+        assert_eq!(config.tx_ground_elevation_override_m, None);
     }
 
     #[test]
@@ -865,6 +890,7 @@ mod tests {
                 serde_json::from_value(frontend_json.clone()).unwrap();
             assert_eq!(decoded.band, expected_band);
             assert_eq!(decoded.frequency_mhz, frequency_mhz);
+            assert_eq!(decoded.tx_ground_elevation_override_m, None);
             let encoded = serde_json::to_value(decoded).unwrap();
             assert_eq!(encoded["band"], band_json);
             assert_eq!(encoded, frontend_json);
@@ -878,6 +904,72 @@ mod tests {
                 "unexpectedly accepted band {rejected}"
             );
         }
+    }
+
+    #[test]
+    fn calculation_request_accepts_missing_null_and_manual_ground_elevation() {
+        let without_field = serde_json::to_value(request()).unwrap();
+        assert!(
+            !without_field
+                .as_object()
+                .unwrap()
+                .contains_key("txGroundElevationOverrideM")
+        );
+        let decoded: CalculationRequest = serde_json::from_value(without_field).unwrap();
+        assert_eq!(decoded.tx_ground_elevation_override_m, None);
+
+        let mut explicit_null = serde_json::to_value(request()).unwrap();
+        explicit_null["txGroundElevationOverrideM"] = serde_json::Value::Null;
+        let decoded: CalculationRequest = serde_json::from_value(explicit_null).unwrap();
+        assert_eq!(decoded.tx_ground_elevation_override_m, None);
+
+        let mut manual = serde_json::to_value(request()).unwrap();
+        manual["txGroundElevationOverrideM"] = serde_json::json!(526.25);
+        let decoded: CalculationRequest = serde_json::from_value(manual).unwrap();
+        assert_eq!(decoded.tx_ground_elevation_override_m, Some(526.25));
+        assert_eq!(
+            request_to_config(&decoded)
+                .unwrap()
+                .tx_ground_elevation_override_m,
+            Some(526.25)
+        );
+    }
+
+    #[test]
+    fn tx_ground_elevation_request_bounds_and_non_finite_values_are_enforced() {
+        for accepted in [-500.0, 9000.0] {
+            let mut value = request();
+            value.tx_ground_elevation_override_m = Some(accepted);
+            assert_eq!(
+                request_to_config(&value)
+                    .unwrap()
+                    .tx_ground_elevation_override_m,
+                Some(accepted)
+            );
+        }
+        for rejected in [
+            -500.001,
+            9000.001,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut value = request();
+            value.tx_ground_elevation_override_m = Some(rejected);
+            assert!(request_to_config(&value).is_err());
+        }
+    }
+
+    #[test]
+    fn tx_ground_elevation_source_serializes_as_dem_or_manual() {
+        assert_eq!(
+            serde_json::to_value(TxGroundElevationSource::Dem).unwrap(),
+            serde_json::json!("dem")
+        );
+        assert_eq!(
+            serde_json::to_value(TxGroundElevationSource::Manual).unwrap(),
+            serde_json::json!("manual")
+        );
     }
 
     #[test]
@@ -904,18 +996,21 @@ mod tests {
     #[test]
     fn calculation_contract_schema_includes_map_overlay() {
         assert_eq!(APP_SERVICE_SCHEMA_VERSION, 2);
+        assert_eq!(CALCULATION_RESULT_SCHEMA_VERSION, 3);
     }
 
     #[test]
     fn calculation_result_serializes_all_overlay_fields_in_camel_case() {
         let result = CalculationResult {
-            schema_version: APP_SERVICE_SCHEMA_VERSION,
+            schema_version: CALCULATION_RESULT_SCHEMA_VERSION,
             model_name: "NTIA ITM Point-to-Point",
             model_version: MODEL_DEFAULTS_VERSION,
             center: MapPoint {
                 lat: 30.5,
                 lon: 103.5,
             },
+            tx_ground_elevation_m: 526.25,
+            tx_ground_elevation_source: TxGroundElevationSource::Dem,
             image_width: GRID_SIZE,
             image_height: GRID_SIZE,
             image_corners: [[101.0, 32.0], [106.0, 32.0], [106.0, 28.0], [101.0, 28.0]],
@@ -945,6 +1040,8 @@ mod tests {
             "modelName",
             "modelVersion",
             "center",
+            "txGroundElevationM",
+            "txGroundElevationSource",
             "imageWidth",
             "imageHeight",
             "imageCorners",
@@ -960,6 +1057,9 @@ mod tests {
         for key in expected_keys {
             assert!(object.contains_key(key), "missing serialized field {key}");
         }
+        assert_eq!(object["schemaVersion"].as_u64(), Some(3));
+        assert_eq!(object["txGroundElevationM"].as_f64(), Some(526.25));
+        assert_eq!(object["txGroundElevationSource"].as_str(), Some("dem"));
         assert_eq!(object["mapOverlayProjection"].as_str(), Some("EPSG:3857"));
         assert_eq!(object["mapOverlayWidth"].as_u64(), Some(GRID_SIZE as u64));
         assert_eq!(

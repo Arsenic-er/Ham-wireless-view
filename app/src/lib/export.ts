@@ -74,6 +74,10 @@ export function buildExportReportModel(
       ["发射功率", displayPower(parameters)],
       ["发射天线增益", displayGain(parameters.txGainValue, parameters.txGainUnit)],
       ["发射天线高度", `${parameters.txHeightM.toFixed(1)} m AGL`],
+      [
+        "发射点地面海拔",
+        `${result.txGroundElevationM.toFixed(1)} m AMSL（${result.txGroundElevationSource === "manual" ? "手动覆盖" : "DEM 自动"}）`,
+      ],
       ["接收天线增益", displayGain(parameters.rxGainValue, parameters.rxGainUnit)],
       ["接收天线高度", `${parameters.rxHeightM.toFixed(1)} m AGL`],
       ["极化", parameters.polarization === "vertical" ? "垂直" : "水平"],
@@ -275,14 +279,14 @@ export async function createExportReportPngDataUrl(
   context.font = `600 23px ${FONT_FAMILY}`;
   context.fillText(model.center, 956, 270);
   model.parameterRows.forEach(([label, value], index) => {
-    drawRow(context, label, value, 956, 322 + index * 52);
+    drawRow(context, label, value, 956, 322 + index * 47);
   });
 
   context.fillStyle = "#17242b";
   context.font = `700 24px ${FONT_FAMILY}`;
-  context.fillText("计算统计", 956, 762);
+  context.fillText("计算统计", 956, 748);
   model.statisticRows.forEach(([label, value], index) => {
-    drawRow(context, label, value, 956, 802 + index * 36);
+    drawRow(context, label, value, 956, 790 + index * 35);
   });
 
   context.fillStyle = "#687980";

@@ -152,6 +152,12 @@ export function ParameterPanel({
   onChange,
 }: ParameterPanelProps) {
   const validation = parameterValidationMessage(parameters);
+  const groundElevationMode = parameters.txGroundElevationOverrideM === null ? "dem" : "manual";
+  const effectiveGroundElevationM = parameters.txGroundElevationOverrideM ?? elevationM;
+  const effectiveAntennaElevationM =
+    effectiveGroundElevationM !== null && Number.isFinite(effectiveGroundElevationM)
+      ? effectiveGroundElevationM + parameters.txHeightM
+      : null;
   return (
     <div className="parameter-panel">
       <div className="panel-heading">
@@ -277,10 +283,54 @@ export function ParameterPanel({
           disabled={disabled}
           onChange={(txHeightM) => onChange({ ...parameters, txHeightM })}
         />
+        <Segmented<"dem" | "manual">
+          label="发射点地面高程来源"
+          value={groundElevationMode}
+          disabled={disabled || (groundElevationMode === "dem" && elevationM === null)}
+          options={[
+            { value: "dem", label: "DEM 自动" },
+            { value: "manual", label: "手动覆盖" },
+          ]}
+          onChange={(mode) => {
+            if (mode === groundElevationMode) return;
+            if (mode === "manual" && elevationM === null) return;
+            onChange({
+              ...parameters,
+              txGroundElevationOverrideM:
+                mode === "manual" ? (elevationM ?? 0) : null,
+            });
+          }}
+        />
+        {groundElevationMode === "manual" && (
+          <NumberField
+            id="tx-ground-elevation"
+            label="手动地面海拔 AMSL"
+            value={parameters.txGroundElevationOverrideM ?? 0}
+            min={-500}
+            max={9000}
+            step={0.1}
+            suffix="m"
+            disabled={disabled}
+            onChange={(txGroundElevationOverrideM) =>
+              onChange({ ...parameters, txGroundElevationOverrideM })
+            }
+          />
+        )}
         <div className="readonly-field">
-          <span>地面海拔 AMSL</span>
-          <strong>{elevationM === null ? "选择点后读取" : `${elevationM.toFixed(1)} m`}</strong>
+          <span>DEM 参考海拔</span>
+          <strong>{elevationM === null ? "选择点后读取" : `${elevationM.toFixed(1)} m AMSL`}</strong>
         </div>
+        <div className="readonly-field">
+          <span>有效发射天线海拔</span>
+          <strong>
+            {effectiveAntennaElevationM === null
+              ? "选择点后读取"
+              : `${effectiveAntennaElevationM.toFixed(1)} m AMSL`}
+          </strong>
+        </div>
+        <p className="field-help">
+          手动覆盖只替换发射点地面高程；发射天线高度始终按离地高度 AGL 计算。
+        </p>
       </div>
 
       <div className="panel-section">

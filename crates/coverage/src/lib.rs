@@ -40,6 +40,7 @@ pub struct CoverageConfig {
     pub tx_gain_dbi: f64,
     pub rx_gain_dbi: f64,
     pub tx_height_m: f64,
+    pub tx_ground_elevation_override_m: Option<f64>,
     pub rx_height_m: f64,
     pub threads: usize,
     pub profile_sample_spacing_m: f64,
@@ -55,6 +56,7 @@ impl CoverageConfig {
             tx_gain_dbi: 6.0,
             rx_gain_dbi: -3.0,
             tx_height_m: 20.0,
+            tx_ground_elevation_override_m: None,
             rx_height_m: 1.5,
             threads,
             profile_sample_spacing_m: PROFILE_SAMPLE_SPACING_M,
@@ -82,6 +84,14 @@ impl CoverageConfig {
         {
             return Err(CoverageError::InvalidInput(
                 "profile sample spacing must be in (0, 1000] m".into(),
+            ));
+        }
+        if self
+            .tx_ground_elevation_override_m
+            .is_some_and(|value| !value.is_finite() || !(-500.0..=9000.0).contains(&value))
+        {
+            return Err(CoverageError::InvalidInput(
+                "transmitter ground elevation override must be in [-500, 9000] m".into(),
             ));
         }
         watts_to_dbm(self.tx_power_w)
@@ -164,6 +174,7 @@ pub struct CoverageStatistics {
 pub struct CoverageGrid {
     values_dbm: Vec<f32>,
     pub config: CoverageConfig,
+    pub tx_ground_elevation_m: f64,
     pub statistics: CoverageStatistics,
     pub receiver_generation_time: Duration,
     pub propagation_time: Duration,
@@ -564,6 +575,13 @@ struct CoverageControl<'a> {
     notification_interval: usize,
 }
 
+#[derive(Clone, Copy)]
+struct ChunkParameters {
+    prediction_inputs: PredictionInputs,
+    tx_power_dbm: f64,
+    tx_ground_elevation_m: f64,
+}
+
 pub fn compute_coverage(
     elevation_source: &impl ElevationSource,
     water_source: &impl WaterSource,
@@ -584,6 +602,7 @@ pub fn compute_coverage_with_control(
     if cancelled.load(Ordering::Acquire) {
         return Err(CoverageError::Cancelled);
     }
+    let tx_ground_elevation_m = resolve_tx_ground_elevation(elevation_source, config)?;
     let receiver_started = Instant::now();
     let receivers = generate_receivers(config.center);
     let receiver_generation_time = receiver_started.elapsed();
@@ -593,6 +612,11 @@ pub fn compute_coverage_with_control(
         PredictionInputs::land_water_v1(config.frequency_mhz, config.polarization);
     prediction_inputs.tx_height_m = config.tx_height_m;
     prediction_inputs.rx_height_m = config.rx_height_m;
+    let chunk_parameters = ChunkParameters {
+        prediction_inputs,
+        tx_power_dbm,
+        tx_ground_elevation_m,
+    };
 
     let propagation_started = Instant::now();
     let worker_count = config.threads.min(receivers.len());
@@ -618,8 +642,7 @@ pub fn compute_coverage_with_control(
                         elevation_source,
                         water_source,
                         config,
-                        prediction_inputs,
-                        tx_power_dbm,
+                        chunk_parameters,
                         chunk,
                         Some(&control),
                     )
@@ -686,6 +709,7 @@ pub fn compute_coverage_with_control(
     Ok(CoverageGrid {
         values_dbm,
         config,
+        tx_ground_elevation_m,
         statistics: CoverageStatistics {
             valid_pixel_count,
             masked_pixel_count,
@@ -711,8 +735,7 @@ fn compute_chunk(
     elevation_source: &impl ElevationSource,
     water_source: &impl WaterSource,
     config: CoverageConfig,
-    prediction_inputs: PredictionInputs,
-    tx_power_dbm: f64,
+    parameters: ChunkParameters,
     receivers: &[Receiver],
     control: Option<&CoverageControl<'_>>,
 ) -> Result<ChunkResult, CoverageError> {
@@ -743,27 +766,30 @@ fn compute_chunk(
             } else {
                 path.current()
             };
-            let elevation = elevation_source
-                .elevation_m(point.lon, point.lat)
-                .map_err(|message| CoverageError::Terrain { point, message })?;
+            let elevation = profile_terrain_elevation(
+                elevation_source,
+                point,
+                sample_index,
+                parameters.tx_ground_elevation_m,
+            )?;
             if water_source
                 .is_water(point.lon, point.lat)
                 .map_err(|message| CoverageError::WaterMask { point, message })?
             {
                 water_sample_count += 1;
             }
-            pfl.push(f64::from(elevation));
+            pfl.push(elevation);
             path.advance();
         }
         let water_fraction = water_sample_count as f64 / (interval_count + 1) as f64;
-        let mut path_inputs = prediction_inputs;
+        let mut path_inputs = parameters.prediction_inputs;
         path_inputs.ground = ModelDefaults::LAND_WATER_V1
             .ground_for_water_fraction(water_fraction)
             .map_err(|error| CoverageError::Propagation(error.to_string()))?;
         let prediction = predict_p2p_pfl(&pfl, path_inputs)
             .map_err(|error| CoverageError::Propagation(error.to_string()))?;
         let received_power = received_power_dbm(
-            tx_power_dbm,
+            parameters.tx_power_dbm,
             config.tx_gain_dbi,
             config.rx_gain_dbi,
             prediction.basic_transmission_loss_db,
@@ -787,6 +813,45 @@ fn compute_chunk(
         }
     }
     Ok(ChunkResult { pixels })
+}
+
+fn resolve_tx_ground_elevation(
+    elevation_source: &impl ElevationSource,
+    config: CoverageConfig,
+) -> Result<f64, CoverageError> {
+    let dem_tx_ground_elevation_m = sample_terrain(elevation_source, config.center)?;
+    Ok(config
+        .tx_ground_elevation_override_m
+        .unwrap_or(dem_tx_ground_elevation_m))
+}
+
+fn profile_terrain_elevation(
+    elevation_source: &impl ElevationSource,
+    point: GeoPoint,
+    sample_index: usize,
+    tx_ground_elevation_m: f64,
+) -> Result<f64, CoverageError> {
+    if sample_index == 0 {
+        Ok(tx_ground_elevation_m)
+    } else {
+        sample_terrain(elevation_source, point)
+    }
+}
+
+fn sample_terrain(
+    elevation_source: &impl ElevationSource,
+    point: GeoPoint,
+) -> Result<f64, CoverageError> {
+    let elevation = elevation_source
+        .elevation_m(point.lon, point.lat)
+        .map_err(|message| CoverageError::Terrain { point, message })?;
+    if !elevation.is_finite() {
+        return Err(CoverageError::Terrain {
+            point,
+            message: "terrain elevation is not finite".into(),
+        });
+    }
+    Ok(f64::from(elevation))
 }
 
 fn generate_receivers(center: GeoPoint) -> Vec<Receiver> {
@@ -1068,6 +1133,130 @@ mod tests {
         assert_eq!(GRID_SIZE, 401);
         assert_eq!(GRID_PIXEL_COUNT, 160_801);
         assert!((PROFILE_SAMPLE_SPACING_M - 90.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn automatic_tx_ground_elevation_uses_the_validated_center_dem_sample() {
+        struct CountingElevation {
+            calls: AtomicUsize,
+            elevation_m: f32,
+        }
+
+        impl ElevationSource for CountingElevation {
+            fn elevation_m(&self, _lon: f64, _lat: f64) -> Result<f32, String> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                Ok(self.elevation_m)
+            }
+        }
+
+        let source = CountingElevation {
+            calls: AtomicUsize::new(0),
+            elevation_m: 412.25,
+        };
+        let config = CoverageConfig::base_to_handheld(
+            GeoPoint {
+                lat: 30.5,
+                lon: 103.5,
+            },
+            145.0,
+            1,
+        );
+        assert_eq!(
+            resolve_tx_ground_elevation(&source, config).unwrap(),
+            412.25
+        );
+        assert_eq!(source.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn manual_tx_ground_elevation_still_validates_dem_and_only_replaces_profile_origin() {
+        struct CountingElevation {
+            calls: AtomicUsize,
+        }
+
+        impl ElevationSource for CountingElevation {
+            fn elevation_m(&self, _lon: f64, _lat: f64) -> Result<f32, String> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                Ok(412.25)
+            }
+        }
+
+        let source = CountingElevation {
+            calls: AtomicUsize::new(0),
+        };
+        let mut config = CoverageConfig::base_to_handheld(
+            GeoPoint {
+                lat: 30.5,
+                lon: 103.5,
+            },
+            145.0,
+            1,
+        );
+        config.tx_ground_elevation_override_m = Some(800.0);
+        let effective = resolve_tx_ground_elevation(&source, config).unwrap();
+        assert_eq!(effective, 800.0);
+        assert_eq!(source.calls.load(Ordering::Relaxed), 1);
+
+        assert_eq!(
+            profile_terrain_elevation(&source, config.center, 0, effective).unwrap(),
+            800.0
+        );
+        assert_eq!(source.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            profile_terrain_elevation(&source, config.center, 1, effective).unwrap(),
+            412.25
+        );
+        assert_eq!(source.calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn manual_tx_ground_elevation_cannot_bypass_an_invalid_center_dem_sample() {
+        let mut config = CoverageConfig::base_to_handheld(
+            GeoPoint {
+                lat: 30.5,
+                lon: 103.5,
+            },
+            145.0,
+            1,
+        );
+        config.tx_ground_elevation_override_m = Some(800.0);
+        let error = resolve_tx_ground_elevation(
+            &FlatTerrain {
+                elevation_m: f32::NAN,
+            },
+            config,
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoverageError::Terrain { .. }));
+    }
+
+    #[test]
+    fn tx_ground_elevation_override_bounds_and_non_finite_values_are_rejected() {
+        let mut config = CoverageConfig::base_to_handheld(
+            GeoPoint {
+                lat: 30.5,
+                lon: 103.5,
+            },
+            145.0,
+            1,
+        );
+        for accepted in [-500.0, 9000.0] {
+            config.tx_ground_elevation_override_m = Some(accepted);
+            assert!(config.validate().is_ok());
+        }
+        for rejected in [
+            -500.001,
+            9000.001,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            config.tx_ground_elevation_override_m = Some(rejected);
+            assert!(matches!(
+                config.validate(),
+                Err(CoverageError::InvalidInput(_))
+            ));
+        }
     }
 
     #[test]
@@ -1402,8 +1591,11 @@ mod tests {
                 &terrain,
                 &UniformWater { is_water: false },
                 config,
-                inputs,
-                tx_power_dbm,
+                ChunkParameters {
+                    prediction_inputs: inputs,
+                    tx_power_dbm,
+                    tx_ground_elevation_m: 0.0,
+                },
                 &[receiver],
                 None,
             )
@@ -1412,8 +1604,11 @@ mod tests {
                 &terrain,
                 &UniformWater { is_water: true },
                 config,
-                inputs,
-                tx_power_dbm,
+                ChunkParameters {
+                    prediction_inputs: inputs,
+                    tx_power_dbm,
+                    tx_ground_elevation_m: 0.0,
+                },
                 &[receiver],
                 None,
             )

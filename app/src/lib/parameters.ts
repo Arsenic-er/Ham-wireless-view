@@ -6,7 +6,10 @@ import type {
   ScenarioPreset,
 } from "./types";
 
-const PRESETS: Record<ScenarioPreset, Omit<RadioParameters, "preset" | "band" | "frequencyMhz" | "polarization">> = {
+const PRESETS: Record<
+  ScenarioPreset,
+  Omit<RadioParameters, "preset" | "band" | "frequencyMhz" | "polarization" | "txGroundElevationOverrideM">
+> = {
   "base-to-handheld": {
     powerValue: 25,
     powerUnit: "watt",
@@ -34,6 +37,7 @@ export const DEFAULT_PARAMETERS: RadioParameters = {
   band: "vhf144",
   frequencyMhz: 145,
   polarization: "vertical",
+  txGroundElevationOverrideM: null,
   ...PRESETS["base-to-handheld"],
 };
 
@@ -110,6 +114,14 @@ export function parameterValidationMessage(parameters: RadioParameters): string 
     if (!Number.isFinite(value) || value < 0.5 || value > 500) {
       return `${label}应为 0.5–500 m`;
     }
+  }
+  if (
+    parameters.txGroundElevationOverrideM !== null &&
+    (!Number.isFinite(parameters.txGroundElevationOverrideM) ||
+      parameters.txGroundElevationOverrideM < -500 ||
+      parameters.txGroundElevationOverrideM > 9000)
+  ) {
+    return "发射点地面海拔覆盖应为 -500–9000 m AMSL";
   }
   return null;
 }

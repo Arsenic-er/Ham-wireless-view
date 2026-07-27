@@ -16,6 +16,10 @@ describe("radio parameters", () => {
     expect(handheld.powerValue).toBe(5);
     expect(handheld.txHeightM).toBe(1.5);
     expect(handheld.rxHeightM).toBe(20);
+    expect(handheld.txGroundElevationOverrideM).toBeNull();
+
+    const preserved = applyPreset({ ...DEFAULT_PARAMETERS, txGroundElevationOverrideM: 512.5 }, "handheld-to-base");
+    expect(preserved.txGroundElevationOverrideM).toBe(512.5);
   });
 
   it("selects a deterministic default frequency for each band", () => {
@@ -37,6 +41,23 @@ describe("radio parameters", () => {
       parameterValidationMessage({ ...DEFAULT_PARAMETERS, frequencyMhz: 435 }),
     ).toContain("144.00–148.00");
     expect(parameterValidationMessage(DEFAULT_PARAMETERS)).toBeNull();
+  });
+
+  it("accepts the inclusive ground-elevation override bounds", () => {
+    expect(
+      parameterValidationMessage({ ...DEFAULT_PARAMETERS, txGroundElevationOverrideM: -500 }),
+    ).toBeNull();
+    expect(
+      parameterValidationMessage({ ...DEFAULT_PARAMETERS, txGroundElevationOverrideM: 9000 }),
+    ).toBeNull();
+  });
+
+  it("rejects invalid manual ground elevations while allowing DEM automatic mode", () => {
+    expect(parameterValidationMessage(DEFAULT_PARAMETERS)).toBeNull();
+    for (const value of [-500.01, 9000.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(parameterValidationMessage({ ...DEFAULT_PARAMETERS, txGroundElevationOverrideM: value }))
+        .toContain("-500–9000 m AMSL");
+    }
   });
 });
 

@@ -81,6 +81,7 @@ function buildRequest(point: MapPoint, parameters: RadioParameters): Calculation
     txGainValue: parameters.txGainValue,
     txGainUnit: parameters.txGainUnit,
     txHeightM: parameters.txHeightM,
+    txGroundElevationOverrideM: parameters.txGroundElevationOverrideM,
     rxGainValue: parameters.rxGainValue,
     rxGainUnit: parameters.rxGainUnit,
     rxHeightM: parameters.rxHeightM,
@@ -533,9 +534,18 @@ export function App() {
 
   function handlePointSelect(value: MapPoint) {
     if (isBusy) return;
+    const selectedNewPoint =
+      point === null || point.lat !== value.lat || point.lon !== value.lon;
     setInspection(null);
     setWorkflow("inspecting");
     setPoint(value);
+    if (selectedNewPoint) {
+      setParameters((current) =>
+        current.txGroundElevationOverrideM === null
+          ? current
+          : { ...current, txGroundElevationOverrideM: null },
+      );
+    }
     setResult(null);
     setResultStale(false);
     setProgress(null);
