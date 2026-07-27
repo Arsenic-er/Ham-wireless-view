@@ -3,10 +3,11 @@
 - 初始日期：2026-07-24
 - 恢复切片更新：2026-07-27
 - operation 协议切片更新：2026-07-27
+- 渐进覆盖预览更新：2026-07-27
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
-- 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`
-- 状态：旧协议私有平台与真实成都显示保留为历史证据；operation capability 新切片已完成 full build、受管 stop/start/readiness、代码回归和两次真实 HTTP 烟雾，SSH 隧道浏览器可见进度仍待补，且始终不替代整机重启、Windows/Tauri 与地图合规验收
+- 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`
+- 状态：历史构建保留为分节证据；当前渐进覆盖切片已完成 full build、受管 stop/start/readiness、自动化与两次真实成都 HTTP 烟雾，Windows x64 交叉构建成功；SSH 隧道浏览器可见过程、Windows/Tauri 实机和地图合规仍待验
 
 ## 1. 目标与边界
 
@@ -35,7 +36,8 @@ gpu-273312 127.0.0.1:1421
             ├─ CacheStore / 2.5 GB hard cap
             ├─ GLO-90 DEM + WBM
             ├─ Coverage / NTIA ITM
-            └─ map/report PNG results in memory
+            ├─ active latest-only preview in memory
+            └─ authoritative map/report PNG results in synchronous response
 ```
 
 HTTP 层只做协议适配。频段、单位换算、坐标校验、固定数据源、缓存完整性、配额、DEM/WBM 读取、ITM 和覆盖层仍由共享 Rust 服务执行。
@@ -60,6 +62,7 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 | POST | `/api/inspect-point` | 区域计划、ready 状态和中心高程 |
 | POST | `/api/operation-ticket` | 为 estimate/download/calculation 签发短期 capability |
 | POST | `/api/operation-status` | exact-ID 状态、sequence 与白名单进度快照 |
+| POST | `/api/operation-preview` | 活动 exact-ID calculation 的 latest-only 临时地图覆盖层 |
 | POST | `/api/operation-ack` | exact-ID 回收 reserved/terminal 快照 |
 | POST | `/api/estimate-download` | 带 operationId 的固定来源下载量与配额预检 |
 | POST | `/api/download-region` | 带 operationId 的 DEM/WBM 下载、生成、校验与 ready |
@@ -78,7 +81,11 @@ status 只返回 schema version、operation ID、kind、`reserved/running/cancel
 
 progress、cancel、finish 与 lease Drop 使用同一 mutex，并同时核对 ID/generation。取消先被接受时丢弃后来成功，finish 先完成时迟到取消不能命中下一任务，未正常 finish 的 Drop 发布 failed 终态。同步长请求仍是结果的唯一权威来源，状态端点不承担 PNG 结果恢复。
 
-validation 浏览器在长请求前领取 ticket，以约 250 ms 的递归定时器执行非重叠 status POST，把新 sequence 分发给既有 calculation/download 进度监听器。每个 handle 保存 ticket promise、ID 与客户端 generation；旧 poll 和迟到响应不能更新新任务。取消共享 3 秒总 deadline；长请求 settle 后停止轮询，final status 与 best-effort ack 各有 1.5 秒上限，并按 handle identity 先释放当前 handle 再 ack。
+`operation-preview` 严格接收 `{"operationId":"…","afterSequence":N}`。只有相同 exact ID 的活动 calculation 且存在更大的 preview sequence 时返回 HTTP 200 和 schema 1 覆盖层；未知但格式有效的 ID、reserved/非 calculation、无更新、取消中或终态返回 204 空体。preview sequence 与 status sequence 相互独立。服务器只保留活动任务最新帧，取消、完成、失败或 Drop 都清除它，terminal 与 status 继续不含 PNG。
+
+该端点显式携带临时结果，不应被“status 不含结果”的安全声明掩盖。持有活动 operation capability 的同源调用方可以读取预览，因此 ID 仍只位于 POST JSON body，并依赖回环监听、Host 校验、无 CORS 与 SSH 隧道边界；预览不进入 URL、日志、终态或持久缓存。
+
+validation 浏览器在长请求前领取 ticket，以约 250 ms 的递归定时器执行非重叠轮次：先请求 status 并分发新的进度 sequence，再为 calculation 串行请求 `operation-preview`，初始 `afterSequence=0`。每个 handle 保存 ticket promise、ID、客户端 generation 和最后 preview sequence；旧 poll 和迟到响应不能更新新任务。取消共享 3 秒总 deadline；长请求 settle 后停止轮询，final status 与 best-effort ack 各有 1.5 秒上限，并按 handle identity 先释放当前 handle 再 ack。
 
 `/healthz` 是不打开缓存的轻量进程存活检查，只返回 HTTP 状态和协议 schema。需要确认 `CacheStore` 能获得锁、完成重启整理并满足配额时，调用方必须成功执行 `/api/bootstrap`；因此管理脚本的 `health` 结果不能替代数据就绪判断。
 
@@ -204,6 +211,14 @@ scripts/validation-platform.sh stop
 
 full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2026-07-26T19:02:43Z`，server SHA-256 为 `e80c8890ebcd2059341cd495e78546d51287a916776f0a1991e8d99f062afa0c`。受管部署与两次真实回环烟雾见 9.5 节；浏览器可见进度和控制台结果仍需单列，不得从 HTTP 测试推断。
 
+### 8.5 渐进覆盖预览
+
+当前切片实际通过 Rust workspace offline `100 passed / 3 ignored`、真实 GLO-90 HTTPS `3/3`、coverage `20`、app-service `17`、validation-server `19` 和前端 `7 files / 51 tests`。专项 crate 数量包含在 workspace 总数中。rustfmt、Clippy workspace `--all-targets -D warnings`、TypeScript、Vite validation build、Windows x64 full xwin、`bash -n`、管理 self-test 与 diff check 通过。
+
+功能 full build revision 为 `a1219c5ca3254a2a40a50829526cd9bd062d8ea9`，`built_at=2026-07-27T05:48:52Z`，server SHA-256 为 `03bb62e9bc4facdba01c1693fbf2a63ab70d961606a09cfed6fe9b128c845bd2`。测试脚本竞态修复 revision `88204765182de7e842859e672050614c091f1986` 未重建服务二进制。
+
+受管部署与两次真实渐进预览烟雾见 9.7 节和 `18-progressive-coverage-preview-validation.md`。这些证据不证明 Windows WebView2↔Rust Channel 或 SSH 隧道中的用户可见过程。
+
 ## 9. 真实成都验证
 
 中心坐标：`30.5°N, 103.5°E`。
@@ -323,9 +338,37 @@ revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管 stop/build/s
 
 本节仍不关闭 SSH 隧道浏览器视觉、Windows/Tauri、弱网/磁盘压力或地图合规。
 
+### 9.7 渐进式覆盖预览受管验收
+
+功能 revision `a1219c5ca3254a2a40a50829526cd9bd062d8ea9` 完成 full build 和受管 stop/build/start：
+
+| 字段 | 结果 |
+|---|---|
+| built_at | `2026-07-27T05:48:52Z` |
+| PID | `1403529` |
+| bind | `127.0.0.1:1421` |
+| server SHA-256 | `03bb62e9bc4facdba01c1693fbf2a63ab70d961606a09cfed6fe9b128c845bd2` |
+| liveness/readiness | status、health、self-test、bootstrap、cache overview 通过 |
+
+`scripts/validation-progressive-preview-smoke.sh` 在成都真实缓存上两次通过。每次都观察到 2 张 schema 1、sequence/完成数/PNG 内容不同的部分覆盖层；总像素 `125,628`，最后预览分别完成 `123,410` 和 `121,808`，首帧分别为 `5,610 ms` 和 `5,660 ms`，总耗时分别为 `7,246 ms` 和 `7,301 ms`。
+
+烟雾同时验证：
+
+- 每帧为 EPSG:3857、`401×401`，PNG signature/IHDR 有效且 `completed < total`；
+- 最终同步响应为 schema 3，包含有效原始热力图和地图 overlay，且不含 preview 字段；
+- terminal 后 preview 返回 204，status/terminal 不含 PNG，ack 后 status 返回 404；
+- 缓存前后均为 `133,071,416 bytes`、`partial=0`，两个区域各 `50/50 ready`；
+- schema 3 recovery smoke 随后连续两次通过。
+
+干净重启后的进程基线 `VmHWM/VmRSS=2,920 KiB`；第二次计算后 `VmHWM=195,484 KiB`、`VmRSS=20,200 KiB`。这是整个 Linux 进程的高水位，不是预览增量内存，也不能外推到 Windows。
+
+第一次烟雾因测试脚本观察 curl 子进程退出与 HTTP 状态文件之间的竞态而失败；应用始终健康、无缓存变化和临时目录残留。提交 `88204765182de7e842859e672050614c091f1986` 只修复脚本并在退出后继续硬性校验 curl 状态、状态文件与 HTTP 200，没有重建 `a1219c5` 服务二进制。
+
+完整自动化数量、Windows 交叉产物哈希和逐次指标见 `18-progressive-coverage-preview-validation.md`。本节只关闭受管回环平台；SSH 隧道浏览器可见过程和 Windows WebView2↔Rust Channel 仍待验。
+
 ## 10. 尚未关闭
 
-- operation capability 的代码回归、新构建和受管 HTTP 烟雾已通过；SSH 隧道浏览器可见进度、取消/重试 UI 和控制台仍待验证；
+- operation capability 与渐进覆盖预览的代码回归、新构建和受管 HTTP 烟雾已通过；SSH 隧道浏览器可见预览、取消/重试 UI 和控制台仍待验证；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；
 - 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程强制崩溃注入；
 - GPU 主机整机重启后的手动恢复流程；

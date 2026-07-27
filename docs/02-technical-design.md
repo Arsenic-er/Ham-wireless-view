@@ -159,6 +159,40 @@ validation 浏览器在启动长请求前领取 ticket，保留 ticket promise�
 
 2026-07-27 的 full build revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 已完成 server/frontend 回归和两次真实回环烟雾。每次烟雾都为 ID-A 与 ID-B 各至少观察到一个真实 calculation progress snapshot，观测时 `sequence=2`；同时通过 exact-ID/family 取消、reserved ticket 复用、terminal/ack 隔离与双 PNG 恢复。该证据只关闭受管 HTTP 协议与进度快照；通过 SSH 隧道看到浏览器中的逐阶段进度、取消屏障和无控制台错误仍待实测。
 
+### 4.2.3 渐进式覆盖预览
+
+渐进式预览复用最终传播计算，不建立第二套模型。coverage 层在原有结果与进度之外提供只读像素批次回调；worker 可以并发调用，借用切片只在回调期间有效，每批最多 64 个 `CoveragePixel { raster_index, received_power_dbm }`。批次回调可能先于对应 progress 计数，因此两者只分别保证单调，不要求瞬时相等。所有批次合并后必须与原有最终 `CoverageGrid` 完全一致；未使用批次回调的既有 API 行为不变，也不承担预览编码开销。
+
+`AppService::calculate_with_preview` 在一次计算内维护一个初始全为 NaN 的 `401×401` 栅格。worker 只合并批次；编码只由一个专用线程执行，避免多个 worker 同时压缩 PNG。每跨过约 5% 有效像素阈值只向容量 1 的有界信号通道执行非阻塞通知，编码线程再以至少 800 ms 的间隔合并通知并读取最新快照。已经完成的像素使用与最终覆盖层相同的 EPSG:3857 重投影和固定色标，尚未完成的 NaN 像素透明。编码失败只跳过该帧，不改变最终计算结果。
+
+预览契约独立使用 schema 1：
+
+```text
+CalculationPreview
+  schemaVersion = 1
+  sequence
+  completedPixelCount / totalPixelCount
+  mapOverlayProjection = "EPSG:3857"
+  mapOverlayWidth / mapOverlayHeight = 401
+  mapOverlayCorners
+  mapOverlayPngDataUrl
+```
+
+`sequence` 与完成像素数严格递增；实现不发送 100% 预览，100% 只由最终 `CalculationResult` 表示。预览没有统计摘要、原始报告 PNG 或导出身份，且不写入计算缓存。计算足够快、取消发生较早或 transport 已关闭时允许零帧预览，最终结果语义不受影响。
+
+桌面端 `calculate` 命令为每次调用接收一个 Tauri IPC `Channel<CalculationPreview>`，而 `calculation-progress` 继续使用事件。Channel 生命周期限定在对应 invoke；前端只接收 schema、投影和严格递增 sequence 均有效的消息，invoke settle 后关闭接收，迟到消息不能进入下一次计算。
+
+私有 validation 平台增加：
+
+```text
+POST /api/operation-preview
+{"operationId":"…","afterSequence":0}
+```
+
+只有相同 exact ID 的活动 calculation 且存在 `sequence > afterSequence` 的最新帧时返回 HTTP 200；未知但格式有效的 ID、尚无新帧、非计算操作、取消中或终态返回 204，无效 JSON、未知字段、错误媒体类型和无效 ID 格式按 API 错误处理。服务器每个活动任务只保存最新一帧，不把 PNG 放入 status/terminal；取消、完成、失败或 lease Drop 都清除它。浏览器在每次 status 轮询之后串行请求 preview，保持请求不重叠，并同时校验 ID、generation 和 sequence；preview sequence 与 status sequence 相互独立。
+
+React 分开保存临时 `preview` 和权威 `result`。地图可以显示二者之一，但导出只读取 `result`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；成功响应先成为权威结果并替换预览。MapLibre 对相同 data URL 复用对象 URL，替换与卸载时释放旧对象 URL。决策依据见 ADR 0016，运行证据见 `18-progressive-coverage-preview-validation.md`。
+
 ### 4.3 原生传播层
 
 - 使用 NTIA 官方 ITM C++ 代码作为固定版本的第三方依赖。

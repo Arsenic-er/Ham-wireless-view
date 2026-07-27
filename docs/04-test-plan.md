@@ -421,3 +421,40 @@ ADR 0013 用服务端签发的短期 UUIDv4 capability 取代“按 kind 取消�
 - [ ] 十进制 2.5 GB 实体缓存、磁盘不足、强制崩溃、整机重启、日志压力与地图合规。
 
 只有对应证据完成后才能逐项勾选；Linux 自动化、真实 HTTPS 或 xwin check 不能外推为浏览器视觉、Windows 实机或中国大陆地图合规通过。
+
+## 23. 渐进式传播覆盖预览检查点（2026-07-27）
+
+ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆盖层。本节记录功能提交 `a1219c5ca3254a2a40a50829526cd9bd062d8ea9` 与测试工具提交 `88204765182de7e842859e672050614c091f1986` 的证据；旧章节的历史数量不回填。
+
+### 23.1 引擎与应用服务
+
+- [x] 可选像素批次入口不改变无预览 API；批次最多 64 个像素，索引合法、完成像素不重复。
+- [x] 并发批次合并后的完整栅格与非批次最终 `CoverageGrid` 完全一致。
+- [x] 累计栅格初始 NaN，未完成区域编码透明；最终覆盖层继续由规范完整栅格生成。
+- [x] 约 5% 信号阈值、容量 1 非阻塞合并、单编码线程和至少 800 ms 编码间隔由定向测试覆盖。
+- [x] preview sequence 与完成数严格递增，100% 预览不发送；编码失败/transport 关闭不使权威计算失败。
+- [x] schema 1 只含完成计数和 EPSG:3857 地图 PNG，不含原始报告 PNG、最终统计或导出身份。
+
+### 23.2 validation、Tauri 与 React
+
+- [x] `/api/operation-preview` 严格解析 `{operationId, afterSequence}`；活动 exact-ID calculation 有新帧时 200，未知/无更新/非 calculation/终态时 204。
+- [x] 服务端仅保存活动任务最新帧；取消、成功、失败和 Drop 清理；status/terminal/ack 持续不含 PNG 或 Data URL。
+- [x] validation 前端每轮 status→preview 串行且不重叠，初始 `afterSequence=0`，旧 ID/generation/handle/sequence 和迟到响应不能污染新任务。
+- [x] Tauri JS 使用真实 `Channel` 对象的 mockIPC 契约测试；Rust 命令参数、schema 过滤和 invoke settle 后迟到消息抑制通过。
+- [x] React 分离 `preview` 与 `result`；预览不可导出，成功最终结果替换，取消/失败/新点/参数/清空均清除或抑制预览。
+- [x] MapLibre Blob URL 在相同帧复用，并在替换、清空和卸载时释放。
+
+### 23.3 全量门禁与受管运行
+
+- [x] Rust workspace offline：`100 passed / 3 ignored`；真实 GLO-90 HTTPS 另行 `3/3`。
+- [x] coverage `20`、app-service `17`、validation-server `19` 项专项测试通过；这些已包含在 workspace 总数中。
+- [x] 前端 `7 files / 51 tests`，TypeScript 与 Vite validation build 通过。
+- [x] rustfmt、Clippy workspace `--all-targets -D warnings`、Windows x64 full xwin 构建、`bash -n`、管理 self-test 与 diff check 通过。
+- [x] 成都真实缓存两次烟雾均得到 2 张 sequence/完成数/PNG 内容不同的预览；首帧分别 5,610/5,660 ms，总耗时 7,246/7,301 ms。
+- [x] 每帧 schema 1、`0 < completed < total`、EPSG:3857、`401×401`、PNG/IHDR 有效；最终 schema 3 双 PNG 有效，terminal preview 为 204 且 status 无 PNG。
+- [x] 缓存前后均 `133,071,416 bytes`、`partial=0`、两个区域各 `50/50 ready`；recovery smoke 连续两次通过。
+- [ ] 经 SSH 隧道在浏览器观察完整渐进过程、取消/重试和控制台。
+- [ ] Windows 10/11 实机验证 WebView2↔Rust Channel、连续 MapLibre 更新、取消迟到消息、安装/卸载和内存。
+- [ ] 中国大陆合规底图、审图号、离线与导出授权。
+
+完整运行指标、构建产物哈希、进程高水位与烟雾脚本竞态说明见 `18-progressive-coverage-preview-validation.md`。Windows 交叉构建成功只证明可编译和打包，不能勾选 Windows 实机或地图合规门槛。

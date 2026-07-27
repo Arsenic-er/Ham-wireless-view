@@ -54,6 +54,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 - `docs/15-private-validation-platform.md`：SSH 隧道私有验证平台、三态前端、运行边界与验证记录。
 - `docs/16-recovery-and-cancellation-validation.md`：缓存重启恢复、配额边界、取消线性化和私有平台管理脚本加固记录。
 - `docs/17-manual-elevation-and-download-transport-validation.md`：手动发射点地面海拔、有界下载、schema 3 与受管真实计算证据。
+- `docs/18-progressive-coverage-preview-validation.md`：渐进式覆盖预览、双传输契约、真实成都运行与 Windows 待验边界。
 - `docs/decisions/`：带证据的工程决策记录。
 
 ## 开发与构建
@@ -159,6 +160,8 @@ scripts/validation-platform.sh stop
 验证模式会把坐标、无线电参数和计算请求发送到用户控制的 JAIST 服务器，因此它是桌面“坐标和结果只留本机”原则的明确内部测试例外。只使用测试坐标，不要输入不愿离开本机的敏感位置。服务器仍通过共享 `AppService` 执行固定来源、2.5 GB 配额、DEM/WBM 完整性和 ITM 规则；浏览器没有服务器文件路径权限，服务端也没有导出端点。
 
 所有运行数据、PID、日志和构建元数据都在项目的 `.runtime/validation-platform/`，不会写入 Windows 本机，也不使用 Docker、系统服务或系统级运行目录。`start` 可安全重复执行并在 SSH 断开后继续运行，但服务器整机重启后仍需要手动执行；`self-test` 检查脚本不变量。适配新协议后的 `validation-recovery-smoke.sh` 已连续两次验证 ticket 消费、未知 ID/错 family 不可取消、busy 不消费 reserved ticket、状态进度、终态确认、无半结果、同票重算恢复、唯一可解码 `401×401` 双 PNG，以及最终 gate/health 与临时目录清理；浏览器可见进度仍单列待验。日志、进程控制与运行证据见 `docs/15-private-validation-platform.md` 和 `docs/16-recovery-and-cancellation-validation.md`。
+
+`validation-progressive-preview-smoke.sh` 已在同一成都真实缓存上连续两次取得 2 张不同的部分覆盖层，并验证最终 schema 3 双 PNG、终态无 PNG、ack 和缓存不变性。预览不可导出，最终结果是唯一权威响应；Windows WebView2↔Rust Channel 仍需实机验收。完整证据见 `docs/18-progressive-coverage-preview-validation.md`。
 
 Tauri 壳层位于 `app/src-tauri/`。JAIST Linux 负责前端、共享 Rust 服务、浏览器视觉回归和内部 Windows 交叉构建；正式发布仍必须在 Windows 10/11 验证 WebView2、安装包和文件系统行为。
 
