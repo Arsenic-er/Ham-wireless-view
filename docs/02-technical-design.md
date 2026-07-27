@@ -388,7 +388,8 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - HEAD 元数据只有 HTTP 200 可作为存在对象；HTTP 404 只进入既有的 DEM/WBM 成对海洋判定，其他 2xx/3xx/4xx/5xx 都是网络/完整性错误。
 - AWS 公开对象提供 Content-Length 和 Range，但当前没有逐瓦片、经认证的 SHA-256 清单。首次下载以 HTTPS、域名白名单和长度验证为基础，完成后记录本地 SHA-256，之后每次计算前复核。公开发行前仍应生成并签名应用自己的固定版本清单。
 - 每个地理单元同时规划 DEM 与 WBM。只有同单元的两个固定 URL 都返回 `404` 才生成纯海洋资产；单边 `404`、超时或服务器错误均不可降级。生成资产也经过 SHA-256、原子提交和配额核算。
-- 取消、响应体读取错误和早于 Content-Length 的 EOF 都先对 partial 执行 `sync_all` 并把实际长度写回 SQLite，再返回取消或网络错误。系统不自动重试；用户再次发起准备时，只有强 ETag、Range 能力、期望大小和磁盘/索引长度全部一致才继续该 partial，否则按既有完整性规则安全重下。
+- 取消、响应体读取错误和早于 Content-Length 的 EOF 都先对 partial 执行 `sync_all` 并把完整写入长度写回 SQLite，再返回取消或网络错误。
+- `write_all` 部分写入后失败时，根据受界的实际文件游标 best-effort 同步 partial/SQLite，同时始终返回原始写错误；游标读取失败、游标越出本块受界范围或二次检查点失败时，先标记 corrupt，再关闭并删除不可信 partial，清理失败也由重启 reconcile 按 corrupt 状态删除。系统不自动重试；用户再次发起准备时，只有强 ETag、Range 能力、期望大小和磁盘/索引长度全部一致才继续该 partial。
 
 传输加固决策见 ADR 0015。
 
@@ -467,7 +468,7 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - schema 3 的 `txGroundElevationM` 与 `txGroundElevationSource` 序列化，以及 bootstrap schema 2 不变。
 - 场景预设保留覆盖、新点重置 DEM 自动、清空热力图保留覆盖、冻结导出读取结果而非表单。
 - 下载 Agent 的 HTTPS-only、零重定向与有限超时配置；HEAD 只接受 200 元数据。
-- 取消、读取错误和 early EOF 都同步文件并更新 partial 索引，合法强 ETag/Range 重试可续传。
+- 取消、读取错误、early EOF 和部分写入错误都覆盖 partial/SQLite 一致性；写错误后的游标读取失败、游标越界或检查点失败均不掩盖原始错误，且不可信 partial 不能在同进程或重启后续传。
 
 ### 13.2 ITM 回归
 

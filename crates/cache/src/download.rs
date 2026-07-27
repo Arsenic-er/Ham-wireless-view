@@ -85,20 +85,34 @@ struct PartialDownloadStream<'a, F> {
     on_progress: &'a mut F,
 }
 
+trait DurablePartialOutput: Write + Seek {
+    fn sync_all(&mut self) -> Result<(), std::io::Error>;
+}
+
+impl DurablePartialOutput for File {
+    fn sync_all(&mut self) -> Result<(), std::io::Error> {
+        File::sync_all(self)
+    }
+}
+
 impl<F> PartialDownloadStream<'_, F>
 where
     F: FnMut(&DownloadProgress),
 {
-    fn checkpoint(&self, output: &mut File, written: u64) -> Result<(), CacheError> {
+    fn checkpoint<O: DurablePartialOutput>(
+        &self,
+        output: &mut O,
+        written: u64,
+    ) -> Result<(), CacheError> {
         output.sync_all()?;
         self.store
             .update_partial_size(&self.asset.descriptor.asset_key, written)
     }
 
-    fn copy_from<R: Read>(
+    fn copy_from<R: Read, O: DurablePartialOutput>(
         &mut self,
         reader: &mut R,
-        mut output: File,
+        mut output: O,
         partial_path: &std::path::Path,
         offset: u64,
     ) -> Result<u64, CacheError> {
@@ -129,13 +143,14 @@ where
                 }
                 return Ok(written);
             }
-            written = written
-                .checked_add(count as u64)
-                .ok_or_else(|| CacheError::Integrity {
-                    asset_key: self.asset.descriptor.asset_key.clone(),
-                    message: "download byte counter overflowed".into(),
-                })?;
-            if written > self.asset.expected_size_bytes {
+            let next_written =
+                written
+                    .checked_add(count as u64)
+                    .ok_or_else(|| CacheError::Integrity {
+                        asset_key: self.asset.descriptor.asset_key.clone(),
+                        message: "download byte counter overflowed".into(),
+                    })?;
+            if next_written > self.asset.expected_size_bytes {
                 output.sync_all()?;
                 drop(output);
                 std::fs::remove_file(partial_path)?;
@@ -143,12 +158,30 @@ where
                 return Err(CacheError::Integrity {
                     asset_key: self.asset.descriptor.asset_key.clone(),
                     message: format!(
-                        "server sent more bytes than declared: {written} > {}",
+                        "server sent more bytes than declared: {next_written} > {}",
                         self.asset.expected_size_bytes
                     ),
                 });
             }
-            output.write_all(&buffer[..count])?;
+            if let Err(write_error) = output.write_all(&buffer[..count]) {
+                let checkpoint_succeeded = match output.stream_position() {
+                    Ok(position) if (written..=next_written).contains(&position) => {
+                        self.checkpoint(&mut output, position).is_ok()
+                    }
+                    _ => false,
+                };
+                if !checkpoint_succeeded {
+                    // Keep the write failure as the primary error, but never let
+                    // bytes that failed the durability/index checkpoint become a
+                    // resumable prefix. Marking corrupt before closing makes a
+                    // later reconcile discard the file if immediate removal fails.
+                    let _ = self.store.mark_corrupt(&self.asset.descriptor.asset_key);
+                    drop(output);
+                    let _ = self.store.discard_partial(&self.asset.descriptor);
+                }
+                return Err(CacheError::Io(write_error));
+            }
+            written = next_written;
             *self.total_downloaded_bytes += count as u64;
             (self.on_progress)(&DownloadProgress {
                 asset_index: self.asset_index,
@@ -691,6 +724,60 @@ mod tests {
         }
     }
 
+    struct FailAfterPartialWrite {
+        inner: File,
+        bytes_before_error: usize,
+        fail_sync: bool,
+        fail_seek: bool,
+        seek_position_override: Option<u64>,
+    }
+
+    impl Write for FailAfterPartialWrite {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            if self.bytes_before_error == 0 {
+                return Err(io::Error::other("scripted partial write failure"));
+            }
+            let count = buffer.len().min(self.bytes_before_error);
+            let written = self.inner.write(&buffer[..count])?;
+            self.bytes_before_error -= written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    impl Seek for FailAfterPartialWrite {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            if self.fail_seek {
+                return Err(io::Error::other("scripted seek failure"));
+            }
+            if let Some(position) = self.seek_position_override {
+                return Ok(position);
+            }
+            self.inner.seek(position)
+        }
+    }
+
+    impl DurablePartialOutput for FailAfterPartialWrite {
+        fn sync_all(&mut self) -> Result<(), io::Error> {
+            if self.fail_sync {
+                Err(io::Error::other("scripted sync failure"))
+            } else {
+                self.inner.sync_all()
+            }
+        }
+    }
+
+    fn assert_scripted_write_error(error: CacheError) {
+        let CacheError::Io(error) = error else {
+            panic!("partial write failure must remain an I/O error");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "scripted partial write failure");
+    }
+
     fn prepared_stream(
         name: &str,
         expected_size_bytes: u64,
@@ -726,6 +813,130 @@ mod tests {
             transfer: AssetTransfer::Https,
         };
         (directory, store, asset, partial_path, output)
+    }
+
+    #[test]
+    fn partial_write_error_checkpoints_actual_length_for_same_process_resume() {
+        let (_directory, mut store, asset, partial_path, mut output) =
+            prepared_stream("write-error", 8);
+        output.write_all(b"abcd").unwrap();
+        output.sync_all().unwrap();
+        store
+            .update_partial_size(&asset.descriptor.asset_key, 4)
+            .unwrap();
+        let output = FailAfterPartialWrite {
+            inner: output,
+            bytes_before_error: 2,
+            fail_sync: false,
+            fail_seek: false,
+            seek_position_override: None,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut reader = ScriptedReader::new([ReadStep::Bytes(b"efgh".to_vec())]);
+        let mut total = 0;
+        let mut progress = Vec::new();
+
+        let error = {
+            let mut stream = PartialDownloadStream {
+                store: &store,
+                asset: &asset,
+                cancelled: &cancelled,
+                asset_index: 0,
+                asset_count: 1,
+                total_downloaded_bytes: &mut total,
+                total_expected_bytes: 4,
+                on_progress: &mut |value: &DownloadProgress| progress.push(value.clone()),
+            };
+            stream
+                .copy_from(&mut reader, output, &partial_path, 4)
+                .unwrap_err()
+        };
+
+        assert_scripted_write_error(error);
+        assert_eq!(partial_path.metadata().unwrap().len(), 6);
+        let stored = store.asset(&asset.descriptor.asset_key).unwrap().unwrap();
+        assert_eq!(stored.state, crate::CacheState::Downloading);
+        assert_eq!(stored.size_bytes, 6);
+        assert_eq!(total, 0);
+        assert!(progress.is_empty());
+        assert_eq!(
+            store
+                .resumable_bytes_for_probe(&asset.descriptor, 8, Some("\"test\""), true)
+                .unwrap(),
+            6
+        );
+    }
+
+    #[test]
+    fn checkpoint_or_cursor_failure_discards_untrusted_partial() {
+        for (name, fail_sync, fail_seek, seek_position_override) in [
+            ("write-error-sync", true, false, None),
+            ("write-error-seek", false, true, None),
+            ("write-error-cursor-range", false, false, Some(9)),
+        ] {
+            let (directory, store, asset, partial_path, mut output) = prepared_stream(name, 8);
+            output.write_all(b"abcd").unwrap();
+            output.sync_all().unwrap();
+            store
+                .update_partial_size(&asset.descriptor.asset_key, 4)
+                .unwrap();
+            let output = FailAfterPartialWrite {
+                inner: output,
+                bytes_before_error: 2,
+                fail_sync,
+                fail_seek,
+                seek_position_override,
+            };
+            let cancelled = AtomicBool::new(false);
+            let mut reader = ScriptedReader::new([ReadStep::Bytes(b"efgh".to_vec())]);
+            let mut total = 0;
+            let mut progress = Vec::new();
+
+            let error = {
+                let mut stream = PartialDownloadStream {
+                    store: &store,
+                    asset: &asset,
+                    cancelled: &cancelled,
+                    asset_index: 0,
+                    asset_count: 1,
+                    total_downloaded_bytes: &mut total,
+                    total_expected_bytes: 4,
+                    on_progress: &mut |value: &DownloadProgress| progress.push(value.clone()),
+                };
+                stream
+                    .copy_from(&mut reader, output, &partial_path, 4)
+                    .unwrap_err()
+            };
+
+            assert_scripted_write_error(error);
+            assert!(!partial_path.exists());
+            let stored = store.asset(&asset.descriptor.asset_key).unwrap().unwrap();
+            assert_eq!(stored.state, crate::CacheState::Missing);
+            assert_eq!(stored.size_bytes, 0);
+            assert_eq!(stored.source_etag, None);
+            assert_eq!(
+                stored.expected_size_bytes, 0,
+                "discarded bytes cannot retain a resumable size contract"
+            );
+            assert_eq!(total, 0);
+            assert!(progress.is_empty());
+
+            drop(store);
+            let mut reopened = CacheStore::open(&directory.0).unwrap();
+            assert!(!partial_path.exists());
+            let reopened_asset = reopened
+                .asset(&asset.descriptor.asset_key)
+                .unwrap()
+                .unwrap();
+            assert_eq!(reopened_asset.state, crate::CacheState::Missing);
+            assert_eq!(reopened_asset.size_bytes, 0);
+            assert_eq!(
+                reopened
+                    .resumable_bytes_for_probe(&asset.descriptor, 8, Some("\"test\""), true)
+                    .unwrap(),
+                0
+            );
+        }
     }
 
     #[test]

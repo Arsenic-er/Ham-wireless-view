@@ -297,7 +297,7 @@ export function ParameterPanel({
             onChange({
               ...parameters,
               txGroundElevationOverrideM:
-                mode === "manual" ? (elevationM ?? 0) : null,
+                mode === "manual" ? elevationM : null,
             });
           }}
         />

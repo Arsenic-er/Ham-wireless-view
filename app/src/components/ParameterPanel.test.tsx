@@ -68,4 +68,24 @@ describe("transmitter ground elevation controls", () => {
     fireEvent.click(manualButton);
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("preserves a real zero-metre DEM value when manual mode is selected", () => {
+    const onChange = vi.fn();
+    render(
+      <ParameterPanel
+        parameters={DEFAULT_PARAMETERS}
+        disabled={false}
+        elevationM={0}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "手动覆盖" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        txGroundElevationOverrideM: 0,
+      }),
+    );
+  });
 });

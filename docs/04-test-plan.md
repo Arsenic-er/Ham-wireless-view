@@ -458,3 +458,28 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] 中国大陆合规底图、审图号、离线与导出授权。
 
 完整运行指标、构建产物哈希、进程高水位与烟雾脚本竞态说明见 `18-progressive-coverage-preview-validation.md`。Windows 交叉构建成功只证明可编译和打包，不能勾选 Windows 实机或地图合规门槛。
+
+## 24. partial 写失败与零米 DEM 加固（2026-07-27）
+
+本检查点关闭两项静态/容错残余，不改变产品输入或自动重试策略。
+
+### 24.1 已完成行为
+
+- [x] DEM 未返回时继续由 fieldset disabled 与 handler guard 双重阻止切换手动覆盖；删除不可达的 `null → 0 m` 后备表达式。
+- [x] 新增真实 DEM `0 m` 用例，确认海平面零值可精确进入手动覆盖，且不与缺失 `null` 混淆。
+- [x] 从非零续传偏移故障注入：当前块部分写入后返回原始 I/O 错误，失败块不增加 total、不发布进度。
+- [x] 二次检查点成功时，partial 实际长度与 SQLite 同步，同进程强 ETag/Range probe 可从该长度续传。
+- [x] 二次 `sync_all`、文件游标读取失败或游标越出当前块范围时均不掩盖原始写错误；不可信 partial 被删除并重置 missing，重启后仍从 0 下载。
+- [x] 任何失败路径都不进入 finalize/ready，也不增加隐式自动重试。
+
+### 24.2 当前门禁
+
+- [x] Rust workspace offline：`102 passed / 3 ignored`。
+- [x] cache crate：`28 passed / 3 ignored`；真实 GLO-90 HTTPS：`3/3`。
+- [x] 前端：`7 files / 52 tests`；TypeScript 与 Vite validation build 通过。
+- [x] rustfmt、Clippy workspace `--all-targets -D warnings` 与 Windows x64 cargo-xwin workspace/all-targets check 通过。
+- [x] `git diff --check` 与文档结构检查通过。
+- [ ] 在真实磁盘不足/配额边缘环境触发部分写入失败，确认不同 Windows/Linux 文件系统错误与用户提示。
+- [ ] Windows 10/11 实机验证 Range 恢复、休眠/断网、杀进程和原子 ready。
+
+本切片的故障 writer 包装真实临时文件，能确定性地产生“先写 2 bytes、随后失败”、检查点同步失败、游标读取失败和游标越界。它证明错误优先级和恢复不变量，不等同于真实磁盘耗尽压力测试。
