@@ -270,6 +270,7 @@ start_calculation "$active_operation_id" "$calculation_request" "$calculation_bo
 last_sequence=0; last_completed=0; preview_total=0; preview_count=0; last_status_sequence=0
 first_preview_ms=0; previous_preview_observed_ms=0; min_preview_interval_ms=0
 max_preview_interval_ms=0; max_preview_json_bytes=0
+calculation_observed_stopped=0
 : >"$preview_hashes"
 for _ in $(seq 1 3600); do
   post_preview "$active_operation_id" "$last_sequence" "$preview_body" "$preview_status"
@@ -312,13 +313,19 @@ for _ in $(seq 1 3600); do
   last_status_sequence=$status_sequence
   [[ "$state" == reserved || "$state" == running || "$state" == succeeded ]] || fail "calculation entered unexpected state $state"
   [[ ! -s "$calculation_status" ]] || break
-  curl_job_is_owned_and_running || fail "calculation curl stopped before publishing HTTP status"
+  if ! curl_job_is_owned_and_running; then
+    calculation_observed_stopped=1
+    break
+  fi
   sleep 0.05
 done
-[[ -s "$calculation_status" ]] || fail "calculation exceeded smoke timeout"
+if [[ ! -s "$calculation_status" && "$calculation_observed_stopped" == 0 ]]; then
+  fail "calculation exceeded smoke timeout"
+fi
 set +e; wait "$calculation_curl_pid"; curl_exit=$?; set -e
 calculation_curl_pid=""; calculation_curl_start=""
 [[ "$curl_exit" == 0 ]] || fail "calculation curl exited with status $curl_exit"
+[[ -s "$calculation_status" ]] || fail "calculation curl did not publish HTTP status"
 require_status "$calculation_status" 200 "authoritative calculation"
 calculation_finished_ms="$(now_ms)"
 (( calculation_finished_ms >= calculation_started_ms )) || fail "calculation timing moved backwards"
