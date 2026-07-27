@@ -296,9 +296,9 @@
 
 ### 20.1 缓存恢复与配额边界
 
-- `CacheStore::open` 在执行硬上限判定前先整理索引和文件系统：同步未及时写入 SQLite 的 partial 长度，删除 ready/missing/corrupt 资产的陈旧 partial，并把“最终文件已改名、索引仍为 downloading”的资产校验后推进为 ready。
+- `CacheStore::open` 在执行硬上限判定前先整理索引和文件系统：partial 只能以 SQLite 已持久化的 checkpoint 长度为可信上限，更长尾部截断并同步，更短或缺失时废弃；同时删除 ready/missing/corrupt 资产的陈旧 partial，并把“最终文件已改名、索引仍为 downloading”的资产校验后推进为 ready。
 - 只有与 downloading 状态、期望大小、强 ETag 和 Range 能力一致的 partial 才允许续传；不可信或超出期望大小的 partial 被删除或标记损坏。
-- 精确到自定义测试上限的可信 partial 可以重开；再增长 1 byte 必须拒绝。区域和资产元数据写入执行预留空间检查，批量区域写入使用事务，失败后不能留下半个区域或孤立资产记录。
+- 精确到自定义测试上限的可信 partial 可以重开；已检查点后再增长 1 byte 必须拒绝，未检查点尾部则先截回可信长度。区域和资产元数据写入执行预留空间检查，批量区域写入使用事务，失败后不能留下半个区域或孤立资产记录。
 - 这些测试使用缩小的测试配额快速覆盖边界；十进制 `2,500,000,000 bytes` 的真实实体数据压力、磁盘耗尽和进程强制崩溃注入仍未完成。
 
 ### 20.2 取消结果线性化
@@ -471,6 +471,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 二次检查点成功时，partial 实际长度与 SQLite 同步，同进程强 ETag/Range probe 可从该长度续传。
 - [x] 二次 `sync_all`、文件游标读取失败或游标越出当前块范围时均不掩盖原始写错误；不可信 partial 被删除并重置 missing，重启后仍从 0 下载。
 - [x] 任何失败路径都不进入 finalize/ready，也不增加隐式自动重试。
+- [x] 即使 corrupt 标记与即时删除都失败并留下 `Downloading(DB=4, file=6)` 等价状态，重启也截回 DB checkpoint；文件短于 DB 或缺失则废弃，未知尾部不能被复活。
 
 ### 24.2 当前门禁
 
@@ -482,4 +483,14 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] 在真实磁盘不足/配额边缘环境触发部分写入失败，确认不同 Windows/Linux 文件系统错误与用户提示。
 - [ ] Windows 10/11 实机验证 Range 恢复、休眠/断网、杀进程和原子 ready。
 
-本切片的故障 writer 包装真实临时文件，能确定性地产生“先写 2 bytes、随后失败”、检查点同步失败、游标读取失败和游标越界。它证明错误优先级和恢复不变量，不等同于真实磁盘耗尽压力测试。
+本切片的故障 writer 包装真实临时文件，能确定性地产生“先写 2 bytes、随后失败”、检查点同步失败、游标读取失败和游标越界；store 层另构造清理失败可能遗留的 DB/file 长度差异，并验证只保留已检查点前缀。它证明错误优先级和恢复不变量，不等同于真实磁盘耗尽压力测试。
+
+### 24.3 受管验证平台回归
+
+- [x] 提交 `4042d0c0bd808b898de1556b9b047c9831922c0c` 完成 stop/build/start，构建时间 `2026-07-27T07:02:51Z`，server SHA-256 为 `647547e576308d81e807e7b1b72aedb2e8d8778f235c1dbd3f521a77d8295ea5`。
+- [x] 新进程 PID `1457203` 经进程身份与 `ss` 确认只监听 `127.0.0.1:1421`；health schema 1、bootstrap schema 2 和管理 self-test 通过。
+- [x] recovery smoke 通过：被取消任务保持 cancelled，后继同票 calculation HTTP 200，两个任务各有 2 次进度。
+- [x] 成都渐进预览 smoke 通过：2 帧不同 PNG，最后一帧完成 `123260 / 125628`，首帧 `5707 ms`，总耗时 `7176 ms`，终态仍由完整 schema 3 结果决定。
+- [x] 运行前后缓存保持 `133,071,416 bytes`、partial `0`，两个登记区域均为 `50/50 ready`。
+
+本节仍是 Linux 回环内部平台证据，不替代 Windows 实机、浏览器人工视觉、真实 ENOSPC/EIO 或中国大陆地图合规验收。

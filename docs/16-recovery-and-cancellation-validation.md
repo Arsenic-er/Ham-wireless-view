@@ -29,18 +29,20 @@
 | ready + 最终文件有效 + 陈旧 partial | 保留最终文件，删除 partial |
 | ready + 最终文件无效 | 标记 corrupt，删除 partial |
 | downloading + 最终文件已完整改名 | 校验并推进 ready，删除 partial |
-| downloading + 合法 partial | 用实际长度更新 SQLite，保留为可评估续传 |
+| downloading + partial 长度等于 SQLite checkpoint | 保留为可评估续传 |
+| downloading + partial 长于 SQLite checkpoint | 截断并同步到 checkpoint，绝不上调 SQLite |
+| downloading + partial 短于 checkpoint，或 checkpoint 非零但文件缺失 | 删除并标记 corrupt |
 | downloading + partial 超出期望大小 | 删除 partial，标记 corrupt |
 | missing/corrupt + partial | 删除 partial |
 | 未登记 partial | 删除 |
 | 整理后根目录恰好等于 cap | 允许打开 |
 | 整理后根目录超过 cap | 阻断打开，不删除可信 downloading partial |
 
-续传仍要求 downloading 状态、期望总大小、SQLite partial 长度、磁盘实际长度、强 ETag 和 Range 能力一致。弱 ETag、不支持 Range、状态变化或大小变化都不能沿用旧 partial。
+SQLite `size_bytes` 只在文件先 `sync_all` 后更新，因此是唯一可信前缀上限。续传仍要求 downloading 状态、期望总大小、SQLite partial 长度、整理后的磁盘实际长度、强 ETag 和 Range 能力一致。弱 ETag、不支持 Range、状态变化或大小变化都不能沿用旧 partial；截断或同步失败会阻断 `CacheStore::open`，不能降级为继续使用未知尾部。
 
 区域及其全部资产描述符在同一 SQLite 事务内写入。写入前检查 metadata headroom，提交前再扫描根目录硬上限；失败时不能留下半个 region、孤立 asset 或不完整 region-assets 引用。
 
-自动化使用缩小的 cap 制造“恰好到 cap”“多 1 byte”和 metadata 临界点，以便快速、确定地覆盖边界。这证明规则，不证明已经在 2.5 GB 实体数据和真实磁盘耗尽条件下完成压力测试。
+自动化使用缩小的 cap 制造“已检查点数据恰好到 cap”“已检查点后多 1 byte”和 metadata 临界点，并构造 SQLite checkpoint 与文件长短不一致的重启状态。未检查点的额外尾部会先截断，只有文件与 SQLite 都确认超限才阻断打开。这证明规则，不证明已经在 2.5 GB 实体数据和真实磁盘耗尽条件下完成压力测试。
 
 ## 3. 取消与结果交付
 

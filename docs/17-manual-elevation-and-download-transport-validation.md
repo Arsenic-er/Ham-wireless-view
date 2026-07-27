@@ -124,10 +124,16 @@ Linux 自动化、真实 HTTPS、受管回环 HTTP 和交叉目标检查都不�
 本报告原始 revision 的运行数字保持不变。后续代码审查补充关闭了两项残余：
 
 1. 发射点海拔来源继续在 DEM 未返回时禁用并由 handler 拒绝；删除不可达的 `elevationM ?? 0`，新增合法 `0 m` DEM 精确进入手动覆盖的前端测试。
-2. Range 下载在 `write_all` 部分成功后报错时，以受界文件游标尝试持久化实际 partial 长度。检查点成功才允许同进程续传；游标读取失败、越出当前块范围或检查点自身失败时仍返回原始写错误，但把 partial 标记 corrupt、关闭后删除并重置 missing，重启后也不能复活不可信字节。
+2. Range 下载在 `write_all` 部分成功后报错时，以受界文件游标尝试持久化实际 partial 长度。检查点成功才允许同进程续传；游标读取失败、越出当前块范围或检查点自身失败时仍返回原始写错误，并尝试把 partial 标记 corrupt、关闭后删除并重置 missing。即使标记与删除同时失败，重启也只保留 SQLite checkpoint，截掉文件额外尾部；文件更短或缺失则废弃。
 
-故障注入从 4-byte 已可信偏移开始，先写 2 bytes 后返回固定 I/O 错误。成功检查点用例确认文件/SQLite 均为 6 bytes 且强 ETag/Range probe 从 6 续传；同步失败、游标读取失败和游标越界用例均确认原始错误不被掩盖、文件被删除、状态为 missing，重开 CacheStore 后仍从 0 开始。
+故障注入从 4-byte 已可信偏移开始，先写 2 bytes 后返回固定 I/O 错误。成功检查点用例确认文件/SQLite 均为 6 bytes 且强 ETag/Range probe 从 6 续传；同步失败、游标读取失败和游标越界用例均确认原始错误不被掩盖、文件被删除、状态为 missing，重开 CacheStore 后仍从 0 开始。store 层另构造 DB checkpoint 小于、等于和大于文件长度的重启状态，确认只保留等长或截回的可信前缀。
 
 后续门禁通过 Rust workspace `102 passed / 3 ignored`、cache `28 passed / 3 ignored`、真实 GLO-90 HTTPS `3/3`、前端 `7 files / 52 tests`、rustfmt、Clippy `--all-targets -D warnings`、TypeScript、Vite validation build 与 Windows x64 cargo-xwin workspace/all-targets check。
 
 这仍不是实际 ENOSPC/EIO、Windows 文件系统或弱网压力证据；相应项目继续保留在第 7 节和测试计划第 24 节。
+
+后续提交 `4042d0c0bd808b898de1556b9b047c9831922c0c` 已在受管平台完成 stop/build/start。构建时间为 `2026-07-27T07:02:51Z`，server SHA-256 为 `647547e576308d81e807e7b1b72aedb2e8d8778f235c1dbd3f521a77d8295ea5`；PID `1457203` 经管理身份检查和 `ss` 确认仅监听 `127.0.0.1:1421`，health schema 1、bootstrap schema 2 与 self-test 均通过。
+
+同一构建上的 recovery smoke 继续得到 `ticket_a_cancelled=true ticket_b_http=200 progress_a=2 progress_b=2`。成都 progressive smoke 得到 2 张不同预览 PNG，最后完成计数 `123260 / 125628`、首帧 `5707 ms`、总耗时 `7176 ms`；终态仍为完整 calculation 结果。缓存保持 `133,071,416 bytes`、partial `0`，两个登记区域均为 `50/50 ready`。
+
+这些运行结果只回归受管回环平台，没有把确定性 writer 故障注入外推为真实磁盘耗尽或 Windows 文件系统证据。

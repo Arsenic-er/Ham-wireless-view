@@ -31,7 +31,7 @@
 ## 2026-07-27 补充：重启整理与元数据边界
 
 1. `CacheStore::open` 必须先执行文件/索引整理，再判断现有根目录是否超过硬上限。这样可先删除不应保留的陈旧或未登记 partial，但不会借整理名义删除仍与 downloading 状态、期望大小和强 ETag 一致的可信 partial。
-2. 对 downloading 资产，若同目录原子改名已完成而 SQLite 尚未更新，则校验最终文件后推进为 ready；否则用真实 partial 长度修正索引。ready、missing、corrupt 资产旁的 partial 必须删除。
-3. 整理完成后，根目录恰好等于 cap 可以打开；再多 1 byte 必须拒绝。该规则以真实普通文件扫描为准，不依赖 SQLite 的 `size_bytes`。
+2. 对 downloading 资产，若同目录原子改名已完成而 SQLite 尚未更新，则校验最终文件后推进为 ready；否则 SQLite `size_bytes` 是唯一完成 `sync_all → index` 的可信前缀。partial 更长时截断并同步到该长度；更短或缺失时废弃，不能用文件长度反向上调索引。ready、missing、corrupt 资产旁的 partial 必须删除。
+3. 整理完成后，根目录恰好等于 cap 可以打开；已检查点的文件与索引再多 1 byte 必须拒绝，未检查点的额外 partial 尾部先截回可信长度。最终判断仍扫描真实普通文件，不只依赖 SQLite 记账。
 4. 会增长 SQLite 的区域/资产元数据写入必须先保留 headroom；批量区域和资产登记放在同一事务中，并在提交前复核根目录硬上限。失败时区域、资产和引用必须一起回滚。
 5. 本补充由缩小配额的故障窗口测试覆盖，但不把它等同于真实 2.5 GB 实体缓存、磁盘耗尽或进程强制终止压力测试。

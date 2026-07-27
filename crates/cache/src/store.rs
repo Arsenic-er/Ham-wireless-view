@@ -567,14 +567,23 @@ impl CacheStore {
                         match regular_file_size(&partial_path)? {
                             Some(partial_bytes)
                                 if asset.expected_size_bytes == 0
+                                    || asset.size_bytes > asset.expected_size_bytes
                                     || partial_bytes > asset.expected_size_bytes =>
                             {
                                 fs::remove_file(&partial_path)?;
                                 self.mark_corrupt(&asset.asset_key)?;
                             }
-                            Some(partial_bytes) => {
-                                self.update_partial_size(&asset.asset_key, partial_bytes)?;
+                            Some(partial_bytes) if partial_bytes < asset.size_bytes => {
+                                fs::remove_file(&partial_path)?;
+                                self.mark_corrupt(&asset.asset_key)?;
                             }
+                            Some(partial_bytes) if partial_bytes > asset.size_bytes => {
+                                let output = OpenOptions::new().write(true).open(&partial_path)?;
+                                output.set_len(asset.size_bytes)?;
+                                output.sync_all()?;
+                            }
+                            Some(_) => {}
+                            None if asset.size_bytes > 0 => self.mark_corrupt(&asset.asset_key)?,
                             None => self.update_partial_size(&asset.asset_key, 0)?,
                         }
                     }
@@ -1524,7 +1533,7 @@ mod tests {
     }
 
     #[test]
-    fn restart_recovers_partial_growth_not_yet_recorded_in_sqlite() {
+    fn restart_only_trusts_checkpointed_partial_length() {
         let directory = TestDirectory::new("restart-partial-growth");
         let plan = one_tile_plan("restart-partial-growth");
         let descriptor = glo90_asset(plan.tiles[0]).unwrap();
@@ -1538,20 +1547,79 @@ mod tests {
                 .unwrap()
                 .write_all(&[3_u8; 40])
                 .unwrap();
+            store
+                .update_partial_size(&descriptor.asset_key, 20)
+                .unwrap();
             partial_path
         };
 
         let mut reopened = CacheStore::open(&directory.0).unwrap();
         let asset = reopened.asset(&descriptor.asset_key).unwrap().unwrap();
         assert_eq!(asset.state, CacheState::Downloading);
-        assert_eq!(asset.size_bytes, 40);
+        assert_eq!(asset.size_bytes, 20);
+        assert_eq!(partial_path.metadata().unwrap().len(), 20);
         assert_eq!(
             reopened
                 .resumable_bytes_for_probe(&descriptor, 100, Some("\"v1\""), true)
                 .unwrap(),
-            40
+            20
         );
-        assert!(partial_path.is_file());
+
+        let short_directory = TestDirectory::new("restart-partial-short");
+        let short_plan = one_tile_plan("restart-partial-short");
+        let short_descriptor = glo90_asset(short_plan.tiles[0]).unwrap();
+        let short_partial_path = {
+            let mut store = CacheStore::open(&short_directory.0).unwrap();
+            store.upsert_region(&short_plan).unwrap();
+            let (partial_path, _) = store
+                .prepare_download(&short_descriptor, 100, None, Some("\"v1\""), 0)
+                .unwrap();
+            File::create(&partial_path)
+                .unwrap()
+                .write_all(&[3_u8; 20])
+                .unwrap();
+            store
+                .update_partial_size(&short_descriptor.asset_key, 40)
+                .unwrap();
+            partial_path
+        };
+
+        let reopened = CacheStore::open(&short_directory.0).unwrap();
+        let asset = reopened
+            .asset(&short_descriptor.asset_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(asset.state, CacheState::Corrupt);
+        assert_eq!(asset.size_bytes, 0);
+        assert!(!short_partial_path.exists());
+
+        let missing_directory = TestDirectory::new("restart-partial-missing");
+        let missing_plan = one_tile_plan("restart-partial-missing");
+        let missing_descriptor = glo90_asset(missing_plan.tiles[0]).unwrap();
+        {
+            let mut store = CacheStore::open(&missing_directory.0).unwrap();
+            store.upsert_region(&missing_plan).unwrap();
+            store
+                .prepare_download(&missing_descriptor, 100, None, Some("\"v1\""), 0)
+                .unwrap();
+            store
+                .update_partial_size(&missing_descriptor.asset_key, 40)
+                .unwrap();
+        }
+
+        let mut reopened = CacheStore::open(&missing_directory.0).unwrap();
+        let asset = reopened
+            .asset(&missing_descriptor.asset_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(asset.state, CacheState::Corrupt);
+        assert_eq!(asset.size_bytes, 0);
+        assert_eq!(
+            reopened
+                .resumable_bytes_for_probe(&missing_descriptor, 100, Some("\"v1\""), true)
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -1670,9 +1738,13 @@ mod tests {
                 .unwrap();
             fs::create_dir_all(partial_path.parent().unwrap()).unwrap();
             let baseline = store.usage().unwrap().total_bytes;
+            let partial_bytes = TEST_CAP_BYTES - baseline;
             File::create(&partial_path)
                 .unwrap()
-                .set_len(TEST_CAP_BYTES - baseline)
+                .set_len(partial_bytes)
+                .unwrap();
+            store
+                .update_partial_size(&descriptor.asset_key, partial_bytes)
                 .unwrap();
             assert_eq!(store.usage().unwrap().total_bytes, TEST_CAP_BYTES);
             partial_path
@@ -1688,7 +1760,6 @@ mod tests {
                 .state,
             CacheState::Downloading
         );
-        drop(reopened);
 
         let current_partial_bytes = partial_path.metadata().unwrap().len();
         OpenOptions::new()
@@ -1697,6 +1768,24 @@ mod tests {
             .unwrap()
             .set_len(current_partial_bytes + 1)
             .unwrap();
+        drop(reopened);
+        let reopened = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap();
+        assert_eq!(
+            partial_path.metadata().unwrap().len(),
+            current_partial_bytes
+        );
+        assert_eq!(reopened.usage().unwrap().total_bytes, TEST_CAP_BYTES);
+
+        OpenOptions::new()
+            .write(true)
+            .open(&partial_path)
+            .unwrap()
+            .set_len(current_partial_bytes + 1)
+            .unwrap();
+        reopened
+            .update_partial_size(&descriptor.asset_key, current_partial_bytes + 1)
+            .unwrap();
+        drop(reopened);
         let error = CacheStore::open_with_cap(&directory.0, TEST_CAP_BYTES).unwrap_err();
         assert!(matches!(
             error,
