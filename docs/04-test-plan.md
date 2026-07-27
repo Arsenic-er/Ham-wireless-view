@@ -494,3 +494,9 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 运行前后缓存保持 `133,071,416 bytes`、partial `0`，两个登记区域均为 `50/50 ready`。
 
 本节仍是 Linux 回环内部平台证据，不替代 Windows 实机、浏览器人工视觉、真实 ENOSPC/EIO 或中国大陆地图合规验收。
+
+重启可信检查点栅栏提交 `93b96abd3a0c1c099870509bbe3711ef4bb6db95` 随后再次完成受管 stop/build/start；这是当前运行构建，上一组 `4042d0c` 数字保留为中间历史证据。最终构建时间 `2026-07-27T07:15:45Z`，server SHA-256 `32bb5b05ddc18ca49d34f7b5d04fd48fe6f0f04099d7444e4b0ff7f8649efbbe`，PID `1468926` 仅监听 `127.0.0.1:1421`。
+
+最终构建的 health schema 1、bootstrap schema 2、管理 self-test 与 recovery smoke 均通过；recovery 仍为 `ticket_a_cancelled=true ticket_b_http=200 progress_a=2 progress_b=2`。成都 progressive smoke 得到 2 张不同预览，最后完成 `120400 / 125628`，首帧 `5452 ms`、总耗时 `7041 ms`。缓存保持 `133,071,416 bytes`、partial `0`，两个区域各 `50/50 ready`。
+
+纯文档证据提交不重建已验证的 `93b96ab` 二进制；运行 metadata 继续精确指向该代码 revision。

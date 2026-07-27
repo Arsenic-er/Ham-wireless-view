@@ -137,3 +137,9 @@ Linux 自动化、真实 HTTPS、受管回环 HTTP 和交叉目标检查都不�
 同一构建上的 recovery smoke 继续得到 `ticket_a_cancelled=true ticket_b_http=200 progress_a=2 progress_b=2`。成都 progressive smoke 得到 2 张不同预览 PNG，最后完成计数 `123260 / 125628`、首帧 `5707 ms`、总耗时 `7176 ms`；终态仍为完整 calculation 结果。缓存保持 `133,071,416 bytes`、partial `0`，两个登记区域均为 `50/50 ready`。
 
 这些运行结果只回归受管回环平台，没有把确定性 writer 故障注入外推为真实磁盘耗尽或 Windows 文件系统证据。
+
+关闭“双清理失败后重启复活未知尾部”风险的提交 `93b96abd3a0c1c099870509bbe3711ef4bb6db95` 随后再次完成受管 stop/build/start，取代 `4042d0c` 成为当前运行代码。最终构建时间 `2026-07-27T07:15:45Z`，server SHA-256 为 `32bb5b05ddc18ca49d34f7b5d04fd48fe6f0f04099d7444e4b0ff7f8649efbbe`；PID `1468926` 经 `ss` 确认仅监听 `127.0.0.1:1421`。
+
+最终构建的 health schema 1、bootstrap schema 2、self-test、recovery smoke 和 progressive smoke 均通过。渐进烟雾得到 2 张不同预览，最后完成 `120400 / 125628`，首帧 `5452 ms`、总耗时 `7041 ms`；缓存仍为 `133,071,416 bytes`、partial `0`，两个区域各 `50/50 ready`。
+
+后续纯文档提交不会重建二进制，验证平台 metadata 继续精确记录实际运行的 `93b96ab` 代码 revision。
