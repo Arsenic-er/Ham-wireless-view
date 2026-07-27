@@ -2,8 +2,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc::{self, RecvTimeoutError},
+};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -13,8 +17,9 @@ use hamheatmap_cache::{
     GeoPoint as CacheGeoPoint, Glo90DownloadService, glo90_assets, plan_glo90_region,
 };
 use hamheatmap_coverage::{
-    CoverageConfig, CoverageProgress, GRID_SIZE, GeoPoint, MODEL_DEFAULTS_VERSION,
-    compute_coverage_with_control,
+    CoverageConfig, CoverageError, CoverageGrid, CoveragePixel, CoverageProgress, GRID_PIXEL_COUNT,
+    GRID_SIZE, GeoPoint, MODEL_DEFAULTS_VERSION, compute_coverage_with_control,
+    compute_coverage_with_pixel_batches, encode_map_overlay_snapshot,
 };
 use hamheatmap_propagation::{Polarization, dbd_to_dbi, dbm_to_watts};
 use hamheatmap_terrain::{DemTileId, DemTileSet, WaterTileSet};
@@ -22,6 +27,9 @@ use serde::{Deserialize, Serialize};
 
 pub const APP_SERVICE_SCHEMA_VERSION: u32 = 2;
 pub const CALCULATION_RESULT_SCHEMA_VERSION: u32 = 3;
+pub const CALCULATION_PREVIEW_SCHEMA_VERSION: u32 = 1;
+
+const CALCULATION_PREVIEW_INTERVAL: Duration = Duration::from_millis(800);
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +109,25 @@ pub struct CalculationProgress {
     pub percent: f64,
     pub completed_pixel_count: usize,
     pub total_pixel_count: usize,
+}
+
+/// Latest-only progressive map overlay emitted while a coverage calculation runs.
+///
+/// Transports may coalesce these snapshots by `sequence`. A snapshot is never part
+/// of the terminal calculation result and must be discarded when the operation
+/// finishes or is cancelled.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalculationPreview {
+    pub schema_version: u32,
+    pub sequence: u64,
+    pub completed_pixel_count: u64,
+    pub total_pixel_count: u64,
+    pub map_overlay_projection: &'static str,
+    pub map_overlay_width: usize,
+    pub map_overlay_height: usize,
+    pub map_overlay_corners: [[f64; 2]; 4],
+    pub map_overlay_png_data_url: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -292,6 +319,65 @@ pub struct CalculationResult {
     pub map_overlay_corners: [[f64; 2]; 4],
     pub map_overlay_png_data_url: String,
     pub statistics: CalculationStatisticsView,
+}
+
+struct PreviewAccumulator {
+    values_dbm: Vec<f32>,
+    completed_pixel_count: usize,
+    next_signal_at: usize,
+}
+
+impl PreviewAccumulator {
+    fn new() -> Self {
+        Self {
+            values_dbm: vec![f32::NAN; GRID_PIXEL_COUNT],
+            completed_pixel_count: 0,
+            next_signal_at: 0,
+        }
+    }
+
+    /// Merges a worker batch and reports whether a new five-percent threshold
+    /// was crossed. The 100% threshold is intentionally reserved for the final
+    /// authoritative result.
+    fn merge_batch(&mut self, pixels: &[CoveragePixel], total_pixel_count: usize) -> bool {
+        for pixel in pixels {
+            let Some(value) = self.values_dbm.get_mut(pixel.raster_index) else {
+                continue;
+            };
+            if !value.is_finite() && pixel.received_power_dbm.is_finite() {
+                self.completed_pixel_count = self.completed_pixel_count.saturating_add(1);
+            }
+            *value = pixel.received_power_dbm;
+        }
+        if total_pixel_count == 0 || self.completed_pixel_count >= total_pixel_count {
+            return false;
+        }
+        let signal_step = total_pixel_count.div_ceil(20).max(1);
+        if self.next_signal_at == 0 {
+            self.next_signal_at = signal_step;
+        }
+        if self.completed_pixel_count < self.next_signal_at {
+            return false;
+        }
+        while self.next_signal_at <= self.completed_pixel_count {
+            self.next_signal_at = self.next_signal_at.saturating_add(signal_step);
+        }
+        true
+    }
+
+    fn snapshot(&self) -> (Vec<f32>, usize) {
+        (self.values_dbm.clone(), self.completed_pixel_count)
+    }
+}
+
+fn should_emit_preview(
+    completed_pixel_count: usize,
+    total_pixel_count: usize,
+    last_emitted_completed: usize,
+) -> bool {
+    total_pixel_count > 0
+        && completed_pixel_count > last_emitted_completed
+        && completed_pixel_count < total_pixel_count
 }
 
 #[derive(Clone, Debug)]
@@ -521,6 +607,26 @@ impl AppService {
         cancelled: &AtomicBool,
         progress: impl Fn(CalculationProgress) + Sync,
     ) -> Result<CalculationResult, String> {
+        self.calculate_inner(request, cancelled, &progress, None)
+    }
+
+    pub fn calculate_with_preview(
+        &self,
+        request: &CalculationRequest,
+        cancelled: &AtomicBool,
+        progress: impl Fn(CalculationProgress) + Sync,
+        preview: impl Fn(CalculationPreview) + Sync,
+    ) -> Result<CalculationResult, String> {
+        self.calculate_inner(request, cancelled, &progress, Some(&preview))
+    }
+
+    fn calculate_inner(
+        &self,
+        request: &CalculationRequest,
+        cancelled: &AtomicBool,
+        progress: &(dyn Fn(CalculationProgress) + Sync),
+        preview: Option<&(dyn Fn(CalculationPreview) + Sync)>,
+    ) -> Result<CalculationResult, String> {
         let config = request_to_config(request)?;
         let started = Instant::now();
         progress(CalculationProgress {
@@ -558,22 +664,34 @@ impl AppService {
                 completed_pixel_count: 0,
                 total_pixel_count: 125_628,
             });
-            let grid = compute_coverage_with_control(
-                &dem,
-                &water,
-                config,
-                cancelled,
-                |value: CoverageProgress| {
-                    progress(CalculationProgress {
-                        phase: CalculationPhase::Computing,
-                        percent: 5.0
-                            + 90.0 * value.completed_pixel_count as f64
-                                / value.total_pixel_count as f64,
-                        completed_pixel_count: value.completed_pixel_count,
-                        total_pixel_count: value.total_pixel_count,
-                    });
-                },
-            )
+            let report_coverage_progress = |value: CoverageProgress| {
+                progress(CalculationProgress {
+                    phase: CalculationPhase::Computing,
+                    percent: 5.0
+                        + 90.0 * value.completed_pixel_count as f64
+                            / value.total_pixel_count as f64,
+                    completed_pixel_count: value.completed_pixel_count,
+                    total_pixel_count: value.total_pixel_count,
+                });
+            };
+            let grid = if let Some(preview) = preview {
+                compute_coverage_with_previews(
+                    &dem,
+                    &water,
+                    config,
+                    cancelled,
+                    &report_coverage_progress,
+                    preview,
+                )
+            } else {
+                compute_coverage_with_control(
+                    &dem,
+                    &water,
+                    config,
+                    cancelled,
+                    report_coverage_progress,
+                )
+            }
             .map_err(|error| error.to_string())?;
             calculation_cancellation_checkpoint(cancelled)?;
             progress(CalculationProgress {
@@ -652,6 +770,107 @@ impl AppService {
             (Ok(_), Err(error)) => Err(error),
         }
     }
+}
+
+fn compute_coverage_with_previews(
+    dem: &DemTileSet,
+    water: &WaterTileSet,
+    config: CoverageConfig,
+    cancelled: &AtomicBool,
+    progress: &(dyn Fn(CoverageProgress) + Sync),
+    preview: &(dyn Fn(CalculationPreview) + Sync),
+) -> Result<CoverageGrid, CoverageError> {
+    let accumulator = Arc::new(Mutex::new(PreviewAccumulator::new()));
+    let total_pixel_count = Arc::new(AtomicUsize::new(0));
+    let (signal_sender, signal_receiver) = mpsc::sync_channel::<()>(1);
+
+    std::thread::scope(|scope| {
+        let encoder_accumulator = Arc::clone(&accumulator);
+        let encoder_total_pixel_count = Arc::clone(&total_pixel_count);
+        let encoder = scope.spawn(move || {
+            let mut sequence = 0_u64;
+            let mut last_emitted_completed = 0_usize;
+            let mut last_emitted_at = Instant::now();
+            while signal_receiver.recv().is_ok() {
+                loop {
+                    let remaining =
+                        CALCULATION_PREVIEW_INTERVAL.saturating_sub(last_emitted_at.elapsed());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    match signal_receiver.recv_timeout(remaining) {
+                        Ok(()) => continue,
+                        Err(RecvTimeoutError::Timeout) => break,
+                        Err(RecvTimeoutError::Disconnected) => return,
+                    }
+                }
+                if cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                let total = encoder_total_pixel_count.load(Ordering::Acquire);
+                let (values_dbm, completed_pixel_count) = encoder_accumulator
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .snapshot();
+                if !should_emit_preview(completed_pixel_count, total, last_emitted_completed) {
+                    continue;
+                }
+                let encoded = encode_map_overlay_snapshot(&values_dbm, config.center);
+                last_emitted_at = Instant::now();
+                let Ok(map_overlay) = encoded else {
+                    continue;
+                };
+                if cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                last_emitted_completed = completed_pixel_count;
+                sequence = sequence.saturating_add(1);
+                preview(CalculationPreview {
+                    schema_version: CALCULATION_PREVIEW_SCHEMA_VERSION,
+                    sequence,
+                    completed_pixel_count: completed_pixel_count as u64,
+                    total_pixel_count: total as u64,
+                    map_overlay_projection: map_overlay.projection,
+                    map_overlay_width: map_overlay.width,
+                    map_overlay_height: map_overlay.height,
+                    map_overlay_corners: map_overlay.corners,
+                    map_overlay_png_data_url: format!(
+                        "data:image/png;base64,{}",
+                        BASE64_STANDARD.encode(map_overlay.png)
+                    ),
+                });
+            }
+        });
+
+        let progress_with_total = |value: CoverageProgress| {
+            total_pixel_count.store(value.total_pixel_count, Ordering::Release);
+            progress(value);
+        };
+        let pixel_batch = |pixels: &[CoveragePixel]| {
+            if cancelled.load(Ordering::Relaxed) {
+                return;
+            }
+            let total = total_pixel_count.load(Ordering::Acquire);
+            let should_signal = accumulator
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .merge_batch(pixels, total);
+            if should_signal {
+                let _ = signal_sender.try_send(());
+            }
+        };
+        let result = compute_coverage_with_pixel_batches(
+            dem,
+            water,
+            config,
+            cancelled,
+            progress_with_total,
+            pixel_batch,
+        );
+        drop(signal_sender);
+        let _ = encoder.join();
+        result
+    })
 }
 
 fn calculation_cancellation_checkpoint(cancelled: &AtomicBool) -> Result<(), String> {
@@ -1067,6 +1286,88 @@ mod tests {
             Some("data:image/png;base64,overlay")
         );
         assert!(!object.contains_key("map_overlay_projection"));
+        assert!(!object.contains_key("map_overlay_png_data_url"));
+    }
+
+    #[test]
+    fn preview_accumulator_signals_five_percent_without_double_counting_or_final_frame() {
+        let mut accumulator = PreviewAccumulator::new();
+        let pixels = |range: std::ops::Range<usize>| {
+            range
+                .map(|raster_index| CoveragePixel {
+                    raster_index,
+                    received_power_dbm: -90.0,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert!(!accumulator.merge_batch(&pixels(0..4), 100));
+        assert_eq!(accumulator.completed_pixel_count, 4);
+        assert!(!accumulator.merge_batch(
+            &[CoveragePixel {
+                raster_index: 0,
+                received_power_dbm: -80.0,
+            }],
+            100,
+        ));
+        assert_eq!(accumulator.completed_pixel_count, 4);
+
+        assert!(accumulator.merge_batch(&pixels(4..5), 100));
+        assert_eq!(accumulator.completed_pixel_count, 5);
+        let mut last_emitted_completed = 0;
+        assert!(should_emit_preview(5, 100, last_emitted_completed));
+        last_emitted_completed = 5;
+        assert!(!should_emit_preview(5, 100, last_emitted_completed));
+
+        assert!(accumulator.merge_batch(&pixels(5..10), 100));
+        assert_eq!(accumulator.completed_pixel_count, 10);
+        assert!(should_emit_preview(10, 100, last_emitted_completed));
+        last_emitted_completed = 10;
+        assert!(!should_emit_preview(10, 100, last_emitted_completed));
+
+        assert!(!accumulator.merge_batch(&pixels(10..100), 100));
+        assert!(!should_emit_preview(100, 100, last_emitted_completed));
+        let (snapshot, completed_pixel_count) = accumulator.snapshot();
+        assert_eq!(completed_pixel_count, 100);
+        assert_eq!(
+            snapshot.iter().filter(|value| value.is_finite()).count(),
+            100
+        );
+    }
+
+    #[test]
+    fn calculation_preview_serializes_as_strict_camel_case_transport_contract() {
+        let preview = CalculationPreview {
+            schema_version: CALCULATION_PREVIEW_SCHEMA_VERSION,
+            sequence: 2,
+            completed_pixel_count: 12_000,
+            total_pixel_count: 125_628,
+            map_overlay_projection: "EPSG:3857",
+            map_overlay_width: GRID_SIZE,
+            map_overlay_height: GRID_SIZE,
+            map_overlay_corners: [[102.0, 31.0], [104.0, 31.0], [104.0, 29.0], [102.0, 29.0]],
+            map_overlay_png_data_url: "data:image/png;base64,preview".into(),
+        };
+        let serialized = serde_json::to_value(preview).unwrap();
+        let object = serialized.as_object().unwrap();
+        let expected_keys = [
+            "schemaVersion",
+            "sequence",
+            "completedPixelCount",
+            "totalPixelCount",
+            "mapOverlayProjection",
+            "mapOverlayWidth",
+            "mapOverlayHeight",
+            "mapOverlayCorners",
+            "mapOverlayPngDataUrl",
+        ];
+        assert_eq!(object.len(), expected_keys.len());
+        for key in expected_keys {
+            assert!(object.contains_key(key), "missing serialized field {key}");
+        }
+        assert_eq!(object["schemaVersion"], 1);
+        assert_eq!(object["sequence"], 2);
+        assert!(!object.contains_key("completed_pixel_count"));
         assert!(!object.contains_key("map_overlay_png_data_url"));
     }
 

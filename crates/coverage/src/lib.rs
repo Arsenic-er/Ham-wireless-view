@@ -5,7 +5,10 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use geographiclib_rs::{DirectGeodesic, Geodesic, InverseGeodesic};
@@ -22,6 +25,7 @@ pub const PROFILE_SAMPLE_SPACING_M: f64 = 90.0;
 pub const ITM_WARNING_BIT_COUNT: usize = 15;
 pub const MODEL_DEFAULTS_VERSION: &str = ModelDefaults::LAND_WATER_V1.version;
 pub const MAP_OVERLAY_PROJECTION: &str = "EPSG:3857";
+pub const COVERAGE_PIXEL_BATCH_SIZE: usize = 64;
 
 const WEB_MERCATOR_RADIUS_M: f64 = 6_378_137.0;
 
@@ -382,6 +386,32 @@ impl CoverageGrid {
     }
 }
 
+/// Encodes a complete or partial fixed-grid dBm snapshot as the map overlay.
+///
+/// Uncomputed pixels should be `NaN`; they are rendered transparent. The input
+/// must have exactly [`GRID_PIXEL_COUNT`] values.
+pub fn encode_map_overlay_snapshot(
+    values_dbm: &[f32],
+    center: GeoPoint,
+) -> Result<MapOverlay, CoverageError> {
+    if values_dbm.len() != GRID_PIXEL_COUNT {
+        return Err(CoverageError::InvalidInput(format!(
+            "coverage snapshot must contain exactly {GRID_PIXEL_COUNT} pixels, got {}",
+            values_dbm.len()
+        )));
+    }
+    if !center.lat.is_finite()
+        || !center.lon.is_finite()
+        || !(-90.0..=90.0).contains(&center.lat)
+        || !(-180.0..=180.0).contains(&center.lon)
+    {
+        return Err(CoverageError::InvalidInput(
+            "snapshot center is invalid".into(),
+        ));
+    }
+    encode_map_overlay_values(values_dbm, center)
+}
+
 fn encode_map_overlay_values(
     values_dbm: &[f32],
     center: GeoPoint,
@@ -566,13 +596,58 @@ pub struct CoverageProgress {
     pub total_pixel_count: usize,
 }
 
-#[derive(Clone, Copy)]
+/// One newly computed receiver pixel in the fixed coverage raster.
+///
+/// Pixel-batch callbacks may run concurrently on coverage worker threads. The
+/// slice passed to a callback is valid only for the duration of that call.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CoveragePixel {
+    pub raster_index: usize,
+    pub received_power_dbm: f32,
+}
+
+type PixelBatchCallback<'callback> = dyn Fn(&[CoveragePixel]) + Sync + 'callback;
+
 struct CoverageControl<'a> {
     cancelled: &'a AtomicBool,
     completed: &'a AtomicUsize,
     progress: &'a (dyn Fn(CoverageProgress) + Sync),
+    pixel_batch: Option<&'a PixelBatchCallback<'a>>,
     total: usize,
     notification_interval: usize,
+    next_progress_notification: AtomicUsize,
+    last_reported_progress: Mutex<usize>,
+}
+
+impl CoverageControl<'_> {
+    fn report_completed_pixel(&self) {
+        let completed = self.completed.fetch_add(1, Ordering::AcqRel) + 1;
+        if completed < self.next_progress_notification.load(Ordering::Acquire)
+            && completed != self.total
+        {
+            return;
+        }
+        let mut last_reported = self
+            .last_reported_progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let next_notification = self.next_progress_notification.load(Ordering::Relaxed);
+        if completed <= *last_reported || (completed < next_notification && completed != self.total)
+        {
+            return;
+        }
+        (self.progress)(CoverageProgress {
+            completed_pixel_count: completed,
+            total_pixel_count: self.total,
+        });
+        *last_reported = completed;
+        self.next_progress_notification.store(
+            completed
+                .saturating_add(self.notification_interval)
+                .min(self.total),
+            Ordering::Release,
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -591,12 +666,55 @@ pub fn compute_coverage(
     compute_coverage_with_control(elevation_source, water_source, config, &cancelled, |_| {})
 }
 
+/// Computes coverage while delivering newly completed raster pixels in small
+/// batches suitable for a progressive renderer.
+///
+/// `pixel_batch` is invoked synchronously by worker threads, may be invoked
+/// concurrently, and never receives more than [`COVERAGE_PIXEL_BATCH_SIZE`]
+/// items. It must copy or consume each borrowed slice before returning. The
+/// progress callback is serialized and reports strictly increasing counts.
+pub fn compute_coverage_with_pixel_batches(
+    elevation_source: &impl ElevationSource,
+    water_source: &impl WaterSource,
+    config: CoverageConfig,
+    cancelled: &AtomicBool,
+    progress: impl Fn(CoverageProgress) + Sync,
+    pixel_batch: impl Fn(&[CoveragePixel]) + Sync,
+) -> Result<CoverageGrid, CoverageError> {
+    compute_coverage_with_callbacks(
+        elevation_source,
+        water_source,
+        config,
+        cancelled,
+        &progress,
+        Some(&pixel_batch),
+    )
+}
+
 pub fn compute_coverage_with_control(
     elevation_source: &impl ElevationSource,
     water_source: &impl WaterSource,
     config: CoverageConfig,
     cancelled: &AtomicBool,
     progress: impl Fn(CoverageProgress) + Sync,
+) -> Result<CoverageGrid, CoverageError> {
+    compute_coverage_with_callbacks(
+        elevation_source,
+        water_source,
+        config,
+        cancelled,
+        &progress,
+        None,
+    )
+}
+
+fn compute_coverage_with_callbacks(
+    elevation_source: &impl ElevationSource,
+    water_source: &impl WaterSource,
+    config: CoverageConfig,
+    cancelled: &AtomicBool,
+    progress: &(dyn Fn(CoverageProgress) + Sync),
+    pixel_batch: Option<&PixelBatchCallback<'_>>,
 ) -> Result<CoverageGrid, CoverageError> {
     config.validate()?;
     if cancelled.load(Ordering::Acquire) {
@@ -622,12 +740,16 @@ pub fn compute_coverage_with_control(
     let worker_count = config.threads.min(receivers.len());
     let chunk_size = receivers.len().div_ceil(worker_count);
     let completed = AtomicUsize::new(0);
+    let notification_interval = receivers.len().div_ceil(100).max(1);
     let control = CoverageControl {
         cancelled,
         completed: &completed,
-        progress: &progress,
+        progress,
+        pixel_batch,
         total: receivers.len(),
-        notification_interval: receivers.len().div_ceil(100).max(1),
+        notification_interval,
+        next_progress_notification: AtomicUsize::new(notification_interval),
+        last_reported_progress: Mutex::new(0),
     };
     progress(CoverageProgress {
         completed_pixel_count: 0,
@@ -637,6 +759,7 @@ pub fn compute_coverage_with_control(
         let handles: Vec<_> = receivers
             .chunks(chunk_size)
             .map(|chunk| {
+                let control = &control;
                 scope.spawn(move || {
                     compute_chunk(
                         elevation_source,
@@ -644,7 +767,7 @@ pub fn compute_coverage_with_control(
                         config,
                         chunk_parameters,
                         chunk,
-                        Some(&control),
+                        Some(control),
                     )
                 })
             })
@@ -743,6 +866,7 @@ fn compute_chunk(
         (f64::from(GRID_RADIUS_KM) * 1000.0 / config.profile_sample_spacing_m).ceil() as usize;
     let mut pfl = Vec::with_capacity(maximum_intervals + 3);
     let mut pixels = Vec::with_capacity(receivers.len());
+    let mut pixel_batch = Vec::with_capacity(COVERAGE_PIXEL_BATCH_SIZE);
     for receiver in receivers {
         if control.is_some_and(|value| value.cancelled.load(Ordering::Acquire)) {
             return Err(CoverageError::Cancelled);
@@ -803,14 +927,23 @@ fn compute_chunk(
             water_fraction,
         });
         if let Some(control) = control {
-            let completed = control.completed.fetch_add(1, Ordering::AcqRel) + 1;
-            if completed == control.total || completed % control.notification_interval == 0 {
-                (control.progress)(CoverageProgress {
-                    completed_pixel_count: completed,
-                    total_pixel_count: control.total,
+            if let Some(callback) = control.pixel_batch {
+                pixel_batch.push(CoveragePixel {
+                    raster_index: receiver.raster_index,
+                    received_power_dbm: received_power as f32,
                 });
+                if pixel_batch.len() == COVERAGE_PIXEL_BATCH_SIZE {
+                    callback(&pixel_batch);
+                    pixel_batch.clear();
+                }
             }
+            control.report_completed_pixel();
         }
+    }
+    if let Some(callback) = control.and_then(|value| value.pixel_batch)
+        && !pixel_batch.is_empty()
+    {
+        callback(&pixel_batch);
     }
     Ok(ChunkResult { pixels })
 }
@@ -1641,6 +1774,68 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CoverageError::Cancelled));
+    }
+
+    #[test]
+    fn progressive_batches_cover_the_final_grid_and_progress_is_strictly_increasing() {
+        let cancelled = AtomicBool::new(false);
+        let progress_events = Mutex::new(Vec::new());
+        let batches = Mutex::new(Vec::<Vec<CoveragePixel>>::new());
+        let mut config = CoverageConfig::base_to_handheld(
+            GeoPoint {
+                lat: 30.5,
+                lon: 103.5,
+            },
+            145.0,
+            4,
+        );
+        config.profile_sample_spacing_m = 1000.0;
+
+        let grid = compute_coverage_with_pixel_batches(
+            &FlatTerrain { elevation_m: 0.0 },
+            &UniformWater { is_water: false },
+            config,
+            &cancelled,
+            |progress| progress_events.lock().unwrap().push(progress),
+            |batch| batches.lock().unwrap().push(batch.to_vec()),
+        )
+        .unwrap();
+
+        let progress_events = progress_events.into_inner().unwrap();
+        assert_eq!(progress_events.first().unwrap().completed_pixel_count, 0);
+        assert_eq!(
+            progress_events.last().unwrap().completed_pixel_count,
+            grid.statistics.valid_pixel_count
+        );
+        assert!(progress_events.windows(2).all(|pair| {
+            pair[0].completed_pixel_count < pair[1].completed_pixel_count
+                && pair[0].total_pixel_count == pair[1].total_pixel_count
+        }));
+
+        let batches = batches.into_inner().unwrap();
+        assert!(
+            batches
+                .iter()
+                .all(|batch| !batch.is_empty() && batch.len() <= COVERAGE_PIXEL_BATCH_SIZE)
+        );
+        assert_eq!(
+            batches.iter().map(Vec::len).sum::<usize>(),
+            grid.statistics.valid_pixel_count
+        );
+        let mut seen = vec![false; GRID_PIXEL_COUNT];
+        for pixel in batches.into_iter().flatten() {
+            assert!(pixel.raster_index < GRID_PIXEL_COUNT);
+            assert!(!seen[pixel.raster_index]);
+            seen[pixel.raster_index] = true;
+            assert_eq!(
+                pixel.received_power_dbm.to_bits(),
+                grid.values_dbm()[pixel.raster_index].to_bits()
+            );
+        }
+        assert_eq!(
+            seen.into_iter().filter(|was_seen| *was_seen).count(),
+            grid.statistics.valid_pixel_count
+        );
     }
 
     #[test]

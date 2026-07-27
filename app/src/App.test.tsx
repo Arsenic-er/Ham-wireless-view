@@ -1,8 +1,12 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendMode } from "./lib/backend";
-import type { CalculationResult, RadioParameters } from "./lib/types";
+import type {
+  CalculationPreview,
+  CalculationResult,
+  RadioParameters,
+} from "./lib/types";
 
 const backendMocks = vi.hoisted(() => ({
   mode: "validation-server" as BackendMode,
@@ -12,6 +16,7 @@ const backendMocks = vi.hoisted(() => ({
   cancelCalculation: vi.fn(),
   cacheOverview: vi.fn(),
   estimateDownload: vi.fn(),
+  previewHandler: null as ((preview: CalculationPreview) => void) | null,
 }));
 
 vi.mock("./lib/backend", () => ({
@@ -32,6 +37,14 @@ vi.mock("./lib/backend", () => ({
   downloadRegion: vi.fn(),
   estimateDownload: backendMocks.estimateDownload,
   exportReport: vi.fn(),
+  listenCalculationPreview: vi.fn().mockImplementation(
+    async (handler: (preview: CalculationPreview) => void) => {
+      backendMocks.previewHandler = handler;
+      return () => {
+        if (backendMocks.previewHandler === handler) backendMocks.previewHandler = null;
+      };
+    },
+  ),
   listenCalculationProgress: vi.fn().mockResolvedValue(() => undefined),
   listenDownloadProgress: vi.fn().mockResolvedValue(() => undefined),
 }));
@@ -40,10 +53,12 @@ vi.mock("./components/MapView", () => ({
   MapView: ({
     point,
     heatmap,
+    preview,
     onPointSelect,
   }: {
     point: { lat: number; lon: number } | null;
     heatmap: CalculationResult | null;
+    preview: CalculationPreview | null;
     onPointSelect: (point: { lat: number; lon: number }) => void;
   }) => (
     <div>
@@ -55,6 +70,7 @@ vi.mock("./components/MapView", () => ({
       </button>
       <span data-testid="selected-point">{point ? `${point.lat},${point.lon}` : "none"}</span>
       <span data-testid="heatmap">{heatmap ? "present" : "none"}</span>
+      <span data-testid="preview">{preview ? String(preview.sequence) : "none"}</span>
     </div>
   ),
 }));
@@ -133,6 +149,7 @@ const result: CalculationResult = {
 
 beforeEach(() => {
   backendMocks.mode = "validation-server";
+  backendMocks.previewHandler = null;
   backendMocks.bootstrap.mockResolvedValue({
     schemaVersion: 2,
     modelName: "NTIA ITM Point-to-Point",
@@ -388,5 +405,101 @@ describe("validation server UI", () => {
     await screen.findByText("\u786e\u8ba4\u4e0b\u8f7d DEM \u4e0e WBM");
     const confirm = screen.getByRole("button", { name: "\u4e0b\u8f7d\u5e76\u51c6\u5907" });
     expect((confirm as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+const preview: CalculationPreview = {
+  schemaVersion: 1,
+  sequence: 1,
+  completedPixelCount: 12_563,
+  totalPixelCount: 125_628,
+  mapOverlayProjection: "EPSG:3857",
+  mapOverlayWidth: 401,
+  mapOverlayHeight: 401,
+  mapOverlayCorners: [[0, 0], [1, 0], [1, 1], [0, 1]],
+  mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+};
+
+describe("progressive calculation preview UI", () => {
+  it("shows a preview, keeps it non-exportable, then atomically replaces it with the final result", async () => {
+    backendMocks.mode = "validation-server";
+    let resolveCalculation: (value: CalculationResult) => void = () => undefined;
+    backendMocks.calculate.mockImplementationOnce(
+      () =>
+        new Promise<CalculationResult>((resolve) => {
+          resolveCalculation = resolve;
+        }),
+    );
+
+    render(<App />);
+    await screen.findByText("\u7b49\u5f85\u9009\u62e9\u53d1\u5c04\u70b9");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
+    fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
+
+    act(() => backendMocks.previewHandler?.(preview));
+    expect((await screen.findByTestId("preview")).textContent).toBe("1");
+    expect(screen.getByTestId("heatmap").textContent).toBe("none");
+    expect(
+      (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    act(() => resolveCalculation(result));
+    await screen.findByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210");
+    expect(screen.getByTestId("preview").textContent).toBe("none");
+    expect(screen.getByTestId("heatmap").textContent).toBe("present");
+    expect(
+      (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "\u6e05\u7a7a" }));
+    expect(screen.getByTestId("preview").textContent).toBe("none");
+    expect(screen.getByTestId("heatmap").textContent).toBe("none");
+  });
+
+  it("suppresses a late preview after cancellation is requested", async () => {
+    backendMocks.mode = "validation-server";
+    let rejectCalculation: (reason?: unknown) => void = () => undefined;
+    let resolveCancellation: () => void = () => undefined;
+    backendMocks.calculate.mockImplementationOnce(
+      () =>
+        new Promise<CalculationResult>((_resolve, reject) => {
+          rejectCalculation = reject;
+        }),
+    );
+    backendMocks.cancelCalculation.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCancellation = resolve;
+        }),
+    );
+
+    render(<App />);
+    await screen.findByText("\u7b49\u5f85\u9009\u62e9\u53d1\u5c04\u70b9");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
+    fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
+
+    act(() => backendMocks.previewHandler?.(preview));
+    expect((await screen.findByTestId("preview")).textContent).toBe("1");
+    fireEvent.click(await screen.findByRole("button", { name: "\u53d6\u6d88\u8ba1\u7b97" }));
+    expect(screen.getByTestId("preview").textContent).toBe("none");
+
+    act(() =>
+      backendMocks.previewHandler?.({
+        ...preview,
+        sequence: 2,
+        completedPixelCount: 25_126,
+      }),
+    );
+    expect(screen.getByTestId("preview").textContent).toBe("none");
+
+    await act(async () => {
+      rejectCalculation(new Error("calculation cancelled"));
+      resolveCancellation();
+      await Promise.resolve();
+    });
+    await screen.findByText("\u8ba1\u7b97\u5df2\u53d6\u6d88");
+    expect(screen.getByTestId("preview").textContent).toBe("none");
   });
 });

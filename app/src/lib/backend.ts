@@ -1,10 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   BootstrapInfo,
   CacheDeleteResult,
   CacheOverview,
+  CalculationPreview,
   CalculationProgress,
   CalculationRequest,
   ExportRequest,
@@ -113,6 +114,7 @@ interface ValidationOperationHandle {
   ticketPromise: Promise<string>;
   stopped: boolean;
   lastSequence: number;
+  lastPreviewSequence: number;
   timerId: number | null;
   pollController: AbortController | null;
   inflightPoll: Promise<void> | null;
@@ -141,6 +143,9 @@ const CALCULATION_PHASES = new Set([
 
 const calculationProgressHandlers = new Set<
   (progress: CalculationProgress) => void
+>();
+const calculationPreviewHandlers = new Set<
+  (preview: CalculationPreview) => void
 >();
 const downloadProgressHandlers = new Set<(progress: DownloadProgress) => void>();
 
@@ -195,6 +200,7 @@ function beginValidationOperation(kind: OperationKind): ValidationOperationHandl
     ticketPromise: Promise.resolve(""),
     stopped: false,
     lastSequence: -1,
+    lastPreviewSequence: 0,
     timerId: null,
     pollController: null,
     inflightPoll: null,
@@ -241,6 +247,65 @@ function notifyCalculationProgress(progress: CalculationProgress): void {
       // A UI listener must not stop polling or the long-running request.
     }
   }
+}
+
+function notifyCalculationPreview(preview: CalculationPreview): void {
+  for (const handler of [...calculationPreviewHandlers]) {
+    try {
+      handler(preview);
+    } catch {
+      // A UI listener must not stop polling or the long-running request.
+    }
+  }
+}
+
+function isCoordinatePair(value: unknown): value is [number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 2 &&
+    isFiniteNumber(value[0]) &&
+    isFiniteNumber(value[1])
+  );
+}
+
+function isCalculationPreview(value: unknown): value is CalculationPreview {
+  if (!value || typeof value !== "object") return false;
+  const preview = value as Record<string, unknown>;
+  return (
+    preview.schemaVersion === 1 &&
+    Number.isSafeInteger(preview.sequence) &&
+    (preview.sequence as number) >= 0 &&
+    Number.isSafeInteger(preview.completedPixelCount) &&
+    (preview.completedPixelCount as number) >= 0 &&
+    Number.isSafeInteger(preview.totalPixelCount) &&
+    (preview.totalPixelCount as number) > 0 &&
+    (preview.completedPixelCount as number) <= (preview.totalPixelCount as number) &&
+    preview.mapOverlayProjection === "EPSG:3857" &&
+    preview.mapOverlayWidth === 401 &&
+    preview.mapOverlayHeight === 401 &&
+    Array.isArray(preview.mapOverlayCorners) &&
+    preview.mapOverlayCorners.length === 4 &&
+    preview.mapOverlayCorners.every(isCoordinatePair) &&
+    typeof preview.mapOverlayPngDataUrl === "string" &&
+    preview.mapOverlayPngDataUrl.startsWith("data:image/png;base64,")
+  );
+}
+
+function publishCalculationPreview(
+  handle: ValidationOperationHandle,
+  value: unknown,
+): void {
+  if (
+    !isCurrentOperation(handle) ||
+    handle.stopped ||
+    handle.kind !== "calculation" ||
+    !isCalculationPreview(value) ||
+    value.sequence <= handle.lastPreviewSequence
+  ) {
+    return;
+  }
+  handle.lastPreviewSequence = value.sequence;
+  notifyCalculationPreview(value);
 }
 
 function notifyDownloadProgress(progress: DownloadProgress): void {
@@ -328,6 +393,38 @@ async function requestOperationStatus(
   return status;
 }
 
+async function requestCalculationPreview(
+  handle: ValidationOperationHandle,
+  signal: AbortSignal,
+): Promise<void> {
+  if (
+    handle.kind !== "calculation" ||
+    !handle.operationId ||
+    handle.stopped ||
+    !isCurrentOperation(handle)
+  ) {
+    return;
+  }
+  const preview = await validationRequest<CalculationPreview | undefined>(
+    "/api/operation-preview",
+    {
+      operationId: handle.operationId,
+      afterSequence: handle.lastPreviewSequence,
+    },
+    "POST",
+    signal,
+  );
+  if (preview !== undefined) publishCalculationPreview(handle, preview);
+}
+
+async function requestOperationPollCycle(
+  handle: ValidationOperationHandle,
+  signal: AbortSignal,
+): Promise<void> {
+  await requestOperationStatus(handle, signal, false);
+  await requestCalculationPreview(handle, signal);
+}
+
 async function validationRequestWithTimeout<T>(
   request: (signal: AbortSignal) => Promise<T>,
   timeoutMs = FINAL_OPERATION_REQUEST_TIMEOUT_MS,
@@ -354,7 +451,7 @@ function scheduleOperationPoll(handle: ValidationOperationHandle): void {
 
     const controller = new AbortController();
     handle.pollController = controller;
-    const poll = requestOperationStatus(handle, controller.signal, false)
+    const poll = requestOperationPollCycle(handle, controller.signal)
       .then(() => undefined)
       .catch(() => {
         // A transient polling error does not fail the primary operation.
@@ -694,7 +791,29 @@ export async function calculate(
   request: CalculationRequest,
 ): Promise<CalculationResult> {
   if (desktopBackendAvailable()) {
-    return invoke<CalculationResult>("calculate", { request });
+    let acceptingPreviews = true;
+    let lastPreviewSequence = -1;
+    const previewChannel = new Channel<CalculationPreview>();
+    previewChannel.onmessage = (value) => {
+      if (
+        !acceptingPreviews ||
+        !isCalculationPreview(value) ||
+        value.sequence <= lastPreviewSequence
+      ) {
+        return;
+      }
+      lastPreviewSequence = value.sequence;
+      notifyCalculationPreview(value);
+    };
+    try {
+      return await invoke<CalculationResult>("calculate", {
+        request,
+        previewChannel,
+      });
+    } finally {
+      acceptingPreviews = false;
+      previewChannel.onmessage = () => undefined;
+    }
   }
   if (backendMode() === "validation-server") {
     return runValidationOperation<CalculationResult>(
@@ -733,6 +852,19 @@ export async function listenCalculationProgress(
     calculationProgressHandlers.add(handler);
     return () => {
       calculationProgressHandlers.delete(handler);
+    };
+  }
+  return () => undefined;
+}
+
+export async function listenCalculationPreview(
+  handler: (preview: CalculationPreview) => void,
+): Promise<UnlistenFn> {
+  const mode = backendMode();
+  if (mode === "tauri" || mode === "validation-server") {
+    calculationPreviewHandlers.add(handler);
+    return () => {
+      calculationPreviewHandlers.delete(handler);
     };
   }
   return () => undefined;

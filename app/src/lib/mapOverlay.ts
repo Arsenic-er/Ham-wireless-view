@@ -1,7 +1,7 @@
-import type { CalculationResult } from "./types";
+import type { CalculationPreview, CalculationResult } from "./types";
 
 type MapOverlayResult = Pick<
-  CalculationResult,
+  CalculationResult | CalculationPreview,
   "mapOverlayProjection" | "mapOverlayCorners" | "mapOverlayPngDataUrl"
 >;
 

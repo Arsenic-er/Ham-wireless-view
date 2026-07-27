@@ -14,6 +14,7 @@ import {
   downloadRegion,
   estimateDownload,
   inspectPoint,
+  listenCalculationPreview,
   listenCalculationProgress,
   listenDownloadProgress,
 } from "./lib/backend";
@@ -26,6 +27,7 @@ import type {
   BootstrapInfo,
   CacheOverview,
   CacheRegion,
+  CalculationPreview,
   CalculationProgress,
   CalculationRequest,
   CalculationResult,
@@ -98,6 +100,7 @@ export function App() {
   const deletingRegionRef = useRef(false);
   const exportingRef = useRef(false);
   const cancellationPendingRef = useRef(false);
+  const previewSuppressedRef = useRef(true);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapInfo, setBootstrapInfo] = useState<BootstrapInfo | null>(null);
   const [point, setPoint] = useState<MapPoint | null>(null);
@@ -105,6 +108,7 @@ export function App() {
   const [parameters, setParameters] = useState<RadioParameters>(DEFAULT_PARAMETERS);
   const [workflow, setWorkflow] = useState<WorkflowState>("idle");
   const [progress, setProgress] = useState<CalculationProgress | null>(null);
+  const [preview, setPreview] = useState<CalculationPreview | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [downloadEstimate, setDownloadEstimate] = useState<DownloadEstimate | null>(null);
   const [result, setResult] = useState<CalculationResult | null>(null);
@@ -183,9 +187,16 @@ export function App() {
   useEffect(() => {
     let active = true;
     let unlistenCalculation: (() => void) | undefined;
+    let unlistenPreview: (() => void) | undefined;
     let unlistenDownload: (() => void) | undefined;
     listenCalculationProgress(setProgress).then((dispose) => {
       if (active) unlistenCalculation = dispose;
+      else dispose();
+    });
+    listenCalculationPreview((value) => {
+      if (!previewSuppressedRef.current) setPreview(value);
+    }).then((dispose) => {
+      if (active) unlistenPreview = dispose;
       else dispose();
     });
     listenDownloadProgress(setDownloadProgress).then((dispose) => {
@@ -195,6 +206,7 @@ export function App() {
     return () => {
       active = false;
       unlistenCalculation?.();
+      unlistenPreview?.();
       unlistenDownload?.();
     };
   }, []);
@@ -444,11 +456,16 @@ export function App() {
   async function handleCancellation(
     cancel: () => Promise<void>,
     actionLabel: string,
+    clearCalculationPreview = false,
   ) {
     if (cancellationPendingRef.current) return;
     cancellationPendingRef.current = true;
     setCancellationPending(true);
     setErrorMessage(null);
+    if (clearCalculationPreview) {
+      previewSuppressedRef.current = true;
+      setPreview(null);
+    }
     try {
       await cancel();
     } catch (error) {
@@ -463,6 +480,10 @@ export function App() {
   async function handleCalculate() {
     if (!point || !canCalculate) return;
     setWorkflow("calculating");
+    setResult(null);
+    setResultStale(false);
+    previewSuppressedRef.current = false;
+    setPreview(null);
     setProgress({
       phase: "loading-data",
       percent: 0,
@@ -472,15 +493,20 @@ export function App() {
     setErrorMessage(null);
     try {
       const value = await calculate(buildRequest(point, parameters));
+      previewSuppressedRef.current = true;
       setResult(value);
+      setPreview(null);
       setResultStale(false);
       setWorkflow("completed");
     } catch (error) {
+      previewSuppressedRef.current = true;
       const message = error instanceof Error ? error.message : String(error);
       if (message.toLowerCase().includes("cancel")) {
         setResult(null);
+        setPreview(null);
         setWorkflow("cancelled");
       } else {
+        setPreview(null);
         setErrorMessage(message);
         setWorkflow("error");
       }
@@ -536,6 +562,7 @@ export function App() {
     if (isBusy) return;
     const selectedNewPoint =
       point === null || point.lat !== value.lat || point.lon !== value.lon;
+    previewSuppressedRef.current = true;
     setInspection(null);
     setWorkflow("inspecting");
     setPoint(value);
@@ -547,6 +574,7 @@ export function App() {
       );
     }
     setResult(null);
+    setPreview(null);
     setResultStale(false);
     setProgress(null);
     setDownloadEstimate(null);
@@ -557,13 +585,17 @@ export function App() {
   }
 
   function handleParameterChange(value: RadioParameters) {
+    previewSuppressedRef.current = true;
     setParameters(value);
+    setPreview(null);
     if (result) setResultStale(true);
   }
 
   function handleClear() {
     if (isBusy) return;
+    previewSuppressedRef.current = true;
     setResult(null);
+    setPreview(null);
     setResultStale(false);
     setProgress(null);
     setErrorMessage(null);
@@ -651,6 +683,7 @@ export function App() {
             theme={resolvedTheme}
             point={point}
             heatmap={result}
+            preview={preview}
             heatmapStale={resultStale}
             onPointSelect={handlePointSelect}
           />
@@ -718,7 +751,7 @@ export function App() {
                   className="secondary-action danger"
                   disabled={cancellationPending}
                   onClick={() =>
-                    void handleCancellation(cancelCalculation, "取消计算请求")
+                    void handleCancellation(cancelCalculation, "取消计算请求", true)
                   }
                 >
                   {cancellationPending ? "正在取消…" : "取消计算"}

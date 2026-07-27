@@ -12,12 +12,18 @@ import {
   maidenheadLocator,
 } from "../lib/geodesy";
 import { MapOverlayBlobUrlLease, buildMapOverlayImageSpec } from "../lib/mapOverlay";
-import type { CalculationResult, MapPoint, ResolvedTheme } from "../lib/types";
+import type {
+  CalculationPreview,
+  CalculationResult,
+  MapPoint,
+  ResolvedTheme,
+} from "../lib/types";
 
 interface MapViewProps {
   theme: ResolvedTheme;
   point: MapPoint | null;
   heatmap: CalculationResult | null;
+  preview: CalculationPreview | null;
   heatmapStale: boolean;
   onPointSelect: (point: MapPoint) => void;
 }
@@ -69,7 +75,7 @@ function updateSelection(map: MapLibreMap, point: MapPoint | null): void {
 
 function updateHeatmap(
   map: MapLibreMap,
-  heatmap: CalculationResult | null,
+  heatmap: CalculationResult | CalculationPreview | null,
   stale: boolean,
   blobUrls: MapOverlayBlobUrlLease,
 ): void {
@@ -103,6 +109,7 @@ export function MapView({
   theme,
   point,
   heatmap,
+  preview,
   heatmapStale,
   onPointSelect,
 }: MapViewProps) {
@@ -114,10 +121,12 @@ export function MapView({
   }
   const pointRef = useRef(point);
   const heatmapRef = useRef(heatmap);
+  const previewRef = useRef(preview);
   const heatmapStaleRef = useRef(heatmapStale);
   const onPointSelectRef = useRef(onPointSelect);
   pointRef.current = point;
   heatmapRef.current = heatmap;
+  previewRef.current = preview;
   heatmapStaleRef.current = heatmapStale;
   onPointSelectRef.current = onPointSelect;
 
@@ -210,7 +219,12 @@ export function MapView({
           "circle-stroke-width": 2,
         },
       });
-      updateHeatmap(map, heatmapRef.current, heatmapStaleRef.current, heatmapBlobUrls);
+      updateHeatmap(
+        map,
+        heatmapRef.current ?? previewRef.current,
+        heatmapRef.current ? heatmapStaleRef.current : false,
+        heatmapBlobUrls,
+      );
     });
     map.on("click", (event) => {
       onPointSelectRef.current({ lat: event.lngLat.lat, lon: event.lngLat.lng });
@@ -249,8 +263,13 @@ export function MapView({
     const map = mapRef.current;
     const heatmapBlobUrls = heatmapBlobUrlsRef.current;
     if (!map?.isStyleLoaded() || !heatmapBlobUrls) return;
-    updateHeatmap(map, heatmap, heatmapStale, heatmapBlobUrls);
-  }, [heatmap, heatmapStale]);
+    updateHeatmap(
+      map,
+      heatmap ?? preview,
+      heatmap ? heatmapStale : false,
+      heatmapBlobUrls,
+    );
+  }, [heatmap, preview, heatmapStale]);
 
   return (
     <section className="map-shell" aria-label="发射点选择地图">

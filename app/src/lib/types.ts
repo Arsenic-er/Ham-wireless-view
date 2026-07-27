@@ -192,6 +192,18 @@ export interface CalculationProgress {
   totalPixelCount: number;
 }
 
+export interface CalculationPreview {
+  schemaVersion: 1;
+  sequence: number;
+  completedPixelCount: number;
+  totalPixelCount: number;
+  mapOverlayProjection: "EPSG:3857";
+  mapOverlayWidth: number;
+  mapOverlayHeight: number;
+  mapOverlayCorners: [number, number][];
+  mapOverlayPngDataUrl: string;
+}
+
 export interface CalculationStatistics {
   validPixelCount: number;
   belowThresholdPixelCount: number;

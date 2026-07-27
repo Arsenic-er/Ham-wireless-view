@@ -11,7 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hamheatmap_app_service::{
-    AppService, CalculationProgress, CalculationRequest, DownloadProgressView, MapPoint,
+    AppService, CalculationPreview, CalculationProgress, CalculationRequest, DownloadProgressView,
+    MapPoint,
 };
 use serde::{Deserialize, Serialize};
 
@@ -250,6 +251,7 @@ impl ValidationServer {
             }
             ("POST", "/api/operation-ticket") => Some(self.operation_ticket(&request)),
             ("POST", "/api/operation-status") => Some(self.operation_status(&request)),
+            ("POST", "/api/operation-preview") => Some(self.operation_preview(&request)),
             ("POST", "/api/operation-ack") => Some(self.operation_ack(&request)),
             ("POST", "/api/estimate-download") => Some(self.json_ticketed_operation(
                 &request,
@@ -280,11 +282,15 @@ impl ValidationServer {
                 &request,
                 TicketKind::Calculation,
                 |body: TicketCalculationBody, cancelled, reporter| {
-                    self.state
-                        .service
-                        .calculate(&body.request, cancelled, move |progress| {
-                            reporter.report_calculation(progress)
-                        })
+                    let progress_reporter = reporter.clone();
+                    self.state.service.calculate_with_preview(
+                        &body.request,
+                        cancelled,
+                        move |progress| progress_reporter.report_calculation(progress),
+                        move |preview| {
+                            reporter.report_preview(preview);
+                        },
+                    )
                 },
             )),
             ("POST", "/api/cancel-calculation") => {
@@ -381,6 +387,22 @@ impl ValidationServer {
         };
         match self.state.operations.status(&body.operation_id) {
             Ok(status) => json_response(200, &status),
+            Err(error) => error.into_response(),
+        }
+    }
+
+    fn operation_preview(&self, request: &Request) -> Response {
+        let body = match parse_json::<OperationPreviewBody>(request) {
+            Ok(body) => body,
+            Err(error) => return error.into_response(),
+        };
+        match self
+            .state
+            .operations
+            .preview(&body.operation_id, body.after_sequence)
+        {
+            Ok(Some(preview)) => json_response(200, &preview),
+            Ok(None) => no_content_response(),
             Err(error) => error.into_response(),
         }
     }
@@ -547,6 +569,7 @@ struct ActiveOperation {
     cancelled: Arc<AtomicBool>,
     sequence: u64,
     progress: Option<OperationProgress>,
+    preview: Option<CalculationPreview>,
 }
 
 #[derive(Clone)]
@@ -608,6 +631,29 @@ impl OperationReporter {
 
     fn report_calculation(&self, progress: CalculationProgress) {
         self.report(OperationProgress::calculation(progress));
+    }
+
+    fn report_preview(&self, preview: CalculationPreview) -> bool {
+        let Ok(mut inner) = self.gate.inner.lock() else {
+            return false;
+        };
+        let Some(active) = inner.active.as_mut() else {
+            return false;
+        };
+        if active.operation_id.as_deref() != Some(&self.operation_id)
+            || active.generation != self.generation
+            || active.kind != Some(TicketKind::Calculation)
+            || active.cancelled.load(Ordering::Acquire)
+            || preview.completed_pixel_count > preview.total_pixel_count
+            || active
+                .preview
+                .as_ref()
+                .is_some_and(|current| current.sequence >= preview.sequence)
+        {
+            return false;
+        }
+        active.preview = Some(preview);
+        true
     }
 }
 
@@ -711,6 +757,7 @@ impl OperationGate {
             cancelled: cancelled.clone(),
             sequence: 0,
             progress: None,
+            preview: None,
         });
         Ok(OperationLease {
             gate: self.clone(),
@@ -765,6 +812,7 @@ impl OperationGate {
             cancelled: cancelled.clone(),
             sequence: 1,
             progress,
+            preview: None,
         });
         Ok(OperationLease {
             gate: self.clone(),
@@ -837,6 +885,29 @@ impl OperationGate {
         })
     }
 
+    fn preview(
+        &self,
+        operation_id: &str,
+        after_sequence: u64,
+    ) -> Result<Option<CalculationPreview>, ApiError> {
+        validate_operation_id(operation_id)?;
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| ApiError::internal("operation gate is poisoned"))?;
+        Ok(inner
+            .active
+            .as_ref()
+            .filter(|active| {
+                active.operation_id.as_deref() == Some(operation_id)
+                    && active.kind == Some(TicketKind::Calculation)
+                    && !active.cancelled.load(Ordering::Acquire)
+            })
+            .and_then(|active| active.preview.as_ref())
+            .filter(|preview| preview.sequence > after_sequence)
+            .cloned())
+    }
+
     fn cancel(&self, operation_id: &str, family: CancelFamily) -> Result<bool, ApiError> {
         validate_operation_id(operation_id)?;
         let mut inner = self
@@ -857,6 +928,7 @@ impl OperationGate {
         if !active.cancelled.swap(true, Ordering::AcqRel) {
             active.sequence = active.sequence.saturating_add(1);
         }
+        active.preview = None;
         Ok(true)
     }
 
@@ -1104,6 +1176,13 @@ struct TicketRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OperationIdBody {
     operation_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OperationPreviewBody {
+    operation_id: String,
+    after_sequence: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1365,9 +1444,20 @@ fn json_response(value: u16, payload: &impl Serialize) -> Response {
     }
 }
 
+fn no_content_response() -> Response {
+    Response {
+        status: 204,
+        content_type: "application/json; charset=utf-8",
+        body: Vec::new(),
+        head_only: true,
+        cache_control: "no-store",
+    }
+}
+
 fn write_response(stream: &mut impl Write, response: Response) -> io::Result<()> {
     let reason = match response.status {
         200 => "OK",
+        204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
@@ -1592,6 +1682,20 @@ mod tests {
         format!("00000000-0000-4000-8000-{value:012x}")
     }
 
+    fn test_preview(sequence: u64) -> CalculationPreview {
+        CalculationPreview {
+            schema_version: 1,
+            sequence,
+            completed_pixel_count: sequence * 100,
+            total_pixel_count: 125_628,
+            map_overlay_projection: "EPSG:3857",
+            map_overlay_width: 401,
+            map_overlay_height: 401,
+            map_overlay_corners: [[102.0, 31.0], [104.0, 31.0], [104.0, 29.0], [102.0, 29.0]],
+            map_overlay_png_data_url: format!("data:image/png;base64,preview-{sequence}"),
+        }
+    }
+
     #[test]
     fn generated_operation_ids_are_lowercase_uuid_v4() {
         for _ in 0..32 {
@@ -1759,6 +1863,77 @@ mod tests {
         assert!(gate.ack(&operation_id).unwrap());
         assert!(!gate.ack(&operation_id).unwrap());
         assert_eq!(gate.status(&operation_id).unwrap_err().status, 404);
+    }
+
+    #[test]
+    fn preview_is_latest_only_exact_and_cleared_on_cancel_and_finish() {
+        let gate = Arc::new(OperationGate::default());
+        let operation_id = test_operation_id(40);
+        let unknown_id = test_operation_id(41);
+        assert_eq!(gate.preview(&unknown_id, 0).unwrap(), None);
+
+        gate.reserve_with_id_at(
+            TicketKind::Calculation,
+            operation_id.clone(),
+            Instant::now(),
+        )
+        .unwrap();
+        assert_eq!(gate.preview(&operation_id, 0).unwrap(), None);
+        let lease = gate
+            .begin_ticketed(&operation_id, TicketKind::Calculation)
+            .unwrap();
+        let reporter = lease.reporter().unwrap();
+        assert!(reporter.report_preview(test_preview(1)));
+        assert_eq!(gate.preview(&operation_id, 1).unwrap(), None);
+        assert_eq!(gate.preview(&operation_id, 0).unwrap().unwrap().sequence, 1);
+        assert!(reporter.report_preview(test_preview(3)));
+        assert!(!reporter.report_preview(test_preview(2)));
+        let latest = gate.preview(&operation_id, 1).unwrap().unwrap();
+        assert_eq!(latest.sequence, 3);
+        assert!(latest.map_overlay_png_data_url.ends_with("preview-3"));
+
+        let status_json = serde_json::to_string(&gate.status(&operation_id).unwrap()).unwrap();
+        assert!(!status_json.contains("mapOverlay"));
+        assert!(!status_json.contains("preview-3"));
+
+        assert!(
+            gate.cancel(&operation_id, CancelFamily::Calculation)
+                .unwrap()
+        );
+        assert_eq!(gate.preview(&operation_id, 0).unwrap(), None);
+        assert!(!reporter.report_preview(test_preview(4)));
+        assert!(lease.finish::<()>(Ok(())).unwrap().is_err());
+        assert_eq!(gate.preview(&operation_id, 0).unwrap(), None);
+
+        let finished_id = test_operation_id(42);
+        gate.reserve_with_id_at(TicketKind::Calculation, finished_id.clone(), Instant::now())
+            .unwrap();
+        let finished = gate
+            .begin_ticketed(&finished_id, TicketKind::Calculation)
+            .unwrap();
+        assert!(finished.reporter().unwrap().report_preview(test_preview(1)));
+        finished.finish(Ok(())).unwrap().unwrap();
+        assert_eq!(gate.preview(&finished_id, 0).unwrap(), None);
+
+        let failed_id = test_operation_id(43);
+        gate.reserve_with_id_at(TicketKind::Calculation, failed_id.clone(), Instant::now())
+            .unwrap();
+        let failed = gate
+            .begin_ticketed(&failed_id, TicketKind::Calculation)
+            .unwrap();
+        assert!(failed.reporter().unwrap().report_preview(test_preview(1)));
+        assert!(failed.finish::<()>(Err("failure".into())).unwrap().is_err());
+        assert_eq!(gate.preview(&failed_id, 0).unwrap(), None);
+
+        let dropped_id = test_operation_id(44);
+        gate.reserve_with_id_at(TicketKind::Calculation, dropped_id.clone(), Instant::now())
+            .unwrap();
+        let dropped = gate
+            .begin_ticketed(&dropped_id, TicketKind::Calculation)
+            .unwrap();
+        assert!(dropped.reporter().unwrap().report_preview(test_preview(1)));
+        drop(dropped);
+        assert_eq!(gate.preview(&dropped_id, 0).unwrap(), None);
     }
 
     #[test]
@@ -1949,6 +2124,127 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("must not overlap"));
+    }
+
+    #[test]
+    fn preview_http_endpoint_is_exact_latest_only_and_fail_closed() {
+        let fixture = ServerFixture::new();
+        let operation_id = test_operation_id(600);
+        let unknown_id = test_operation_id(601);
+        fixture
+            .server
+            .state
+            .operations
+            .reserve_with_id_at(
+                TicketKind::Calculation,
+                operation_id.clone(),
+                Instant::now(),
+            )
+            .unwrap();
+        let lease = fixture
+            .server
+            .state
+            .operations
+            .begin_ticketed(&operation_id, TicketKind::Calculation)
+            .unwrap();
+        let request_body = serde_json::to_vec(&serde_json::json!({
+            "operationId": operation_id,
+            "afterSequence": 0
+        }))
+        .unwrap();
+        let empty = fixture.request(
+            "POST",
+            "/api/operation-preview",
+            Some("application/json"),
+            &request_body,
+        );
+        assert_eq!(empty.status, 204);
+        assert!(empty.body.is_empty());
+
+        assert!(lease.reporter().unwrap().report_preview(test_preview(7)));
+        let available = fixture.request(
+            "POST",
+            "/api/operation-preview",
+            Some("application/json"),
+            &request_body,
+        );
+        assert_eq!(available.status, 200);
+        let preview_json = response_json(&available);
+        assert_eq!(preview_json["sequence"], 7);
+        assert_eq!(preview_json["completedPixelCount"], 700);
+        assert_eq!(preview_json["mapOverlayProjection"], "EPSG:3857");
+        assert_eq!(
+            preview_json["mapOverlayPngDataUrl"],
+            "data:image/png;base64,preview-7"
+        );
+
+        let caught_up_body = serde_json::to_vec(&serde_json::json!({
+            "operationId": operation_id,
+            "afterSequence": 7
+        }))
+        .unwrap();
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/operation-preview",
+                    Some("application/json"),
+                    &caught_up_body,
+                )
+                .status,
+            204
+        );
+        let unknown_body = serde_json::to_vec(&serde_json::json!({
+            "operationId": unknown_id,
+            "afterSequence": 0
+        }))
+        .unwrap();
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/operation-preview",
+                    Some("application/json"),
+                    &unknown_body,
+                )
+                .status,
+            204
+        );
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/operation-preview",
+                    Some("text/plain"),
+                    &request_body
+                )
+                .status,
+            415
+        );
+        let unknown_field = br#"{"operationId":"00000000-0000-4000-8000-000000000600","afterSequence":0,"extra":true}"#;
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/operation-preview",
+                    Some("application/json"),
+                    unknown_field,
+                )
+                .status,
+            400
+        );
+        lease.finish(Ok(())).unwrap().unwrap();
+        assert_eq!(
+            fixture
+                .request(
+                    "POST",
+                    "/api/operation-preview",
+                    Some("application/json"),
+                    &request_body,
+                )
+                .status,
+            204
+        );
     }
 
     #[test]

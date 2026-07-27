@@ -1,15 +1,16 @@
 use std::path::PathBuf;
 
 use hamheatmap_app_service::{
-    AppService, BootstrapInfo, CacheDeleteResult, CacheOverview, CalculationRequest,
-    CalculationResult, DownloadEstimate, DownloadProgressView, DownloadResult, MapPoint,
-    PointInspection,
+    AppService, BootstrapInfo, CacheDeleteResult, CacheOverview, CalculationPreview,
+    CalculationRequest, CalculationResult, DownloadEstimate, DownloadProgressView, DownloadResult,
+    MapPoint, PointInspection,
 };
 use hamheatmap_export::{
     ReportFormat, encode_report, path_with_format_extension, validate_suggested_file_name,
     write_report_atomic,
 };
 use serde::{Deserialize, Serialize};
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod operation_state;
@@ -163,6 +164,7 @@ async fn delete_cache_region(
 #[tauri::command]
 async fn calculate(
     request: CalculationRequest,
+    preview_channel: Channel<CalculationPreview>,
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<CalculationResult, String> {
@@ -170,9 +172,16 @@ async fn calculate(
     let data_root = state.data_root.clone();
     let cancelled = lease.cancellation_flag();
     let join_result = tauri::async_runtime::spawn_blocking(move || {
-        AppService::new(data_root).calculate(&request, &cancelled, |progress| {
-            let _ = app.emit("calculation-progress", progress);
-        })
+        AppService::new(data_root).calculate_with_preview(
+            &request,
+            &cancelled,
+            |progress| {
+                let _ = app.emit("calculation-progress", progress);
+            },
+            |preview| {
+                let _ = preview_channel.send(preview);
+            },
+        )
     })
     .await;
     let outcome = match join_result {

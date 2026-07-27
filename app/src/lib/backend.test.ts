@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Channel } from "@tauri-apps/api/core";
+import { mockIPC } from "@tauri-apps/api/mocks";
 
 import {
   backendCapabilities,
@@ -11,10 +13,16 @@ import {
   estimateDownload,
   exportReport,
   inspectPoint,
+  listenCalculationPreview,
   listenCalculationProgress,
   listenDownloadProgress,
 } from "./backend";
-import type { CalculationRequest, CalculationResult, DownloadResult } from "./types";
+import type {
+  CalculationPreview,
+  CalculationRequest,
+  CalculationResult,
+  DownloadResult,
+} from "./types";
 
 function removeTauriInternals(): void {
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
@@ -1194,5 +1202,232 @@ describe("validation operation bounded cleanup", () => {
     primary.resolve(jsonResponse(CALCULATION_RESULT));
     await calculation;
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("validation calculation preview protocol", () => {
+  const PREVIEW = {
+    schemaVersion: 1 as const,
+    sequence: 1,
+    completedPixelCount: 12_563,
+    totalPixelCount: 125_628,
+    mapOverlayProjection: "EPSG:3857" as const,
+    mapOverlayWidth: 401,
+    mapOverlayHeight: 401,
+    mapOverlayCorners: [
+      [101, 32],
+      [106, 32],
+      [106, 29],
+      [101, 29],
+    ] as [number, number][],
+    mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+  };
+
+  it("polls status then preview without overlap, accepts 200, and handles 204", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    const firstPreview = deferred<Response>();
+    let statusCalls = 0;
+    let previewCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "running",
+            sequence: statusCalls,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-preview") {
+        previewCalls += 1;
+        return previewCalls === 1
+          ? firstPreview.promise
+          : Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const previewHandler = vi.fn();
+    const unlisten = await listenCalculationPreview(previewHandler);
+
+    const resultPromise = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(statusCalls).toBe(1);
+    expect(previewCalls).toBe(1);
+    const firstBody = fetchMock.mock.calls
+      .filter(([input]) => String(input) === "/api/operation-preview")
+      .map(([, init]) => JSON.parse(String(init?.body)))[0];
+    expect(firstBody).toEqual({
+      operationId: OPERATION_ID_1,
+      afterSequence: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(statusCalls).toBe(1);
+    expect(previewCalls).toBe(1);
+
+    firstPreview.resolve(jsonResponse(PREVIEW));
+    await flushMicrotasks();
+    expect(previewHandler).toHaveBeenCalledTimes(1);
+    expect(previewHandler).toHaveBeenCalledWith(PREVIEW);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(statusCalls).toBe(2);
+    expect(previewCalls).toBe(2);
+    const previewBodies = fetchMock.mock.calls
+      .filter(([input]) => String(input) === "/api/operation-preview")
+      .map(([, init]) => JSON.parse(String(init?.body)));
+    expect(previewBodies[1]).toEqual({
+      operationId: OPERATION_ID_1,
+      afterSequence: 1,
+    });
+    expect(previewHandler).toHaveBeenCalledTimes(1);
+
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await expect(resultPromise).resolves.toEqual(CALCULATION_RESULT);
+    expect(statusCalls).toBe(3);
+    expect(vi.getTimerCount()).toBe(0);
+    unlisten();
+  });
+
+  it("drops an in-flight preview after the captured operation is stopped", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    vi.useFakeTimers();
+    const primary = deferred<Response>();
+    const latePreview = deferred<Response>();
+    let statusCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") return primary.promise;
+      if (path === "/api/operation-status") {
+        statusCalls += 1;
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: statusCalls === 1 ? "running" : "succeeded",
+            sequence: statusCalls,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-preview") return latePreview.promise;
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const previewHandler = vi.fn();
+    const unlisten = await listenCalculationPreview(previewHandler);
+
+    const resultPromise = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(250);
+    primary.resolve(jsonResponse(CALCULATION_RESULT));
+    await flushMicrotasks();
+    latePreview.resolve(jsonResponse(PREVIEW));
+
+    await expect(resultPromise).resolves.toEqual(CALCULATION_RESULT);
+    expect(previewHandler).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    unlisten();
+  });
+});
+
+describe("Tauri calculation preview channel", () => {
+  const TAURI_PREVIEW: CalculationPreview = {
+    schemaVersion: 1,
+    sequence: 1,
+    completedPixelCount: 12_563,
+    totalPixelCount: 125_628,
+    mapOverlayProjection: "EPSG:3857",
+    mapOverlayWidth: 401,
+    mapOverlayHeight: 401,
+    mapOverlayCorners: [
+      [101, 32],
+      [106, 32],
+      [106, 29],
+      [101, 29],
+    ],
+    mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+  };
+
+  it("passes a per-invocation Channel, validates messages, and suppresses late delivery", async () => {
+    const completion = deferred<CalculationResult>();
+    let capturedChannel: Channel<CalculationPreview> | null = null;
+    mockIPC((command, args) => {
+      expect(command).toBe("calculate");
+      const payload = args as {
+        request?: unknown;
+        previewChannel?: unknown;
+      };
+      expect(payload.request).toEqual(CALCULATION_REQUEST);
+      expect(payload.previewChannel).toBeInstanceOf(Channel);
+      capturedChannel = payload.previewChannel as Channel<CalculationPreview>;
+      return completion.promise;
+    });
+    const previewHandler = vi.fn();
+    const unlisten = await listenCalculationPreview(previewHandler);
+
+    const resultPromise = calculate(CALCULATION_REQUEST);
+    await flushMicrotasks();
+    const activeChannel = capturedChannel as Channel<CalculationPreview> | null;
+    if (!activeChannel) throw new Error("calculate did not pass its preview Channel");
+
+    activeChannel.onmessage({
+      ...TAURI_PREVIEW,
+      mapOverlayWidth: 400,
+    });
+    activeChannel.onmessage(TAURI_PREVIEW);
+    activeChannel.onmessage(TAURI_PREVIEW);
+    expect(previewHandler).toHaveBeenCalledTimes(1);
+    expect(previewHandler).toHaveBeenCalledWith(TAURI_PREVIEW);
+
+    completion.resolve(CALCULATION_RESULT);
+    await expect(resultPromise).resolves.toEqual(CALCULATION_RESULT);
+
+    activeChannel.onmessage({
+      ...TAURI_PREVIEW,
+      sequence: 2,
+      completedPixelCount: 25_126,
+    });
+    expect(previewHandler).toHaveBeenCalledTimes(1);
+    unlisten();
   });
 });
