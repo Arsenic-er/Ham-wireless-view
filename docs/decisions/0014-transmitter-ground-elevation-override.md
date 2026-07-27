@@ -1,7 +1,7 @@
 # ADR-0014：发射点地面海拔覆盖与冻结结果契约
 
 - 日期：2026-07-27
-- 状态：已采纳；实现与自动化回归已完成，真实成都 auto/manual 与 Windows/浏览器实测待补
+- 状态：已采纳；实现、自动化、真实成都 auto/manual 与受管 HTTP 已通过，Windows/浏览器实测待补
 
 ## 背景
 
@@ -70,9 +70,12 @@
 
 当前自动化门禁已通过 Rust workspace `95 passed`、前端 `46 passed`、Clippy `-D warnings`、TypeScript check、Vite build 和 Windows xwin 目标检查。定向用例覆盖缺失/null/manual 请求、范围/非有限值、中心 DEM 必验、只替换 PFL 首样点、schema 3 与 `dem/manual`、预设/新点/清空以及冻结导出字段。
 
+受管 revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 的成都真实缓存烟测得到 DEM 自动 `526.3442993164062 m` 与手动 `1500.0 m`；两次 schema 3 来源正确，原始/覆盖层 PNG 哈希均变化，缓存保持 `133,071,416 bytes`、`partial=0`。
+
 仍需单列：
 
-- [ ] 使用真实成都缓存比较 DEM 自动与手动值，记录 schema 3、有效海拔/来源、双 PNG/统计变化和缓存不变性；
-- [ ] 受管 validation server 构建、HTTP smoke 与 SSH 隧道浏览器显示；
+- [x] 使用真实成都缓存比较 DEM 自动与手动值，schema 3、有效海拔/来源、双 PNG 变化和缓存不变性通过；
+- [x] 受管 validation server 构建和 HTTP smoke 通过；
+- [ ] SSH 隧道浏览器显示、交互和控制台检查；
 - [ ] Windows 10/11 WebView2 中表单、重算、原生 PNG/PDF 导出与视觉布局；
 - [ ] 外场测量对手动站址海拔的实际精度校准。

@@ -387,7 +387,7 @@ ADR 0013 用服务端签发的短期 UUIDv4 capability 取代“按 kind 取消�
 
 ## 22. 发射点地面海拔与有界下载切片（2026-07-27）
 
-本节记录当前实现的自动化证据与尚未执行的运行验收。第 19—21 节中的 `schemaVersion=2` 是相应历史构建的真实结果；当前 `CalculationResult` 已按 ADR 0014 升级为 schema 3，旧数字不被改写或冒充当前协议证据。
+本节记录当前实现的自动化与受管运行证据。第 19—21 节中的 `schemaVersion=2` 是相应历史构建的真实结果；当前 `CalculationResult` 已按 ADR 0014 升级为 schema 3，旧数字不被改写或冒充当前协议证据。
 
 ### 22.1 已完成的定向测试
 
@@ -409,12 +409,12 @@ ADR 0013 用服务端签发的短期 UUIDv4 capability 取代“按 kind 取消�
 - [x] Rustfmt、Clippy `-D warnings`、TypeScript check、Vite production build 与 Windows xwin 目标检查通过。
 - [x] `git diff --check` 由本轮文档完成后单独执行并记录。
 
-这些自动化/联网结果证明代码与既有真实来源回归，不等于当前未提交工作树已经完成受管部署或用户可见运行。
+这些自动化/联网结果证明代码与既有真实来源回归；受管部署和真实计算另由下一节记录，仍不能外推为用户可见浏览器或 Windows 行为。
 
-### 22.3 尚未完成的运行验收
+### 22.3 受管运行证据与尚未完成验收
 
-- [ ] 成都真实缓存分别运行 DEM 自动与手动覆盖，记录两次 schema 3 的数值/来源、双 PNG 哈希或统计差异、运行耗时和缓存前后不变性。
-- [ ] 用 `scripts/validation-platform.sh build` 完成当前代码的受管构建、严格 stop/start、health 与 bootstrap/cache readiness；不得复用旧 schema 2 的 PID/revision 证据。
+- [x] 成都真实缓存 DEM 自动值为 `526.3442993164062 m`、来源 `dem`；手动值为 `1500.0 m`、来源 `manual`。两次均为 schema 3，原始热力图与 EPSG:3857 覆盖层各自哈希不同。
+- [x] revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 完成受管 stop/build/start；PID `1301627` 只监听 `127.0.0.1:1421`，health、bootstrap schema 2、schema 3 recovery smoke 与缓存不变性通过。
 - [ ] 通过 SSH 隧道浏览器确认 DEM/手动控件、真实 auto/manual 热力图变化、进度、清空/新点规则、浅/深色布局和控制台状态。
 - [ ] 在可控弱网中实际触发 DNS/连接/响应体超时，量化取消延迟并确认用户重试续传。
 - [ ] Windows 10/11 WebView2 的表单、下载/续传、计算、原生 PNG/PDF 导出和长路径/文件系统。

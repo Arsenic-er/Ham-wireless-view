@@ -12,9 +12,9 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 后续私有平台协议切片为计算与下载引入服务端生成的 operation capability、精确 ID 取消、有限期状态快照和约 250 ms 的非重叠 HTTP 进度轮询，用来隔离多标签页操作并复用现有进度界面。同步长请求仍是结果的唯一权威来源，状态端点不保存 PNG 或错误详情。该协议已在 full build revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 上完成代码回归、受管 `stop → build → start`、readiness 与两次真实回环烟雾；通过 SSH 隧道确认浏览器可见进度和控制台状态仍待执行，不能从受管 HTTP 结果外推。
 
-当前开发工作树还实现了发射点地面海拔的“DEM 自动/手动覆盖”：可空请求兼容旧调用，手动范围为 `-500..9000 m AMSL`，中心 DEM 在两种模式下都必须验证，且只替换 ITM PFL 的发射端首样点；天线 AGL、其余 DEM 与 WBM 不变。计算结果独立升级为 schema 3 并冻结有效海拔及 `dem/manual` 来源，bootstrap 保持 schema 2，内部报告使用冻结结果。
+本次切片实现了发射点地面海拔的“DEM 自动/手动覆盖”：可空请求兼容旧调用，手动范围为 `-500..9000 m AMSL`，中心 DEM 在两种模式下都必须验证，且只替换 ITM PFL 的发射端首样点；天线 AGL、其余 DEM 与 WBM 不变。计算结果独立升级为 schema 3 并冻结有效海拔及 `dem/manual` 来源，bootstrap 保持 schema 2，内部报告使用冻结结果。
 
-同一切片把 GLO-90 下载 Agent 收紧为 HTTPS-only、零重定向和有限分阶段/总超时，并让取消、读取错误与 early EOF 都可靠同步/登记 partial 后再返回；没有后台自动重试，下一次用户操作只在强 ETag/Range 条件匹配时续传。自动化门禁已通过 Rust workspace 95 项、前端 46 项、真实 HTTPS 3/3、Clippy、类型检查、前端构建和 xwin 检查。当前代码的成都 auto/manual 真实运行、受管 validation 重新部署、SSH 隧道浏览器视觉和 Windows 实机仍待验证，不能沿用旧 schema 2 运行记录替代。
+同一切片把 GLO-90 下载 Agent 收紧为 HTTPS-only、零重定向和有限分阶段/总超时，并让取消、读取错误与 early EOF 都可靠同步/登记 partial 后再返回；没有后台自动重试，下一次用户操作只在强 ETag/Range 条件匹配时续传。自动化门禁已通过 Rust workspace 95 项、前端 46 项、真实 HTTPS 3/3、Clippy、类型检查、前端构建和 xwin 检查。revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管部署；成都 DEM 自动 `526.3442993164062 m` 与手动 `1500.0 m` 的原始/覆盖层 PNG 哈希均发生变化，schema 3 恢复烟测也通过。SSH 隧道浏览器视觉和 Windows 实机仍待验证。
 
 首轮结果见 `docs/05-phase0-validation-report.md`，真实地形最小可行性结果见 `docs/06-minimum-viability-validation.md`，缓存闭环见 `docs/07-phase1-cache-validation.md`，陆地/水体结果见 `docs/08-land-water-validation.md`，桌面首切片见 `docs/09-phase2-desktop-slice.md`，下载与缓存交互见 `docs/10-phase2-download-cache-slice.md`。通过桌面服务契约运行成都真实缓存时，125,628 个像素约 9.75 秒完成；下载状态烟雾测试确认 50 个 DEM/WBM 资产无需重复下载并正确进入 ready。上述数字仍不是 Windows 整机验收。
 
@@ -53,6 +53,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 - `docs/14-windows-cross-build-gpu273312.md`：新服务器固定工具链、Windows 产物与 PE/安装包审计。
 - `docs/15-private-validation-platform.md`：SSH 隧道私有验证平台、三态前端、运行边界与验证记录。
 - `docs/16-recovery-and-cancellation-validation.md`：缓存重启恢复、配额边界、取消线性化和私有平台管理脚本加固记录。
+- `docs/17-manual-elevation-and-download-transport-validation.md`：手动发射点地面海拔、有界下载、schema 3 与受管真实计算证据。
 - `docs/decisions/`：带证据的工程决策记录。
 
 ## 开发与构建

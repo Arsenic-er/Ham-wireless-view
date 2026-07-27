@@ -313,6 +313,16 @@ full build revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 的构建时间�
 每次运行最终 gate 为空、`/healthz` 为 200，缓存/readiness 不变且无 `validation-recovery-smoke.*` 临时目录残留。本节只证明服务器回环上的受管 HTTP identity 与 progress；本轮没有通过 SSH 隧道在浏览器验证可见逐阶段进度、取消/重试 UI 或控制台。
 
 
+### 9.6 Schema 3 手动地面海拔受管验收
+
+revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管 stop/build/start。PID `1301627` 只监听 `127.0.0.1:1421`，server SHA-256 为 `e8151b46aad3318abddbade68a465c8c04c9851a24166888f57b9cadebae78fa`；health、bootstrap schema 2 与缓存 readiness 通过。
+
+`scripts/validation-manual-elevation-smoke.sh` 在成都真实缓存上确认自动 `526.3442993164062 m` 与手动 `1500.0 m` 的 schema 3 来源正确，原始热力图和 EPSG:3857 覆盖层哈希均变化。更新后的 recovery smoke 同时通过 exact-ID 取消、进度、ack、schema 3 和 DEM 来源断言。
+
+运行前后缓存均为 `133,071,416 bytes`、`partial=0`，两个区域各 `50/50 ready`，无 smoke 临时目录残留。完整证据见 `17-manual-elevation-and-download-transport-validation.md`。
+
+本节仍不关闭 SSH 隧道浏览器视觉、Windows/Tauri、弱网/磁盘压力或地图合规。
+
 ## 10. 尚未关闭
 
 - operation capability 的代码回归、新构建和受管 HTTP 烟雾已通过；SSH 隧道浏览器可见进度、取消/重试 UI 和控制台仍待验证；
