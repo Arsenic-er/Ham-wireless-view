@@ -18,6 +18,8 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 首轮结果见 `docs/05-phase0-validation-report.md`，真实地形最小可行性结果见 `docs/06-minimum-viability-validation.md`，缓存闭环见 `docs/07-phase1-cache-validation.md`，陆地/水体结果见 `docs/08-land-water-validation.md`，桌面首切片见 `docs/09-phase2-desktop-slice.md`，下载与缓存交互见 `docs/10-phase2-download-cache-slice.md`。通过桌面服务契约运行成都真实缓存时，125,628 个像素约 9.75 秒完成；下载状态烟雾测试确认 50 个 DEM/WBM 资产无需重复下载并正确进入 ready。上述数字仍不是 Windows 整机验收。
 
+2026-07-28 新增真实参数敏感性门禁：同一成都 DEM/WBM 上逐像素验证 10 倍功率约 +10 dB、收发增益精确平移，并确认 145/435 MHz、收发天线高度和水平/垂直极化都会产生非统一的空间变化。相同输入的原始栅格、报告 PNG 和 EPSG:3857 地图覆盖 PNG 哈希一致；每个参数场景的两种 PNG 均与基线不同。测试使用一致缓存快照，真实缓存的 SQLite、DEM/WBM、总字节和完整清单保持不变；这证明模型参数接线和响应，不替代外场校准。
+
 > [!WARNING]
 > 当前版本是未签名的内部 Alpha。传播结果是模型估算，尚未经过外场测量校准，不得作为生命安全、应急指挥或法规合规决策的唯一依据。仓库公开的是源代码；这不代表当前占位地图或导出报告已经满足中国大陆公开地图发行要求。
 
@@ -55,6 +57,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 - `docs/16-recovery-and-cancellation-validation.md`：缓存重启恢复、配额边界、取消线性化和私有平台管理脚本加固记录。
 - `docs/17-manual-elevation-and-download-transport-validation.md`：手动发射点地面海拔、有界下载、schema 3 与受管真实计算证据。
 - `docs/18-progressive-coverage-preview-validation.md`：渐进式覆盖预览、双传输契约、真实成都运行与 Windows 待验边界。
+- `docs/19-parameter-sensitivity-validation.md`：真实成都逐像素参数矩阵、双 PNG 确定性和缓存快照不变性证据。
 - `docs/decisions/`：带证据的工程决策记录。
 
 ## 开发与构建
@@ -84,6 +87,12 @@ scripts/cache-durability-stress.sh
 ```
 
 脚本拒绝使用非空的压力测试目录，不会读取、修改或清理 `.runtime/validation-platform/data/` 的真实验证缓存。
+
+真实参数敏感性矩阵保持显式 opt-in；它在短暂独占真实缓存时复制一致快照，随后只对快照运行，逐像素验证功率、增益、频率、高度和极化：
+
+```bash
+scripts/parameter-sensitivity-smoke.sh
+```
 
 真实 DEM 样本不提交到 Git。可重复下载并验证后运行：
 

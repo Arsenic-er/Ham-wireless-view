@@ -1011,6 +1011,9 @@ fn heatmap_image_corners(center: MapPoint) -> [[f64; 2]; 4] {
 }
 
 #[cfg(test)]
+mod real_parameter_sensitivity;
+
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
