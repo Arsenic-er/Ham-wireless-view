@@ -327,6 +327,37 @@ select:focus-visible {
   filter: var(--map-control-filter, none);
 }
 
+.map-shell .maplibregl-ctrl-scale {
+  min-width: 0;
+  padding: 2px 7px 3px;
+  border: 2px solid var(--text);
+  border-top: 0;
+  border-radius: 0 0 5px 5px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  box-shadow: 0 7px 20px rgba(34, 55, 64, 0.12);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+  pointer-events: none;
+}
+
+.map-attribution {
+  position: absolute;
+  right: 10px;
+  bottom: 42px;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 5px 14px rgba(34, 55, 64, 0.1);
+  font-size: 9px;
+  pointer-events: none;
+}
+
 :root[data-theme="dark"] {
   --map-control-filter: invert(1) hue-rotate(180deg);
 }

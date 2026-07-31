@@ -1,5 +1,7 @@
 //! Minimal same-origin HTTP bridge for internal browser validation.
 
+mod basemap;
+
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{self, Read, Write};
@@ -10,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use basemap::{BasemapError, BasemapProxy};
 use hamheatmap_app_service::{
     AppService, CalculationPreview, CalculationProgress, CalculationRequest, DownloadProgressView,
     MapPoint,
@@ -30,6 +33,7 @@ pub struct ServerConfig {
     pub bind_address: String,
     pub dist_dir: PathBuf,
     pub data_root: PathBuf,
+    pub basemap_token_file: PathBuf,
     pub request_body_limit: usize,
 }
 
@@ -46,13 +50,22 @@ impl ServerConfig {
             data_root: std::env::var_os("HAMHEATMAP_VALIDATION_DATA_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| current_dir.join(".runtime/validation-server/data")),
+            basemap_token_file: std::env::var_os("HAMHEATMAP_VALIDATION_BASEMAP_TOKEN_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    current_dir.join(".runtime/validation-platform/secrets/tianditu.token")
+                }),
             request_body_limit: DEFAULT_REQUEST_BODY_LIMIT,
         };
 
         let mut args = args.into_iter();
         while let Some(argument) = args.next() {
             let value = match argument.as_str() {
-                "--bind" | "--dist-dir" | "--data-root" | "--request-body-limit" => args
+                "--bind"
+                | "--dist-dir"
+                | "--data-root"
+                | "--basemap-token-file"
+                | "--request-body-limit" => args
                     .next()
                     .ok_or_else(|| format!("{argument} requires a value"))?,
                 "--help" | "-h" => return Err("--help must be handled by main".into()),
@@ -62,6 +75,9 @@ impl ServerConfig {
                 "--bind" => config.bind_address = value,
                 "--dist-dir" => config.dist_dir = PathBuf::from(value),
                 "--data-root" => config.data_root = PathBuf::from(value),
+                "--basemap-token-file" => {
+                    config.basemap_token_file = PathBuf::from(value);
+                }
                 "--request-body-limit" => {
                     config.request_body_limit = value
                         .parse::<usize>()
@@ -96,8 +112,8 @@ impl ServerConfig {
 pub fn help_text() -> &'static str {
     "HamHeatmap internal validation server\n\n\
 Usage:\n  hamheatmap-validation-server [OPTIONS]\n\n\
-Options:\n  --bind <ADDRESS>              Loopback listen address (default 127.0.0.1:1421)\n  --dist-dir <PATH>             Built frontend directory (default app/dist)\n  --data-root <PATH>            Runtime data directory (default .runtime/validation-server/data)\n  --request-body-limit <BYTES>  Maximum JSON request body (default 1048576)\n  -h, --help                    Show this help\n\n\
-Environment:\n  HAMHEATMAP_VALIDATION_BIND\n  HAMHEATMAP_VALIDATION_DIST_DIR\n  HAMHEATMAP_VALIDATION_DATA_ROOT\n"
+Options:\n  --bind <ADDRESS>              Loopback listen address (default 127.0.0.1:1421)\n  --dist-dir <PATH>             Built frontend directory (default app/dist)\n  --data-root <PATH>            Runtime data directory (default .runtime/validation-server/data)\n  --basemap-token-file <PATH>   Optional TianDiTu token file\n  --request-body-limit <BYTES>  Maximum JSON request body (default 1048576)\n  -h, --help                    Show this help\n\n\
+Environment:\n  HAMHEATMAP_VALIDATION_BIND\n  HAMHEATMAP_VALIDATION_DIST_DIR\n  HAMHEATMAP_VALIDATION_DATA_ROOT\n  HAMHEATMAP_VALIDATION_BASEMAP_TOKEN_FILE\n"
 }
 
 #[derive(Clone)]
@@ -107,6 +123,7 @@ pub struct ValidationServer {
 
 struct ServerState {
     service: AppService,
+    basemap: BasemapProxy,
     dist_dir: PathBuf,
     listen_address: SocketAddr,
     request_body_limit: usize,
@@ -146,9 +163,11 @@ impl ValidationServer {
         if data_root.starts_with(&dist_dir) || dist_dir.starts_with(&data_root) {
             return Err("frontend and runtime data directories must not overlap".into());
         }
+        let basemap = BasemapProxy::load(&config.basemap_token_file)?;
         Ok(Self {
             state: Arc::new(ServerState {
                 service: AppService::new(data_root),
+                basemap,
                 dist_dir,
                 listen_address,
                 request_body_limit: config.request_body_limit,
@@ -238,9 +257,8 @@ impl ValidationServer {
                     schema_version: 1,
                 },
             )),
-            ("GET", "/api/bootstrap") => {
-                Some(self.with_operation(|_| self.state.service.bootstrap()))
-            }
+            ("GET", "/api/bootstrap") => Some(self.bootstrap_response()),
+            ("GET", path) if path.starts_with("/api/basemap/") => Some(self.basemap_response(path)),
             ("GET", "/api/cache-overview") => {
                 Some(self.with_operation(|_| self.state.service.cache_overview()))
             }
@@ -312,6 +330,43 @@ impl ValidationServer {
         }
         self.static_response(path, request.method == "HEAD")
             .unwrap_or_else(ApiError::into_response)
+    }
+
+    fn bootstrap_response(&self) -> Response {
+        self.with_operation(|_| {
+            let bootstrap = self.state.service.bootstrap()?;
+            let mut payload = serde_json::to_value(bootstrap)
+                .map_err(|error| format!("cannot serialize bootstrap response: {error}"))?;
+            let object = payload
+                .as_object_mut()
+                .ok_or_else(|| "bootstrap response is not a JSON object".to_string())?;
+            let basemap = serde_json::to_value(self.state.basemap.metadata())
+                .map_err(|error| format!("cannot serialize basemap metadata: {error}"))?;
+            object.insert("basemap".into(), basemap);
+            Ok(payload)
+        })
+    }
+
+    fn basemap_response(&self, path: &str) -> Response {
+        match self.state.basemap.fetch(path) {
+            Ok(tile) => Response {
+                status: 200,
+                content_type: tile.content_type,
+                body: tile.body,
+                head_only: false,
+                cache_control: "no-store",
+            },
+            Err(BasemapError::InvalidPath) => ApiError::not_found().into_response(),
+            Err(BasemapError::Disabled) => {
+                ApiError::unavailable("basemap is disabled").into_response()
+            }
+            Err(BasemapError::UpstreamUnavailable) => {
+                ApiError::bad_gateway("basemap upstream is unavailable").into_response()
+            }
+            Err(BasemapError::InvalidUpstreamResponse) => {
+                ApiError::bad_gateway("basemap upstream returned an invalid tile").into_response()
+            }
+        }
     }
 
     fn with_operation<T: Serialize>(
@@ -1465,6 +1520,8 @@ fn write_response(stream: &mut impl Write, response: Response) -> io::Result<()>
         413 => "Payload Too Large",
         415 => "Unsupported Media Type",
         422 => "Unprocessable Entity",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
         _ => "Internal Server Error",
     };
     write!(
@@ -1564,6 +1621,20 @@ impl ApiError {
         }
     }
 
+    fn bad_gateway(message: impl Into<String>) -> Self {
+        Self {
+            status: 502,
+            message: message.into(),
+        }
+    }
+
+    fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: 503,
+            message: message.into(),
+        }
+    }
+
     fn service(message: impl Into<String>) -> Self {
         Self {
             status: 422,
@@ -1601,6 +1672,8 @@ mod tests {
             "web".into(),
             "--data-root".into(),
             "runtime".into(),
+            "--basemap-token-file".into(),
+            "runtime/tianditu.token".into(),
             "--request-body-limit".into(),
             "2048".into(),
         ])
@@ -1608,6 +1681,10 @@ mod tests {
         assert_eq!(config.bind_address, "127.0.0.1:0");
         assert_eq!(config.dist_dir, PathBuf::from("web"));
         assert_eq!(config.data_root, PathBuf::from("runtime"));
+        assert_eq!(
+            config.basemap_token_file,
+            PathBuf::from("runtime/tianditu.token")
+        );
         assert_eq!(config.request_body_limit, 2048);
         assert!(ServerConfig::from_args(["--bind".into(), "bad".into()]).is_err());
         assert!(ServerConfig::from_args(["--bind".into(), "[::1]:0".into()]).is_ok());
@@ -2062,6 +2139,7 @@ mod tests {
                 bind_address: "127.0.0.1:0".into(),
                 dist_dir,
                 data_root: root.join("data"),
+                basemap_token_file: root.join("missing-tianditu.token"),
                 request_body_limit: 1024,
             };
             let server = ValidationServer::new(&config).unwrap();
@@ -2117,6 +2195,7 @@ mod tests {
             bind_address: "127.0.0.1:0".into(),
             data_root: dist_dir.join("runtime"),
             dist_dir,
+            basemap_token_file: fixture.root.join("missing-tianditu.token"),
             request_body_limit: 1024,
         };
         let error = match ValidationServer::new(&config) {
@@ -2273,6 +2352,41 @@ mod tests {
         ] {
             assert_eq!(fixture.request("GET", target, None, b"").status, 404);
         }
+        assert_eq!(
+            fixture
+                .request("GET", "/api/basemap/tianditu/vec/5/25/12", None, b"")
+                .status,
+            503
+        );
+        assert_eq!(
+            fixture
+                .request("GET", "/api/basemap/tianditu/evil/5/25/12", None, b"")
+                .status,
+            404
+        );
+        assert_eq!(
+            fixture
+                .request("GET", "/api/basemap/tianditu/vec/5/32/12", None, b"")
+                .status,
+            404
+        );
+        assert_eq!(
+            fixture
+                .request(
+                    "GET",
+                    "/api/basemap/tianditu/vec/5/25/12?tk=evil",
+                    None,
+                    b""
+                )
+                .status,
+            400
+        );
+        assert_eq!(
+            fixture
+                .request("POST", "/api/basemap/tianditu/vec/5/25/12", None, b"")
+                .status,
+            405
+        );
         assert_eq!(fixture.request("POST", "/", None, b"").status, 405);
         assert_eq!(
             fixture
@@ -2291,6 +2405,21 @@ mod tests {
         let bootstrap_json = response_json(&bootstrap);
         assert_eq!(bootstrap_json["coverageRadiusKm"], 200);
         assert_eq!(bootstrap_json["gridSize"], 401);
+        assert_eq!(bootstrap_json["basemap"]["enabled"], false);
+        assert_eq!(bootstrap_json["basemap"]["providerId"], "tianditu");
+        assert_eq!(bootstrap_json["basemap"]["displayName"], "天地图");
+        assert_eq!(bootstrap_json["basemap"]["attribution"], "天地图");
+        assert_eq!(bootstrap_json["basemap"]["mode"], "same-origin-proxy");
+        assert_eq!(bootstrap_json["basemap"]["maxZoom"], 18);
+        assert_eq!(
+            bootstrap_json["basemap"]["tilePathTemplate"],
+            "/api/basemap/tianditu/{layer}/{z}/{x}/{y}"
+        );
+        assert_eq!(bootstrap_json["basemap"]["layers"][0]["id"], "vec");
+        assert_eq!(bootstrap_json["basemap"]["layers"][1]["id"], "cva");
+        let encoded_bootstrap = String::from_utf8(bootstrap.body.clone()).unwrap();
+        assert!(!encoded_bootstrap.contains("token"));
+        assert!(!encoded_bootstrap.contains("t0.tianditu.gov.cn"));
 
         let point_body = br#"{"point":{"lat":30.5,"lon":103.5}}"#;
         let inspection = fixture.request(
@@ -2658,6 +2787,7 @@ mod tests {
             bind_address: "127.0.0.1:0".into(),
             dist_dir: fixture.root.join("dist"),
             data_root: fixture.root.join("http-data"),
+            basemap_token_file: fixture.root.join("missing-tianditu.token"),
             request_body_limit: 1024,
         };
         let (server, listener) = ValidationServer::bind(&config).unwrap();

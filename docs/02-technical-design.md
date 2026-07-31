@@ -14,7 +14,7 @@
 
 - 桌面框架：Tauri 2.11.5。
 - 前端：React 19.2.7 + TypeScript 7.0.2 + Vite 8.1.4。
-- 地图：MapLibre GL JS 5.24.0；开发构建使用无网络资源、无行政边界的 WGS84 空白坐标画布。
+- 地图：MapLibre GL JS 5.24.0；普通 preview 和未配置 token 的 validation 构建使用无行政边界的 WGS84 空白坐标画布，私有 validation 可选择通过同源代理显示天地图在线 `vec/cva`。该路径不是桌面离线 provider 或公开发行合规结论。
 - 前端工具链：项目内固定 Node.js 24.18.0，不依赖 JAIST 主机全局 Node。
 - 后端：Rust stable。
 - 传播核心：NTIA ITM C++ 源码，以本地静态库或 DLL 方式绑定。
@@ -192,6 +192,16 @@ POST /api/operation-preview
 只有相同 exact ID 的活动 calculation 且存在 `sequence > afterSequence` 的最新帧时返回 HTTP 200；未知但格式有效的 ID、尚无新帧、非计算操作、取消中或终态返回 204，无效 JSON、未知字段、错误媒体类型和无效 ID 格式按 API 错误处理。服务器每个活动任务只保存最新一帧，不把 PNG 放入 status/terminal；取消、完成、失败或 lease Drop 都清除它。浏览器在每次 status 轮询之后串行请求 preview，保持请求不重叠，并同时校验 ID、generation 和 sequence；preview sequence 与 status sequence 相互独立。
 
 React 分开保存临时 `preview` 和权威 `result`。地图可以显示二者之一，但导出只读取 `result`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；成功响应先成为权威结果并替换预览。MapLibre 对相同 data URL 复用对象 URL，替换与卸载时释放旧对象 URL。决策依据见 ADR 0016，运行证据见 `18-progressive-coverage-preview-validation.md`。
+
+### 4.2.4 私有 validation 在线底图与地图状态
+
+validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu.token` 读取可选天地图 token。token 只保留在服务器进程；bootstrap 返回不含凭据和上游主机的 `BasemapInfo`，浏览器只请求固定同源模板 `/api/basemap/tianditu/{layer}/{z}/{x}/{y}`。代理只允许 `vec/cva`、规范十进制 `z/x/y` 和 `z<=18`，固定访问 `https://t0.tianditu.gov.cn`，禁止重定向，并对超时、2 MiB 上限、MIME 和图片签名 fail closed。响应为 `no-store`，不进入 2.5 GB 离线缓存。
+
+前端只有在 provider、模式、模板、缩放和 `vec/cva` 元数据全部匹配固定契约时才增加 raster source。底图矢量层在经纬网下方，中文注记位于热力图上方，发射点标记保持最上层。token 缺失时 `enabled=false`，MapView 继续显示 WGS84 内部测试画布。
+
+MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最大宽度，随 move 事件自动更新。MapView 以 refs 保存最新 basemap、point、result、preview 和 stale 状态；若 style 暂不可操作，同步标记为 pending，并在 load 后或 `styledata/idle` 恢复时重放。这样清空 props 不会因一次 `isStyleLoaded=false` 而丢失，恢复时会删除 heatmap layer/source 并释放 Blob URL。验证记录见 `20-tianditu-basemap-proxy.md`。
+
+该代理只用于回环 validation 在线验证。正式 Windows 离线底图仍需要完整 `CompliantBasemapProvider`、有效审图号、离线/再分发/导出授权和签名清单。
 
 ### 4.3 原生传播层
 

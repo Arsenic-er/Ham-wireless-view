@@ -4,10 +4,11 @@
 - 恢复切片更新：2026-07-27
 - operation 协议切片更新：2026-07-27
 - 渐进覆盖预览更新：2026-07-27
+- 在线底图与地图控件更新：2026-07-31
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`
-- 状态：历史构建保留为分节证据；当前渐进覆盖切片已完成 full build、受管 stop/start/readiness、自动化与两次真实成都 HTTP 烟雾，Windows x64 交叉构建成功；SSH 隧道浏览器可见过程、Windows/Tauri 实机和地图合规仍待验
+- 状态：历史构建保留为分节证据；工作区已增加可选天地图在线同源代理、动态比例尺和地图 desired-state 重放，但当前未配置 token、未部署该切片或执行真实瓦片烟雾；Windows/Tauri 实机和地图合规仍待验
 
 ## 1. 目标与边界
 
@@ -42,6 +43,8 @@ gpu-273312 127.0.0.1:1421
 
 HTTP 层只做协议适配。频段、单位换算、坐标校验、固定数据源、缓存完整性、配额、DEM/WBM 读取、ITM 和覆盖层仍由共享 Rust 服务执行。
 
+可选在线底图走另一条只读路径：浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`，validation server 从私密文件读取 token 并访问固定天地图 HTTPS WMTS。token、上游 URL 和文件路径不进入 bootstrap 或浏览器。该路径不写底图缓存，也不提供导出。
+
 ## 3. 三态前端
 
 | 模式 | 选择条件 | 数据准备/缓存 | 传播计算 | PNG/PDF 文件导出 |
@@ -57,7 +60,8 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 | 方法 | 路径 | 作用 |
 |---|---|---|
 | GET | `/healthz` | 进程健康与 schema 版本 |
-| GET | `/api/bootstrap` | 模型、网格和缓存配额 |
+| GET | `/api/bootstrap` | 模型、网格、缓存配额和无凭据底图元数据 |
+| GET | `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}` | 可选在线瓦片同源代理 |
 | GET | `/api/cache-overview` | 实际缓存用量与区域列表 |
 | POST | `/api/inspect-point` | 区域计划、ready 状态和中心高程 |
 | POST | `/api/operation-ticket` | 为 estimate/download/calculation 签发短期 capability |
@@ -110,7 +114,7 @@ validation 浏览器在长请求前领取 ticket，以约 250 ms 的递归定时
 - CSPRNG UUIDv4、60 秒 reserved TTL、5 分钟 terminal TTL、双 32 项上限和 exact-ID ack 共同限制 capability 暴露窗口与内存占用；
 - status 输出按字段白名单构造，不序列化工作结果、PNG、URL、服务器路径或详细错误；HTTP 日志也不应记录请求 body 中的 capability。
 
-validation 模式是一项明确的内部隐私例外：浏览器中的测试坐标、参数和计算请求会离开 Windows 本机并进入用户控制的服务器。不要使用敏感真实位置。服务没有遥测、账号、第三方计算 API或服务器文件导出；数据下载仍只访问既有固定 Copernicus HTTPS 来源。
+validation 模式是一项明确的内部隐私例外：浏览器中的测试坐标、参数和计算请求会离开 Windows 本机并进入用户控制的服务器。不要使用敏感真实位置。服务没有遥测、账号、第三方计算 API 或服务器文件导出；DEM/WBM 下载仍只访问既有固定 Copernicus HTTPS 来源。配置 token 后，在线底图代理还会从服务器访问固定天地图 HTTPS 主机，但不把浏览器坐标或无线电参数作为上游参数。
 
 ## 6. 构建、启动与访问
 
@@ -124,6 +128,16 @@ scripts/validation-platform.sh status
 scripts/validation-platform.sh health
 scripts/validation-platform.sh self-test
 ```
+
+可选底图 token 只能由交互式管理命令静默录入；命令不会显示 token：
+
+```bash
+scripts/validation-platform.sh basemap-token status
+scripts/validation-platform.sh basemap-token set
+scripts/validation-platform.sh basemap-token clear
+```
+
+`set/clear` 后按提示通过受管 `stop`、`start` 应用。当前 token 未配置，不得把 disabled bootstrap 或 WGS84 占位画布记录为真实瓦片成功。
 
 Windows PowerShell：
 
@@ -154,6 +168,8 @@ scripts/validation-platform.sh stop
 ├─ build.txt
 ├─ server-help.txt
 ├─ data/
+├─ secrets/
+│  └─ tianditu.token
 ├─ logs/
 │  ├─ launcher.log
 │  ├─ server.log
@@ -218,6 +234,12 @@ full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2
 功能 full build revision 为 `a1219c5ca3254a2a40a50829526cd9bd062d8ea9`，`built_at=2026-07-27T05:48:52Z`，server SHA-256 为 `03bb62e9bc4facdba01c1693fbf2a63ab70d961606a09cfed6fe9b128c845bd2`。测试脚本竞态修复 revision `88204765182de7e842859e672050614c091f1986` 未重建服务二进制。
 
 受管部署与两次真实渐进预览烟雾见 9.7 节和 `18-progressive-coverage-preview-validation.md`。这些证据不证明 Windows WebView2↔Rust Channel 或 SSH 隧道中的用户可见过程。
+
+### 8.6 在线底图与地图控件
+
+2026-07-31 的工作区新增天地图 `vec/cva` 同源代理、私密 token 文件、右下动态公制比例尺和 MapLibre desired-state 重放。专项证据为前端 2 个文件/4 项测试、Rust `basemap::tests` 4 项测试通过。清空回归覆盖 style 暂不可用时保留 pending，并在 idle 后删除 layer/source、撤销 Blob URL。
+
+当前 token 未配置，因此没有真实瓦片、上游 HTTP 200、浏览器截图或控制台证据；该工作区切片也尚未通过受管 stop/build/start 部署。完整方法和发布边界见 `20-tianditu-basemap-proxy.md`。
 
 ## 9. 真实成都验证
 
@@ -369,10 +391,11 @@ revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管 stop/build/s
 ## 10. 尚未关闭
 
 - operation capability 与渐进覆盖预览的代码回归、新构建和受管 HTTP 烟雾已通过；SSH 隧道浏览器可见预览、取消/重试 UI 和控制台仍待验证；
+- 在线天地图当前未配置 token，工作区切片尚未受管部署，真实 `vec/cva`、缩放、比例尺、署名、热力图层级与清空浏览器烟雾待验证；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；
 - 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程强制崩溃注入；
 - GPU 主机整机重启后的手动恢复流程；
-- 合规中国大陆底图、审图号、署名、离线/导出授权；
+- 合规中国大陆底图、有效审图号、服务/离线/再分发/应用分发/导出授权；
 - 传播结果的外场测量校准。
 
 此前私有浏览器验收只关闭旧协议下服务器回环验证路径中的真实计算与热力图显示问题，不包含本轮 operation progress UI。任何服务器 HTTP 或历史浏览器证据都不能据此关闭 Windows/Tauri 实机或中国大陆地图合规门槛。

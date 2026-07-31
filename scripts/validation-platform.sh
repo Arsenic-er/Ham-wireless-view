@@ -10,6 +10,8 @@ runtime_root="$project_root/.runtime/validation-platform"
 state_dir="$runtime_root/state"
 log_dir="$runtime_root/logs"
 data_dir="$runtime_root/data"
+secrets_dir="$runtime_root/secrets"
+basemap_token_file="$secrets_dir/tianditu.token"
 dist_dir="$project_root/app/dist"
 server_binary="$project_root/target/release/hamheatmap-validation-server"
 pid_file="$state_dir/server.pid"
@@ -37,6 +39,7 @@ Commands:
   stop     Stop only a strictly verified project server process
   status   Report managed process and HTTP health state
   health   Query /healthz for a strictly verified managed process
+  basemap-token <set|status|clear>  Manage TianDiTu token without echoing it
   self-test  Test stale-lock recovery, path guards, and PID identity checks
 EOF
 }
@@ -82,10 +85,10 @@ validate_log_rotation_paths() {
 
 validate_managed_paths() {
     local path=""
-    for path in "$runtime_root" "$state_dir" "$log_dir" "$data_dir" "$dist_dir" \
+    for path in "$runtime_root" "$state_dir" "$log_dir" "$data_dir" "$secrets_dir" "$dist_dir" \
         "$server_binary" "$pid_file" "$runner_pid_file" "$lock_dir" \
         "$runner_claim_dir" "$server_log" "$launcher_log" "$build_metadata" \
-        "$server_help"; do
+        "$server_help" "$basemap_token_file"; do
         path_is_safe_project_path "$path" || fail "unsafe or symlinked managed path: $path"
     done
     validate_log_rotation_paths
@@ -93,9 +96,9 @@ validate_managed_paths() {
 
 ensure_layout() {
     validate_managed_paths
-    mkdir -p "$state_dir" "$log_dir" "$data_dir"
+    mkdir -p "$state_dir" "$log_dir" "$data_dir" "$secrets_dir"
     validate_managed_paths
-    chmod 700 "$runtime_root" "$state_dir" "$log_dir" "$data_dir"
+    chmod 700 "$runtime_root" "$state_dir" "$log_dir" "$data_dir" "$secrets_dir"
 }
 
 process_start_time() {
@@ -325,7 +328,8 @@ pid_is_managed_server() {
     argv_matches "$pid" "$server_binary" \
         "--bind" "$listen_address" \
         "--dist-dir" "$dist_dir" \
-        "--data-root" "$data_dir"
+        "--data-root" "$data_dir" \
+        "--basemap-token-file" "$basemap_token_file"
 }
 pid_is_managed_runner() {
     local pid="$1" executable=""
@@ -446,7 +450,8 @@ run_server() {
     : >> "$server_log"
     chmod 600 "$server_log"
     "$server_binary" --bind "$listen_address" --dist-dir "$dist_dir" \
-        --data-root "$data_dir" >> "$server_log" 2>&1 &
+        --data-root "$data_dir" --basemap-token-file "$basemap_token_file" \
+        >> "$server_log" 2>&1 &
     runner_server_pid=$!
     runner_server_start="$(process_start_time "$runner_server_pid")" || fail "cannot identify server process"
     write_pid_file "$pid_file" "$runner_server_pid"
@@ -492,6 +497,8 @@ build_platform() {
     grep -Fq -- "--bind" "$server_help" || fail "server --help lacks --bind"
     grep -Fq -- "--dist-dir" "$server_help" || fail "server --help lacks --dist-dir"
     grep -Fq -- "--data-root" "$server_help" || fail "server --help lacks --data-root"
+    grep -Fq -- "--basemap-token-file" "$server_help" || \
+        fail "server --help lacks --basemap-token-file"
     revision="$(git -C "$project_root" rev-parse HEAD)"
     {
         printf 'revision=%s\n' "$revision"
@@ -684,6 +691,10 @@ signal_trap_probe() {
 }
 
 self_test_platform() {
+    token_is_valid 0123456789abcdef || fail "valid basemap token was rejected"
+    if token_is_valid short || token_is_valid "0123456789abcde/"; then
+        fail "invalid basemap token was accepted"
+    fi
     local test_root="$runtime_root/self-test.$$" saved_state_dir="$state_dir"
     local saved_lock_dir="$lock_dir" saved_lock_owner_file="$lock_owner_file"
     local saved_runner_claim_dir="$runner_claim_dir"
@@ -827,12 +838,100 @@ self_test_platform() {
     echo "validation platform self-test passed"
 }
 
+basemap_token_temporary=""
+
+cleanup_basemap_token_temporary() {
+    if [[ -n "$basemap_token_temporary" &&
+        "$basemap_token_temporary" == "$secrets_dir"/.tianditu.token.* &&
+        -f "$basemap_token_temporary" && ! -L "$basemap_token_temporary" ]]; then
+        rm -f -- "$basemap_token_temporary"
+    fi
+    basemap_token_temporary=""
+}
+
+token_is_valid() {
+    local token="$1"
+    [[ "${#token}" -ge 16 && "${#token}" -le 128 && "$token" =~ ^[[:alnum:]]+$ ]]
+}
+
+basemap_token_command() {
+    local action="$1" token="" permissions="" owner=""
+    local -a token_lines=()
+    ensure_layout
+    case "$action" in
+        set)
+            [[ -t 0 ]] || fail "basemap-token set requires an interactive terminal"
+            read -r -s -p "TianDiTu token: " token
+            printf '\n' >&2
+            token_is_valid "$token" || {
+                token=""
+                fail "token must be 16-128 ASCII letters or digits"
+            }
+            acquire_lock
+            path_is_safe_project_path "$basemap_token_file" || fail "unsafe basemap token path"
+            [[ ! -L "$basemap_token_file" ]] || fail "basemap token path is a symlink"
+            basemap_token_temporary="$(mktemp --tmpdir="$secrets_dir" .tianditu.token.XXXXXX)"
+            trap 'cleanup_basemap_token_temporary; release_lock' EXIT
+            printf '%s\n' "$token" > "$basemap_token_temporary"
+            token=""
+            chmod 600 "$basemap_token_temporary"
+            mv -f -- "$basemap_token_temporary" "$basemap_token_file"
+            basemap_token_temporary=""
+            release_lock
+            trap - EXIT HUP INT TERM
+            echo "TianDiTu basemap token configured; restart the platform to apply it"
+            ;;
+        status)
+            if [[ ! -e "$basemap_token_file" && ! -L "$basemap_token_file" ]]; then
+                echo "TianDiTu basemap token is not configured"
+                return
+            fi
+            path_is_safe_project_path "$basemap_token_file" || fail "unsafe basemap token path"
+            [[ -f "$basemap_token_file" && ! -L "$basemap_token_file" ]] || \
+                fail "basemap token path is not a regular file"
+            permissions="$(stat -c '%a' "$basemap_token_file" 2>/dev/null)" || \
+                fail "cannot inspect basemap token permissions"
+            owner="$(stat -c '%u' "$basemap_token_file" 2>/dev/null)" || \
+                fail "cannot inspect basemap token owner"
+            mapfile -t token_lines < "$basemap_token_file"
+            if [[ "$permissions" == "600" && "$owner" == "$(id -u)" &&
+                "${#token_lines[@]}" -eq 1 ]] && token_is_valid "${token_lines[0]}"; then
+                echo "TianDiTu basemap token is configured"
+            else
+                echo "TianDiTu basemap token file is invalid" >&2
+                return 1
+            fi
+            token_lines=()
+            ;;
+        clear)
+            acquire_lock
+            path_is_safe_project_path "$basemap_token_file" || fail "unsafe basemap token path"
+            [[ ! -L "$basemap_token_file" ]] || fail "basemap token path is a symlink"
+            if [[ -e "$basemap_token_file" ]]; then
+                [[ -f "$basemap_token_file" ]] || \
+                    fail "basemap token path is not a regular file"
+                [[ "$(stat -c '%u' "$basemap_token_file" 2>/dev/null)" == "$(id -u)" ]] || \
+                    fail "basemap token file has an unexpected owner"
+                rm -f -- "$basemap_token_file"
+                echo "TianDiTu basemap token cleared; restart the platform to apply it"
+            else
+                echo "TianDiTu basemap token was already absent"
+            fi
+            release_lock
+            trap - EXIT HUP INT TERM
+            ;;
+        *) fail "basemap-token requires set, status, or clear" ;;
+    esac
+}
+
 case "${1:-}" in
     build) build_platform ;;
     start) start_platform ;;
     stop) stop_platform ;;
     status) status_platform ;;
     health) health_platform ;;
+    basemap-token) [[ $# -eq 2 ]] || fail "basemap-token requires one action"
+        basemap_token_command "$2" ;;
     self-test) self_test_platform ;;
     __run) run_server ;;
     __signal-trap-probe) [[ $# -eq 2 ]] || exit 2

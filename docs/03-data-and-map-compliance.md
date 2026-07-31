@@ -64,6 +64,7 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 - 可以使用 Natural Earth 或无边界坐标画布进行内部功能诊断。
 - 开发构建必须显示“内部测试底图，不得公开发布”。
 - 不制作含未经确认国界的宣传截图或公开演示包。
+- 私有 validation 平台可以通过同源代理在线显示天地图 `vec/cva` 以验证地图交互；必须保留来源和内部验证标记。在线服务可访问不等于已经取得桌面离线、再分发、应用分发或 PNG/PDF 导出授权，也不自动关闭审图门槛。
 
 ### 5.2 公开发行阶段
 
@@ -94,6 +95,10 @@ CompliantBasemapProvider
 ├─ tile_manifest
 └─ integrity_manifest
 ```
+
+私有 validation 的 `BasemapInfo` 只是在线验证元数据子集：enabled、provider、署名、同源模式、最大缩放、`vec/cva` 和路径模板。它刻意不伪造 `review_number`、离线/导出授权、覆盖多边形或完整性清单，因此不能被当作 `CompliantBasemapProvider`。当前 token 未配置，真实天地图瓦片尚未完成烟雾验证。
+
+token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0600` 普通非符号链接文件管理；bootstrap、浏览器、日志和文档不得包含 token。浏览器只访问同源路径，上游固定 HTTPS 请求由回环 validation server 代发。该设计降低凭据暴露，不改变地图内容和使用方式的许可/审核义务。
 
 生产构建在以下任一条件不满足时拒绝启动地图：
 

@@ -455,6 +455,16 @@ describe("progressive calculation preview UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "\u6e05\u7a7a" }));
     expect(screen.getByTestId("preview").textContent).toBe("none");
     expect(screen.getByTestId("heatmap").textContent).toBe("none");
+
+    act(() =>
+      backendMocks.previewHandler?.({
+        ...preview,
+        sequence: 2,
+        completedPixelCount: 25_126,
+      }),
+    );
+    expect(screen.getByTestId("preview").textContent).toBe("none");
+    expect(screen.getByTestId("heatmap").textContent).toBe("none");
   });
 
   it("suppresses a late preview after cancellation is requested", async () => {

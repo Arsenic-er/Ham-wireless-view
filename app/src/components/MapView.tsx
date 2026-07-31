@@ -11,8 +11,14 @@ import {
   graticuleGeoJson,
   maidenheadLocator,
 } from "../lib/geodesy";
+import {
+  TIANDITU_LABEL_LAYER_ID,
+  isTrustedTiandituBasemap,
+  synchronizeBasemap,
+} from "../lib/basemap";
 import { MapOverlayBlobUrlLease, buildMapOverlayImageSpec } from "../lib/mapOverlay";
 import type {
+  BasemapInfo,
   CalculationPreview,
   CalculationResult,
   MapPoint,
@@ -26,6 +32,7 @@ interface MapViewProps {
   preview: CalculationPreview | null;
   heatmapStale: boolean;
   onPointSelect: (point: MapPoint) => void;
+  basemap?: BasemapInfo | null;
 }
 
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
@@ -101,7 +108,9 @@ function updateHeatmap(
       source: "coverage-heatmap",
       paint: { "raster-opacity": stale ? 0.28 : 0.84, "raster-resampling": "linear" },
     },
-    "coverage-circle-fill",
+    map.getLayer(TIANDITU_LABEL_LAYER_ID)
+      ? TIANDITU_LABEL_LAYER_ID
+      : "coverage-circle-fill",
   );
 }
 
@@ -112,9 +121,11 @@ export function MapView({
   preview,
   heatmapStale,
   onPointSelect,
+  basemap,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const synchronizeMapStateRef = useRef<(() => void) | null>(null);
   const heatmapBlobUrlsRef = useRef<MapOverlayBlobUrlLease | null>(null);
   if (!heatmapBlobUrlsRef.current) {
     heatmapBlobUrlsRef.current = new MapOverlayBlobUrlLease();
@@ -124,11 +135,13 @@ export function MapView({
   const previewRef = useRef(preview);
   const heatmapStaleRef = useRef(heatmapStale);
   const onPointSelectRef = useRef(onPointSelect);
+  const basemapRef = useRef(basemap);
   pointRef.current = point;
   heatmapRef.current = heatmap;
   previewRef.current = preview;
   heatmapStaleRef.current = heatmapStale;
   onPointSelectRef.current = onPointSelect;
+  basemapRef.current = basemap;
 
   useEffect(() => {
     if (!containerRef.current || !heatmapBlobUrlsRef.current) return;
@@ -159,6 +172,33 @@ export function MapView({
     });
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
+    map.addControl(
+      new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }),
+      "bottom-right",
+    );
+    let overlayScaffoldReady = false;
+    let synchronizationPending = true;
+    const synchronizeDesiredMapState = () => {
+      if (!overlayScaffoldReady || !map.isStyleLoaded()) {
+        synchronizationPending = true;
+        return;
+      }
+      synchronizationPending = false;
+      synchronizeBasemap(map, basemapRef.current);
+      updateSelection(map, pointRef.current);
+      updateHeatmap(
+        map,
+        heatmapRef.current ?? previewRef.current,
+        heatmapRef.current ? heatmapStaleRef.current : false,
+        heatmapBlobUrls,
+      );
+    };
+    const replayPendingMapState = () => {
+      if (synchronizationPending) synchronizeDesiredMapState();
+    };
+    synchronizeMapStateRef.current = synchronizeDesiredMapState;
+    map.on("styledata", replayPendingMapState);
+    map.on("idle", replayPendingMapState);
     map.on("load", () => {
       map.addSource("graticule", { type: "geojson", data: graticuleGeoJson() });
       map.addLayer({
@@ -219,17 +259,17 @@ export function MapView({
           "circle-stroke-width": 2,
         },
       });
-      updateHeatmap(
-        map,
-        heatmapRef.current ?? previewRef.current,
-        heatmapRef.current ? heatmapStaleRef.current : false,
-        heatmapBlobUrls,
-      );
+      overlayScaffoldReady = true;
+      synchronizationPending = true;
+      synchronizeDesiredMapState();
     });
     map.on("click", (event) => {
       onPointSelectRef.current({ lat: event.lngLat.lat, lon: event.lngLat.lng });
     });
     return () => {
+      if (synchronizeMapStateRef.current === synchronizeDesiredMapState) {
+        synchronizeMapStateRef.current = null;
+      }
       mapRef.current = null;
       heatmapBlobUrls.clear();
       map.remove();
@@ -254,21 +294,15 @@ export function MapView({
   }, [theme]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
-    updateSelection(map, point);
+    synchronizeMapStateRef.current?.();
   }, [point]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    const heatmapBlobUrls = heatmapBlobUrlsRef.current;
-    if (!map?.isStyleLoaded() || !heatmapBlobUrls) return;
-    updateHeatmap(
-      map,
-      heatmap ?? preview,
-      heatmap ? heatmapStale : false,
-      heatmapBlobUrls,
-    );
+    synchronizeMapStateRef.current?.();
+  }, [basemap]);
+
+  useEffect(() => {
+    synchronizeMapStateRef.current?.();
   }, [heatmap, preview, heatmapStale]);
 
   return (
@@ -276,8 +310,13 @@ export function MapView({
       <div ref={containerRef} className="map-canvas" />
       <div className="map-warning">
         <span className="map-warning-dot" />
-        WGS84 内部测试画布 · 不含行政边界
+        {isTrustedTiandituBasemap(basemap)
+          ? "天地图在线真实底图 · 内部验证"
+          : "WGS84 内部测试画布 · 未配置真实底图"}
       </div>
+      {isTrustedTiandituBasemap(basemap) && (
+        <div className="map-attribution">{basemap.attribution} · 在线底图</div>
+      )}
       {!point && (
         <div className="map-empty-state">
           <div className="map-crosshair" aria-hidden="true" />

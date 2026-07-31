@@ -667,7 +667,11 @@ export function App() {
 
       <div className="compliance-banner">
         <strong>{bootstrapInfo?.internalBuildWarning ?? "内部测试底图，不得公开发布"}</strong>
-        <span>合规底图、有效区和审图号尚未接入；当前只显示 WGS84 坐标网格。</span>
+        <span>
+          {bootstrapInfo?.basemap?.enabled
+            ? "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。"
+            : "天地图令牌尚未配置；当前只显示 WGS84 坐标网格。"}
+        </span>
       </div>
 
       {validationServerMode && (
@@ -686,6 +690,7 @@ export function App() {
             preview={preview}
             heatmapStale={resultStale}
             onPointSelect={handlePointSelect}
+            basemap={bootstrapInfo?.basemap ?? null}
           />
           <div className="legend-bar" aria-label="接收功率色标">
             <div className="legend-title">

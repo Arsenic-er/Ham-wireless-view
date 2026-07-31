@@ -56,6 +56,8 @@
 - Rust worker 在接收点之间和长剖面采样期间响应取消；取消后不编码或保留半成品。
 - 场景预设保留手动地面海拔；选择新点重置 DEM 自动并清除旧结果。
 - 清空热力图保留发射点、参数、地面海拔模式/值和缓存，同一点可立即重算。
+- 样式暂时未就绪时的清空不得丢失；style 恢复后必须删除旧 heatmap layer/source 并释放 Blob URL。
+- 地图右下显示随缩放和平移变化的公制比例尺，左下发射点坐标不被遮挡。
 - DEM 自动/手动界面显示 DEM 参考值与有效天线 AMSL，且不把 AMSL 误当新的传播输入。
 - validation-server 模式中，计算与下载进度由约 250 ms 的非重叠状态轮询驱动，并复用 Tauri 已有的进度监听接口。
 - 多标签页同时存在时，取消只影响本页 exact operation ID；旧 ID、旧 generation 或迟到 poll 不能覆盖新任务进度/结果。
@@ -550,3 +552,23 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 真实缓存前后均为 `133,079,734 bytes`，包含 SQLite/lock/DEM/WBM 的完整清单 SHA-256 均为 `a850ee81b363e91c88a638f836f7199882b27c97f358da8be975fa6cc1b919bf`，无 partial 或运行目录残留。
 - [x] 最终精确测试选择器运行 `1 passed`，耗时 `25.92 s`；快照、矩阵和清理端到端总计 `28.7 s`。
 - [ ] 这证明参数接线、确定性和模型内部响应，不替代 Windows WebView2、外场校准、中国大陆地图合规或应急可靠性验证。
+
+## 27. 在线底图、动态比例尺与地图状态重放（2026-07-31）
+
+### 27.1 已完成代码级检查
+
+- [x] 前端信任检查只接受固定 `tianditu + same-origin-proxy + vec/cva` 元数据和同源路径模板；不可信模板 fail closed。
+- [x] 前端专项 `src/lib/basemap.test.ts` 与 `src/components/MapView.test.tsx` 共 4 项通过，覆盖底图添加/移除、右下 metric 比例尺和延迟清空重放。
+- [x] 清空时序验证已有覆盖层在 `isStyleLoaded=false` 时不误操作，并在后续 `idle` 恢复后删除 layer/source、只撤销一次 Blob URL。
+- [x] Rust `basemap::tests` 4 项通过，覆盖严格瓦片路径/矩阵边界、固定上游 URL、token 文件 fail closed 和 MIME/图片签名一致性。
+- [x] bootstrap 元数据与路由测试代码断言不返回 token、上游主机或 token 文件路径；缺 token 时底图保持 disabled。
+
+### 27.2 仍未关闭
+
+- [ ] 当前未配置天地图 token；尚未取得真实 `vec/cva` HTTP 200、瓦片解码、浏览器视觉、控制台、缩放和清空烟雾证据。
+- [ ] 尚未以受管 `stop → build → start` 部署本切片并确认新 revision、PID、回环监听和 readiness。
+- [ ] 尚未验证 token 服务条款、调用额度、必要署名和弱网/上游错误用户体验。
+- [ ] 尚未取得有效审图号及 Windows 桌面离线缓存、再分发、应用分发和 PNG/PDF 导出授权。
+- [ ] 在线天地图内部验证不能替代正式 `CompliantBasemapProvider`、中国大陆有效区、签名瓦片清单或 Windows 10/11 实机。
+
+完整边界见 `20-tianditu-basemap-proxy.md`。

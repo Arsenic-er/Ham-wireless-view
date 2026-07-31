@@ -11,6 +11,22 @@ export interface MapPoint {
   lon: number;
 }
 
+export interface BasemapLayer {
+  id: "vec" | "cva";
+  displayName: string;
+}
+
+export interface BasemapInfo {
+  enabled: boolean;
+  providerId: string;
+  displayName: string;
+  attribution: string;
+  mode: string;
+  maxZoom: number;
+  layers: BasemapLayer[];
+  tilePathTemplate: string;
+}
+
 export interface CacheUsage {
   totalBytes: number;
   demBytes: number;
@@ -29,6 +45,7 @@ export interface BootstrapInfo {
   gridSize: number;
   cacheUsage: CacheUsage;
   internalBuildWarning: string;
+  basemap?: BasemapInfo;
 }
 
 export interface PointInspection {
