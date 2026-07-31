@@ -6,7 +6,7 @@
 - 渐进覆盖预览更新：2026-07-27
 - 在线底图与地图控件更新：2026-07-31
 - 四省 PMTiles 内部底图更新：2026-07-31（自动化、Range、SSH 与受管运行已通过；浏览器视觉待人工确认）
-- 会话覆盖层与浏览器诊断导出更新：2026-08-01（自动化已通过，受管部署待回填）
+- 会话覆盖层与浏览器诊断导出更新：2026-08-01（自动化、推送、受管部署与隧道健康已通过；浏览器交互待用户验收）
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`、`decisions/0019-session-coverage-layers-and-browser-export.md`
@@ -266,7 +266,7 @@ full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2
 
 validation 能力矩阵现在允许浏览器本地诊断导出。PNG 使用固定 1600×1100 报告画布 Blob 下载；PDF 在浏览器内构造单页 A4 横向文件。服务器路由、请求体上限和文件系统权限均未扩展，未知 `/api/export-result` 仍被拒绝。第 8.2、9.3 节中“导出禁用”“取消重算清除唯一旧图”的文字是当时版本的历史证据，已由本节和 ADR 0019 取代。
 
-专项自动化已完成 5 文件/46 项测试；前端全量为 11 文件/73 项，Rust workspace 为 `113 passed / 5 ignored`，rustfmt、Clippy `--all-targets -D warnings`、validation 管理脚本 `bash -n` 与 self-test 均通过。提交、受管重建与浏览器实测在本轮结束时回填。
+专项自动化已完成 5 文件/46 项测试；前端全量为 11 文件/73 项，Rust workspace 为 `113 passed / 5 ignored`，rustfmt、Clippy `--all-targets -D warnings`、validation 管理脚本 `bash -n` 与 self-test 均通过。功能提交 `6261f8dc22bdeeefcdd19e923582d72f5918fbb0` 已推送并完成干净 stop/build/start；新 PID 2496862 只监听 `127.0.0.1:1421`，服务器 health、bootstrap、未知导出路由拒绝以及 Windows SSH 隧道 health 均通过。真实浏览器多点交互和文件打开仍待用户验收。
 
 ## 9. 真实成都验证
 

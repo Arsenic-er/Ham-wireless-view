@@ -693,6 +693,6 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 - [x] TypeScript project check 通过。
 - [x] 前端全量 11 文件/73 项通过，其中 `browserExport`、`sessionCoverages`、`backend`、`MapView`、`App` 五个专项文件共 46 项。
-- [x] Rust workspace `113 passed / 5 ignored`、rustfmt、Clippy `--all-targets -D warnings`、validation 管理脚本 `bash -n` 与 self-test 通过；validation build、受管 stop/build/start/health 和 Git push 待本节最终回填。
+- [x] Rust workspace `113 passed / 5 ignored`、rustfmt、Clippy `--all-targets -D warnings`、validation 管理脚本 `bash -n` 与 self-test 通过；功能提交 `6261f8dc22bdeeefcdd19e923582d72f5918fbb0` 已推送并完成干净的 validation stop/build/start，PID 2496862 只监听 `127.0.0.1:1421`，服务器与 Windows SSH 隧道 health 均为 HTTP 200。
 
 详细边界与理由见 ADR 0019。
