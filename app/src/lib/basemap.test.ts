@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  PROTOMAPS_GEOMETRY_LAYER_IDS,
+  PROTOMAPS_LABEL_LAYER_IDS,
   PROTOMAPS_LAYER_IDS,
   PROTOMAPS_RESOURCE_PATH,
   PROTOMAPS_SOURCE_ID,
+  SATELLITE_ATTRIBUTION,
+  SATELLITE_LAYER_ID,
+  SATELLITE_SOURCE_ID,
+  SATELLITE_TILE_PATH_TEMPLATE,
   TIANDITU_LABEL_LAYER_ID,
   TIANDITU_LABEL_SOURCE_ID,
   TIANDITU_TILE_PATH_TEMPLATE,
@@ -11,10 +17,21 @@ import {
   TIANDITU_VECTOR_SOURCE_ID,
   firstBasemapLabelLayerId,
   isTrustedProtomapsBasemap,
+  isTrustedSatelliteBasemap,
   isTrustedTiandituBasemap,
   synchronizeBasemap,
 } from "./basemap";
 import type { BasemapInfo } from "./types";
+
+const configuredSatellite = {
+  enabled: true,
+  providerId: "eoxcloudless",
+  displayName: "Sentinel-2 2025",
+  attribution: SATELLITE_ATTRIBUTION,
+  mode: "same-origin-proxy",
+  maxZoom: 14,
+  tilePathTemplate: SATELLITE_TILE_PATH_TEMPLATE,
+};
 
 const configuredTianditu: BasemapInfo = {
   enabled: true,
@@ -28,6 +45,7 @@ const configuredTianditu: BasemapInfo = {
     { id: "cva", displayName: "中文注记" },
   ],
   tilePathTemplate: TIANDITU_TILE_PATH_TEMPLATE,
+  satellite: configuredSatellite,
 };
 
 const configuredProtomaps: BasemapInfo = {
@@ -43,10 +61,12 @@ const configuredProtomaps: BasemapInfo = {
     { id: "landuse", displayName: "土地利用" },
     { id: "water", displayName: "水体" },
     { id: "roads", displayName: "道路" },
+    { id: "places", displayName: "地名" },
   ],
   resourcePath: PROTOMAPS_RESOURCE_PATH,
   bounds: [107.5, 18, 125.5, 33.5],
   archiveBytes: 33_044_072,
+  satellite: configuredSatellite,
 };
 
 function mapDouble() {
@@ -63,6 +83,7 @@ function mapDouble() {
     getLayer: vi.fn((id: string) => (layers.has(id) ? { id } : undefined)),
     removeLayer: vi.fn((id: string) => layers.delete(id)),
     setPaintProperty: vi.fn(),
+    setLayoutProperty: vi.fn(),
   };
   return map;
 }
@@ -84,6 +105,16 @@ describe("trusted basemap contracts", () => {
     ).toBe(false);
   });
 
+  it("accepts only the fixed same-origin satellite contract", () => {
+    expect(isTrustedSatelliteBasemap(configuredProtomaps)).toBe(true);
+    expect(
+      isTrustedSatelliteBasemap({
+        ...configuredProtomaps,
+        satellite: { ...configuredSatellite, maxZoom: 15 },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only the fixed local PMTiles archive and safe source layers", () => {
     expect(isTrustedProtomapsBasemap(configuredProtomaps)).toBe(true);
     for (const untrusted of [
@@ -93,6 +124,10 @@ describe("trusted basemap contracts", () => {
       { ...configuredProtomaps, bounds: [107.5, 18, 125.5, 34] },
       {
         ...configuredProtomaps,
+        layers: [...configuredProtomaps.layers].reverse(),
+      },
+      {
+        ...configuredProtomaps,
         layers: [
           ...configuredProtomaps.layers.slice(0, -1),
           { id: "boundaries" as never, displayName: "边界" },
@@ -100,14 +135,14 @@ describe("trusted basemap contracts", () => {
       },
       {
         ...configuredProtomaps,
-        layers: [...configuredProtomaps.layers, { id: "places" as never, displayName: "地名" }],
+        layers: [...configuredProtomaps.layers, { id: "pois" as never, displayName: "兴趣点" }],
       },
     ]) {
       expect(isTrustedProtomapsBasemap(untrusted as BasemapInfo)).toBe(false);
     }
   });
 
-  it("adds the local vector source and only the five approved non-label layers", () => {
+  it("adds approved geometry plus scalable local place labels", () => {
     const map = mapDouble();
     synchronizeBasemap(map as never, configuredProtomaps, "light");
 
@@ -129,22 +164,50 @@ describe("trusted basemap contracts", () => {
       "landuse",
       "water",
       "roads",
+      "places",
+      "places",
+      "places",
+      "places",
     ]);
-    expect(JSON.stringify(styleLayers)).not.toMatch(/boundaries|places|pois|buildings/);
-    expect(map.addLayer.mock.calls.every(([, before]) => before === "graticule-lines")).toBe(true);
-    expect(firstBasemapLabelLayerId(map as never)).toBeUndefined();
+    const labelStyleJson = JSON.stringify(styleLayers.slice(5));
+    expect(labelStyleJson).toContain('"name:zh-Hans"');
+    expect(labelStyleJson).toContain('"name:en"');
+    expect(labelStyleJson.indexOf('"name:zh-Hans"')).toBeLessThan(
+      labelStyleJson.indexOf('"name"'),
+    );
+    expect(labelStyleJson.indexOf('"name"')).toBeLessThan(
+      labelStyleJson.indexOf('"name:en"'),
+    );
+    expect(JSON.stringify(styleLayers)).not.toMatch(/boundaries|pois|buildings/);
+    expect(
+      map.addLayer.mock.calls
+        .slice(0, 5)
+        .every(([, before]) => before === "graticule-lines"),
+    ).toBe(true);
+    expect(
+      map.addLayer.mock.calls
+        .slice(5)
+        .every(([, before]) => before === "selected-point-halo"),
+    ).toBe(true);
+    expect(firstBasemapLabelLayerId(map as never)).toBe(
+      PROTOMAPS_LABEL_LAYER_IDS[0],
+    );
 
     map.setPaintProperty.mockClear();
     synchronizeBasemap(map as never, configuredProtomaps, "dark");
     expect(map.addSource.mock.calls.filter(([id]) => id === PROTOMAPS_SOURCE_ID)).toHaveLength(1);
     expect(map.addLayer).toHaveBeenCalledTimes(PROTOMAPS_LAYER_IDS.length);
-    expect(map.setPaintProperty.mock.calls).toEqual([
-      [PROTOMAPS_LAYER_IDS[0], "fill-color", "#17242b"],
-      [PROTOMAPS_LAYER_IDS[1], "fill-color", "#1f3a32"],
-      [PROTOMAPS_LAYER_IDS[2], "fill-color", "#3b3327"],
-      [PROTOMAPS_LAYER_IDS[3], "fill-color", "#123b4c"],
-      [PROTOMAPS_LAYER_IDS[4], "line-color", "#7e898e"],
-    ]);
+    expect(map.setPaintProperty.mock.calls).toEqual(
+      expect.arrayContaining([
+        [PROTOMAPS_LAYER_IDS[0], "fill-color", "#17242b"],
+        [PROTOMAPS_LAYER_IDS[1], "fill-color", "#1f3a32"],
+        [PROTOMAPS_LAYER_IDS[2], "fill-color", "#3b3327"],
+        [PROTOMAPS_LAYER_IDS[3], "fill-color", "#123b4c"],
+        [PROTOMAPS_LAYER_IDS[4], "line-color", "#7e898e"],
+        [PROTOMAPS_LABEL_LAYER_IDS[1], "text-color", "#edf5f3"],
+        [PROTOMAPS_LABEL_LAYER_IDS[1], "text-halo-color", "#101820"],
+      ]),
+    );
 
     synchronizeBasemap(map as never, configuredTianditu, "light");
     for (const layerId of [...PROTOMAPS_LAYER_IDS].reverse()) {
@@ -152,6 +215,39 @@ describe("trusted basemap contracts", () => {
     }
     expect(map.removeSource).toHaveBeenCalledWith(PROTOMAPS_SOURCE_ID);
     expect(firstBasemapLabelLayerId(map as never)).toBe(TIANDITU_LABEL_LAYER_ID);
+  });
+
+  it("switches to online satellite imagery while retaining local place labels", () => {
+    const map = mapDouble();
+    synchronizeBasemap(map as never, configuredProtomaps, "dark", "satellite");
+
+    expect(map.addSource).toHaveBeenCalledWith(
+      SATELLITE_SOURCE_ID,
+      expect.objectContaining({
+        type: "raster",
+        tiles: [SATELLITE_TILE_PATH_TEMPLATE],
+        maxzoom: 14,
+        attribution: SATELLITE_ATTRIBUTION,
+      }),
+    );
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SATELLITE_LAYER_ID }),
+      "graticule-lines",
+    );
+    for (const layerId of PROTOMAPS_GEOMETRY_LAYER_IDS) {
+      expect(map.setLayoutProperty).toHaveBeenCalledWith(
+        layerId,
+        "visibility",
+        "none",
+      );
+    }
+    expect(firstBasemapLabelLayerId(map as never)).toBe(
+      PROTOMAPS_LABEL_LAYER_IDS[0],
+    );
+
+    synchronizeBasemap(map as never, configuredProtomaps, "dark", "map");
+    expect(map.removeLayer).toHaveBeenCalledWith(SATELLITE_LAYER_ID);
+    expect(map.removeSource).toHaveBeenCalledWith(SATELLITE_SOURCE_ID);
   });
 
   it("adds and removes both TianDiTu raster layers through fixed same-origin paths", () => {

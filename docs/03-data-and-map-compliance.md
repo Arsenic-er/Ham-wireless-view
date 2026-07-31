@@ -25,6 +25,7 @@
 | 水体掩膜 | 陆地/水体电气参数 | 否 | Copernicus DEM GLO-90 WBM 2021_1 / AWS COG | 许可、来源声明、版本锁定、校验和 |
 | 基础底图 | 点选和空间参照 | 是 | 经审核/授权的中国大陆地图服务或数据包 | 审图号、授权、审核确认 |
 | 中国大陆有效区 | 限制发射点选择 | 不单独显示 | 与合规底图一致的授权边界 | 不得自绘或使用冲突边界 |
+| 在线卫星视觉层 | 联网视觉参照 | 是，不参与分析 | EOxCloudless Sentinel-2 2025 EPSG:3857 WMTS | 可用性、非商业/商业授权、署名、同源代理验证 |
 | 热力图 | 用户计算结果 | 是 | 本地生成 | 作为叠加内容纳入地图审核评估 |
 
 ## 3. 高程数据
@@ -67,17 +68,29 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 - 开发构建必须显示“内部测试底图，不得公开发布”。
 - 不制作含未经确认国界的宣传截图或公开演示包。
 - 私有 validation 平台可以通过同源代理在线显示天地图 `vec/cva` 以验证地图交互；必须保留来源和内部验证标记。在线服务可访问不等于已经取得桌面离线、再分发、应用分发或 PNG/PDF 导出授权，也不自动关闭审图门槛。
+- 私有 validation 可测试 EOxCloudless 在线卫星视觉层，但必须显著署名、保持 `no-store`、不作离线预取，并把非商业许可与商业授权状态作为独立未关闭项。
 
 ### 5.2 私有四省 PMTiles 验证
 
 - 固定归档：source build 20260731，bbox 107.5,18,125.5,33.5，z0-9，33,044,072 bytes，SHA-256 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0。
 - 归档含 939 个 region tiles、837 个 archive entries，占 2.5 GB 上限的 1.32%；tile payload 为 gzip 压缩 MVT。
-- 只经回环 validation server 的同源 HTTP Range 读取；显示层限于 earth、landcover、landuse、water、roads。
-- boundaries、places、pois 不显示，但原始归档仍含 boundaries 以及 Natural Earth/OSM 内容。当前只用于私有验证、不纳入正式 EXE，且不作公开发行结论。
+- 只经回环 validation server 的同源 HTTP Range 读取；可信显示层限于 earth、landcover、landuse、water、roads、places。
+- `places` 只显示省、主要城市、县区和乡镇，按简体中文、本地名、英文回退；z0-9 数据不保证村级、自然村或街道级完整性。
+- boundaries 与 pois 不显示，但原始归档仍含 boundaries 以及 Natural Earth/OSM 内容。当前只用于私有验证、不纳入正式 EXE，且不作公开发行结论。
+- 地名字形由 MapLibre TinySDF 从明确的本机中文字体栈生成；无 glyph URL，不新增字体或地名资产，也不发起第三方字体请求。
 - 地图持续显示 © OpenStreetMap contributors；源数据按 ODbL Produced Work 记录，landcover 上游署名要求仍待确认。
 - PMTiles JavaScript 4.4.1 为 BSD-3-Clause，传递依赖 fflate 为 MIT。天地图继续作为联网 fallback 与历史验证路径。
 
-### 5.3 公开发行阶段
+### 5.3 EOxCloudless 在线卫星视觉层
+
+- 已采用 EOxCloudless Sentinel-2 2025 `s2cloudless-2025_3857` WMTS，EPSG:3857 z0-14；只由固定同源、`no-store`、固定 HTTPS、零重定向代理读取，不允许浏览器直连、任意上游、凭据透传或离线批量抓取。
+- 2025 免费 WM(T)S 的当前官方说明为非商业 CC BY-NC-SA 4.0；交互地图必须持续显示 `EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。任何商业使用必须先取得 EOX 适用商业授权。
+- 该服务只提供在线视觉背景。卫星像素不得进入 DEM/WBM、陆水分类、ITM、覆盖统计、缓存准备或导出分析结论；“看起来像山、水或城市”不能替代计算数据。
+- 瓦片不写入项目持久缓存、浏览器持久存储或离线包；上游不可达时回退固定 PMTiles 地图。因此 2.5 GB 硬上限不变。
+- Google Maps / Google Satellite 因 API key、计费账号、调用条款和离线缓存/再分发限制未采用。
+- 2026-08-01 已完成固定同源代理、严格路由、真实 JPEG、`no-store`、署名 UI 与断网/source error 自动回退的自动化和 live HTTP 验证；商业授权与真实浏览器视觉仍未关闭。
+
+### 5.4 公开发行阶段
 
 必须同时满足：
 
@@ -131,6 +144,7 @@ token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0
 - 删除数据前明确告知哪些离线区域将失效。
 
 - PMTiles 固定归档为 33,044,072 bytes（占 2.5 GB 的 1.32%）；Range 读取不得产生未登记的浏览器整包副本。
+- EOxCloudless 在线瓦片必须为 `no-store`，不得进入持久缓存、缓存配额统计或离线预取；十进制 2,500,000,000 字节上限不因卫星模式改变。
 
 ## 8. 署名与导出
 
@@ -151,6 +165,8 @@ token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0
 Copernicus 数据署名以发布时适用的许可文本为准。当前工程记录的基础措辞为：`produced using Copernicus WorldDEM-90 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved`；若发布布尔 WBM 或其他派生物，还需明确标注应用进行了改编。
 
 私有 PMTiles 地图界面必须持续显示 © OpenStreetMap contributors；PMTiles/fflate 许可和 landcover 署名 caveat 同步记录在 THIRD_PARTY_LICENSES.md。
+
+卫星模式必须在地图界面就近持续显示 `EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。本设计不授权离线打包 EOxCloudless，也不把在线查看权外推为 PNG/PDF 导出、再分发或商业使用权。
 
 ## 9. 发布检查清单
 
@@ -174,3 +190,6 @@ Copernicus 数据署名以发布时适用的许可文本为准。当前工程记
 - AWS Copernicus DEM：https://registry.opendata.aws/copernicus-dem/
 - OSM 标准瓦片策略：https://operations.osmfoundation.org/policies/tiles/
 - Natural Earth 使用条款：https://www.naturalearthdata.com/about/terms-of-use/
+- EOxCloudless WMTS 使用说明：https://cloudless.eox.at/documentation/usage
+- EOxCloudless 许可摘要：https://cloudless.eox.at/documentation/license
+- EOxCloudless 非商业许可与 2025 署名：https://cloudless.eox.at/license-non-commercial

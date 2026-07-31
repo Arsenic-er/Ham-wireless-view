@@ -618,7 +618,7 @@ export function App() {
     (cacheUsage?.metadataBytes ?? 0) - offlineBasemapBytes,
   );
   const basemapStatus = isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
-    ? "已接入区域离线真实底图（OpenStreetMap / Protomaps）；服务器管理的固定区域数据可用。"
+    ? "已接入区域离线真实底图及省市县乡镇地名（OpenStreetMap / Protomaps）；可切换联网卫星影像。"
     : isTrustedTiandituBasemap(bootstrapInfo?.basemap)
       ? "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。"
       : "未配置受信任的真实底图；当前只显示 WGS84 坐标网格。";

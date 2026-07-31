@@ -131,6 +131,7 @@ const protomapsBasemap: BasemapInfo = {
     { id: "landuse", displayName: "土地利用" },
     { id: "water", displayName: "水体" },
     { id: "roads", displayName: "道路" },
+    { id: "places", displayName: "地名" },
   ],
   resourcePath: "/api/basemap/pmtiles/four-provinces.pmtiles",
   bounds: [107.5, 18, 125.5, 33.5],
@@ -439,7 +440,7 @@ describe("validation server UI", () => {
     ).toBeTruthy();
     expect(
       screen.queryByText(
-        "已接入区域离线真实底图（OpenStreetMap / Protomaps）；服务器管理的固定区域数据可用。",
+        "已接入区域离线真实底图及省市县乡镇地名（OpenStreetMap / Protomaps）；可切换联网卫星影像。",
       ),
     ).toBeNull();
   });
@@ -471,7 +472,7 @@ describe("validation server UI", () => {
     fireEvent.click(screen.getByRole("button", { name: /缓存/ }));
     expect(
       screen.getByText(
-        "已接入区域离线真实底图（OpenStreetMap / Protomaps）；服务器管理的固定区域数据可用。",
+        "已接入区域离线真实底图及省市县乡镇地名（OpenStreetMap / Protomaps）；可切换联网卫星影像。",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/已接入天地图在线真实底图/)).toBeNull();

@@ -16,6 +16,13 @@ use ureq::Agent;
 const TIANDITU_PROVIDER_ID: &str = "tianditu";
 const TILE_PATH_TEMPLATE: &str = "/api/basemap/tianditu/{layer}/{z}/{x}/{y}";
 const MAX_ZOOM: u8 = 18;
+pub(crate) const SATELLITE_TILE_PATH_PREFIX: &str = "/api/basemap/satellite/";
+const SATELLITE_TILE_PATH_TEMPLATE: &str = "/api/basemap/satellite/{z}/{x}/{y}";
+const SATELLITE_PROVIDER_ID: &str = "eoxcloudless";
+const SATELLITE_MAX_ZOOM: u8 = 14;
+const SATELLITE_ATTRIBUTION: &str = "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)";
+const SATELLITE_UPSTREAM_PREFIX: &str =
+    "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g";
 const MAX_TILE_BYTES: usize = 2 * 1024 * 1024;
 const TOKEN_FILE_LIMIT: u64 = 512;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
@@ -31,7 +38,7 @@ const PMTILES_SHA256: [u8; 32] = [
     0x5b, 0xda, 0x49, 0xbf, 0x90, 0x9a, 0x5b, 0x9f, 0xae, 0x93, 0x13, 0x53, 0xed, 0xf5, 0xae, 0xa8,
     0x2b, 0xa3, 0x5b, 0xe9, 0xf8, 0x18, 0x71, 0x28, 0x64, 0x3b, 0x97, 0x2e, 0xed, 0x4c, 0x87, 0xd0,
 ];
-const PMTILES_LAYERS: [BasemapLayerMetadata; 5] = [
+const PMTILES_LAYERS: [BasemapLayerMetadata; 6] = [
     BasemapLayerMetadata {
         id: "earth",
         display_name: "Land",
@@ -51,6 +58,10 @@ const PMTILES_LAYERS: [BasemapLayerMetadata; 5] = [
     BasemapLayerMetadata {
         id: "roads",
         display_name: "Roads",
+    },
+    BasemapLayerMetadata {
+        id: "places",
+        display_name: "Places",
     },
 ];
 const TIANDITU_LAYERS: [BasemapLayerMetadata; 2] = [
@@ -153,6 +164,47 @@ impl TileRequest {
         )
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SatelliteTileRequest {
+    zoom: u8,
+    x: u32,
+    y: u32,
+}
+
+impl SatelliteTileRequest {
+    fn parse(path: &str) -> Result<Self, BasemapError> {
+        let mut parts = path.split('/');
+        if parts.next() != Some("")
+            || parts.next() != Some("api")
+            || parts.next() != Some("basemap")
+            || parts.next() != Some("satellite")
+        {
+            return Err(BasemapError::InvalidPath);
+        }
+        let zoom = parse_decimal(parts.next()).ok_or(BasemapError::InvalidPath)?;
+        let x = parse_decimal(parts.next()).ok_or(BasemapError::InvalidPath)?;
+        let y = parse_decimal(parts.next()).ok_or(BasemapError::InvalidPath)?;
+        if parts.next().is_some() || zoom > u32::from(SATELLITE_MAX_ZOOM) {
+            return Err(BasemapError::InvalidPath);
+        }
+        let matrix_size = 1_u32.checked_shl(zoom).ok_or(BasemapError::InvalidPath)?;
+        if x >= matrix_size || y >= matrix_size {
+            return Err(BasemapError::InvalidPath);
+        }
+        Ok(Self {
+            zoom: zoom as u8,
+            x,
+            y,
+        })
+    }
+
+    fn upstream_url(self) -> String {
+        format!(
+            "{SATELLITE_UPSTREAM_PREFIX}/{}/{}/{}.jpg",
+            self.zoom, self.y, self.x
+        )
+    }
+}
 
 fn parse_decimal(value: Option<&str>) -> Option<u32> {
     let value = value?;
@@ -196,7 +248,29 @@ pub(crate) struct BasemapMetadata {
     bounds: Option<[f64; 4]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     archive_bytes: Option<u64>,
+    satellite: SatelliteBasemapMetadata,
 }
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SatelliteBasemapMetadata {
+    enabled: bool,
+    provider_id: &'static str,
+    display_name: &'static str,
+    attribution: &'static str,
+    mode: &'static str,
+    max_zoom: u8,
+    tile_path_template: &'static str,
+}
+
+const SATELLITE_METADATA: SatelliteBasemapMetadata = SatelliteBasemapMetadata {
+    enabled: true,
+    provider_id: SATELLITE_PROVIDER_ID,
+    display_name: "Sentinel-2 Cloudless 2025",
+    attribution: SATELLITE_ATTRIBUTION,
+    mode: "same-origin-proxy",
+    max_zoom: SATELLITE_MAX_ZOOM,
+    tile_path_template: SATELLITE_TILE_PATH_TEMPLATE,
+};
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -261,6 +335,7 @@ impl Basemap {
                 resource_path: Some(PMTILES_PATH),
                 bounds: Some(PMTILES_BOUNDS),
                 archive_bytes: Some(PMTILES_ARCHIVE_BYTES),
+                satellite: SATELLITE_METADATA,
             }
         } else {
             self.tianditu.metadata()
@@ -269,6 +344,9 @@ impl Basemap {
 
     pub(crate) fn fetch_tianditu(&self, path: &str) -> Result<BasemapTile, BasemapError> {
         self.tianditu.fetch(path)
+    }
+    pub(crate) fn fetch_satellite(&self, path: &str) -> Result<BasemapTile, BasemapError> {
+        self.tianditu.fetch_satellite(path)
     }
 
     pub(crate) fn read_pmtiles(
@@ -471,6 +549,7 @@ impl BasemapProxy {
             resource_path: None,
             bounds: None,
             archive_bytes: None,
+            satellite: SATELLITE_METADATA,
         }
     }
 
@@ -478,9 +557,18 @@ impl BasemapProxy {
         let request = TileRequest::parse(path)?;
         let token = self.token.as_deref().ok_or(BasemapError::Disabled)?;
         let url = request.upstream_url(token);
+        self.fetch_url(&url)
+    }
+
+    fn fetch_satellite(&self, path: &str) -> Result<BasemapTile, BasemapError> {
+        let request = SatelliteTileRequest::parse(path)?;
+        self.fetch_url(&request.upstream_url())
+    }
+
+    fn fetch_url(&self, url: &str) -> Result<BasemapTile, BasemapError> {
         let mut response = self
             .agent
-            .get(&url)
+            .get(url)
             .call()
             .map_err(|_| BasemapError::UpstreamUnavailable)?;
         if response.status().as_u16() != 200 {
@@ -637,6 +725,36 @@ mod tests {
     }
 
     #[test]
+    fn satellite_tile_paths_are_strict_and_reorder_wmts_coordinates() {
+        let request = SatelliteTileRequest::parse("/api/basemap/satellite/14/16383/0").unwrap();
+        assert_eq!(
+            request,
+            SatelliteTileRequest {
+                zoom: 14,
+                x: 16_383,
+                y: 0,
+            }
+        );
+        assert_eq!(
+            request.upstream_url(),
+            "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/14/0/16383.jpg"
+        );
+        for invalid in [
+            "/api/basemap/satellite/15/0/0",
+            "/api/basemap/satellite/2/4/0",
+            "/api/basemap/satellite/02/0/0",
+            "/api/basemap/satellite/2/-1/0",
+            "/api/basemap/satellite/2/0/0/extra",
+            "/api/basemap/satellite/2/0/0?source=evil",
+        ] {
+            assert_eq!(
+                SatelliteTileRequest::parse(invalid),
+                Err(BasemapError::InvalidPath)
+            );
+        }
+    }
+
+    #[test]
     fn upstream_url_has_only_fixed_origin_and_wmts_parameters() {
         let request = TileRequest::parse("/api/basemap/tianditu/cva/8/201/99").unwrap();
         let url = request.upstream_url("0123456789abcdef");
@@ -779,7 +897,16 @@ mod tests {
             metadata["attribution"],
             "\u{00a9} OpenStreetMap contributors"
         );
-        assert_eq!(metadata["layers"].as_array().unwrap().len(), 5);
+        assert_eq!(metadata["layers"].as_array().unwrap().len(), 6);
+        assert_eq!(metadata["layers"][5]["id"], "places");
+        assert_eq!(metadata["satellite"]["enabled"], true);
+        assert_eq!(metadata["satellite"]["providerId"], "eoxcloudless");
+        assert_eq!(metadata["satellite"]["mode"], "same-origin-proxy");
+        assert_eq!(metadata["satellite"]["maxZoom"], 14);
+        assert_eq!(
+            metadata["satellite"]["tilePathTemplate"],
+            SATELLITE_TILE_PATH_TEMPLATE
+        );
         assert!(
             metadata["displayName"]
                 .as_str()

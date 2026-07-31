@@ -388,6 +388,50 @@ select:focus-visible {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 18%, transparent);
 }
 
+.map-style-switch {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 7px 20px rgba(34, 55, 64, 0.14);
+}
+
+.map-style-switch button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.map-style-switch button:hover {
+  color: var(--text);
+  background: var(--surface-strong);
+}
+
+.map-style-switch button.active {
+  color: #ffffff;
+  background: var(--accent-strong);
+  box-shadow: 0 3px 9px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.map-style-switch small {
+  margin-left: 2px;
+  font-size: 8px;
+  font-weight: 600;
+  opacity: 0.78;
+}
+
 .map-empty-state {
   position: absolute;
   left: 50%;

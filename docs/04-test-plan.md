@@ -592,7 +592,8 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 ### 28.2 图层、署名与交互
 
-- [x] 前端自动化只构建 earth、landcover、landuse、water、roads 五个 style layer，并拒绝 boundaries、places、pois。
+- [x] 历史提交 db052e6 的前端自动化只构建 earth、landcover、landuse、water、roads 五个 style layer，并拒绝 boundaries、places、pois；这是 2026-07-31 基线，不代表 2026-08-01 的地名新需求已实现。
+- [ ] 新目标必须把 places 加为可信第六 source layer，同时继续拒绝 boundaries 与 pois；实现证据见第 29 节，完成前不得改为通过。
 - [ ] 道路、水体与土地覆盖在热力图下方正确对齐；发射点、比例尺和必要控件层级正常。
 - [x] 前端测试确认 © OpenStreetMap contributors 文本，第三方清单记录 PMTiles/fflate/ODbL 与 landcover caveat；真实浏览器可读性仍待验。
 - [x] PMTiles 主路径与天地图 fallback 的固定契约均通过前端信任检查。
@@ -621,3 +622,42 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 原始归档仍含 boundaries 与 Natural Earth/OSM 内容；当前只作私有验证、不纳入正式 EXE，且本检查点不作公开发行结论。
 
 完整资产与逐项证据见 docs/21-protomaps-four-province-basemap.md。
+
+## 29. 中文地名与地图/卫星切换（2026-08-01，自动化与 live HTTP 已通过）
+
+本节区分已经执行的自动化/live HTTP 与仍需用户完成的真实浏览器视觉。不得把单元测试外推为字体、碰撞、WebGL 或实际瓦片视觉通过。
+
+### 29.1 离线中文地名契约
+
+- [x] bootstrap 与前端严格信任契约把 `places` 列为 earth、landcover、landuse、water、roads 之后的第六 source layer；缺失、多余、重复或错误顺序均 fail closed。
+- [x] 可见样式只从 `places` 渲染省级、主要城市、县区和乡镇，继续禁止 boundaries 与 pois；不得把 z0-9 资产描述成村级或街道级完整数据。
+- [x] 名称表达式严格按 `name:zh-Hans`、本地 `name`、`name:en` 回退；三者都缺失时不产生空注记。
+- [x] 省/主要城市/县区/乡镇分别有确定的 zoom、filter、文字大小、碰撞优先级与浅色/深色 paint；重复同步、主题切换和 style replay 不产生重复 layer/source。
+- [x] MapLibre style 没有 glyph URL；地图显式使用 `Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif`，构建产物不新增 WOFF/TTF/PBF 或第二份地名数据；真实 Network 仍在 29.2 验证。
+- [x] 前端自动化覆盖 PMTiles label layer 的添加、移除、中文回退、主题、首个 label anchor 和不可信 metadata 拒绝。
+
+### 29.2 图层顺序与真实浏览器
+
+- [x] 自动化确认图层顺序为基础地表/道路/水体 < 经纬网 < 传播热力图 < 200 km 范围与地名 < 发射点，且延迟清空/状态重放不残留热力图。
+- [ ] 福州、杭州、南昌、广州在代表性 z4/z8/z10 视图中可读；省、主要城市、县区、乡镇按缩放渐进出现，碰撞不会形成不可用的文字墙。
+- [ ] 浅色、深色主题与卫星背景下文字/halo 可读，热力图不遮住地名，地名不遮住发射点，比例尺与署名不被控件遮挡。
+- [ ] 完全断网时 PMTiles 地名仍可显示；控制台无 glyph、字体、MVT、WebGL 或缺 source-layer 错误。
+- [x] 自动化确认清空热力图与地图/卫星切换保留正确 desired state；缩放、平移和真实 WebGL 视觉仍需人工确认。
+
+### 29.3 EOxCloudless 同源代理
+
+- [x] 前端只接受固定 `EOxCloudless + same-origin-proxy + z0-14` 能力信息和相对模板 `/api/basemap/satellite/{z}/{x}/{y}`；bootstrap 不暴露上游 URL、凭据或可变主机。
+- [x] 路由只接受规范十进制 z/x/y、z0-14 和合法矩阵边界，拒绝查询字符串、前导零、负数、溢出、额外路径段、任意 URL 和非 GET 方法。
+- [x] 上游固定为 HTTPS EOX host 与 Sentinel-2 2025 EPSG:3857 WMTS path，z/y/x 映射正确；重定向、错误 MIME/签名、超限响应、超时和非 200 均 fail closed。
+- [x] bootstrap 不泄露上游 URL；live 成功瓦片为 JPEG 并带 `Cache-Control: no-store`，代理代码不写入 Rust 数据根、SQLite 或缓存管理。
+- [x] 浏览器断网或卫星 source error 会自动回退 PMTiles 地图并显示非阻塞提示；camera、发射点、200 km 圆和已有热力图组件不重建。
+- [ ] 地图/卫星切换前后，相同输入的 DEM/WBM 资产、ITM 请求、计算统计和热力图字节完全一致；卫星像素不进入任何传播分析。
+- [x] 前端自动化确认卫星模式持续显示 `EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`，地图模式继续显示 © OpenStreetMap contributors。
+- [ ] 全量前端、Rust、Clippy、构建、管理脚本 self-test、受管 stop/build/start、live HTTP、浏览器视觉与控制台门禁通过。
+
+### 29.4 尚未关闭
+
+- [x] 2026-08-01 已完成 9 files/65 frontend tests、Rust workspace 113 passed/5 ignored、validation server 28/28、Clippy、构建、管理 self-test、受管 stop/build/start 和 live EOX JPEG/no-store。
+- [ ] 必须复核 EOX 官方 capabilities、公共 endpoint 的长期可用性、速率/服务条件，以及 2025 非商业 CC BY-NC-SA 4.0 与项目实际发行方式的兼容性；商业用途需另行授权。
+- [x] EOxCloudless 在线层不是离线卫星方案；断网只保证回退 PMTiles，不保证卫星影像离线可见。
+- [x] Google Maps / Google Satellite 因 key、计费和缓存/再分发限制未进入本实现，不为其建立兼容或回退测试。

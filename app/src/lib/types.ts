@@ -11,8 +11,26 @@ export interface MapPoint {
   lon: number;
 }
 
+export interface SatelliteBasemapInfo {
+  enabled: boolean;
+  providerId: string;
+  displayName: string;
+  attribution: string;
+  mode: string;
+  maxZoom: number;
+  tilePathTemplate: string;
+}
+
 export interface BasemapLayer {
-  id: "vec" | "cva" | "earth" | "landcover" | "landuse" | "water" | "roads";
+  id:
+    | "vec"
+    | "cva"
+    | "earth"
+    | "landcover"
+    | "landuse"
+    | "water"
+    | "roads"
+    | "places";
   displayName: string;
 }
 
@@ -28,6 +46,7 @@ export interface BasemapInfo {
   resourcePath?: string;
   bounds?: [number, number, number, number];
   archiveBytes?: number;
+  satellite?: SatelliteBasemapInfo;
 }
 
 export interface CacheUsage {

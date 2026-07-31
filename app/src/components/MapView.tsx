@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FeatureCollection } from "geojson";
 import maplibregl, {
   type GeoJSONSource,
@@ -12,12 +12,15 @@ import {
   maidenheadLocator,
 } from "../lib/geodesy";
 import {
+  SATELLITE_SOURCE_ID,
   acquirePmtilesProtocol,
   applyProtomapsTheme,
   firstBasemapLabelLayerId,
   isTrustedBasemap,
   isTrustedProtomapsBasemap,
+  isTrustedSatelliteBasemap,
   isTrustedTiandituBasemap,
+  type BasemapPresentation,
   synchronizeBasemap,
 } from "../lib/basemap";
 import { MapOverlayBlobUrlLease, buildMapOverlayImageSpec } from "../lib/mapOverlay";
@@ -125,6 +128,9 @@ export function MapView({
   onPointSelect,
   basemap,
 }: MapViewProps) {
+  const [basemapPresentation, setBasemapPresentation] =
+    useState<BasemapPresentation>("map");
+  const [satelliteFallback, setSatelliteFallback] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const synchronizeMapStateRef = useRef<(() => void) | null>(null);
@@ -140,6 +146,7 @@ export function MapView({
   const heatmapStaleRef = useRef(heatmapStale);
   const onPointSelectRef = useRef(onPointSelect);
   const basemapRef = useRef(basemap);
+  const basemapPresentationRef = useRef(basemapPresentation);
   themeRef.current = theme;
   pointRef.current = point;
   heatmapRef.current = heatmap;
@@ -147,6 +154,7 @@ export function MapView({
   heatmapStaleRef.current = heatmapStale;
   onPointSelectRef.current = onPointSelect;
   basemapRef.current = basemap;
+  basemapPresentationRef.current = basemapPresentation;
 
   useEffect(() => {
     if (!containerRef.current || !heatmapBlobUrlsRef.current) return;
@@ -158,7 +166,9 @@ export function MapView({
       center: [104, 35],
       zoom: 3.25,
       minZoom: 2.3,
-      maxZoom: 10,
+      maxZoom: 12,
+      localIdeographFontFamily:
+        "Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif",
       maxBounds: [
         [65, 5],
         [145, 65],
@@ -190,7 +200,12 @@ export function MapView({
         return;
       }
       synchronizationPending = false;
-      synchronizeBasemap(map, basemapRef.current, themeRef.current);
+      synchronizeBasemap(
+        map,
+        basemapRef.current,
+        themeRef.current,
+        basemapPresentationRef.current,
+      );
       if (
         !protomapsViewFittedRef.current &&
         isTrustedProtomapsBasemap(basemapRef.current)
@@ -288,6 +303,12 @@ export function MapView({
     map.on("click", (event) => {
       onPointSelectRef.current({ lat: event.lngLat.lat, lon: event.lngLat.lng });
     });
+    map.on("error", (event) => {
+      if ((event as { sourceId?: string }).sourceId === SATELLITE_SOURCE_ID) {
+        setSatelliteFallback(true);
+        setBasemapPresentation("map");
+      }
+    });
     return () => {
       if (synchronizeMapStateRef.current === synchronizeDesiredMapState) {
         synchronizeMapStateRef.current = null;
@@ -317,37 +338,89 @@ export function MapView({
         theme === "dark" ? "#35505f" : "#bfd0d7",
       );
     }
-    applyProtomapsTheme(map, theme);
-  }, [theme]);
+    applyProtomapsTheme(map, theme, basemapPresentation);
+  }, [theme, basemapPresentation]);
 
   useEffect(() => {
     synchronizeMapStateRef.current?.();
   }, [point]);
 
   useEffect(() => {
+    if (
+      basemapPresentation === "satellite" &&
+      !isTrustedSatelliteBasemap(basemap)
+    ) {
+      setBasemapPresentation("map");
+      return;
+    }
     synchronizeMapStateRef.current?.();
-  }, [basemap]);
+  }, [basemap, basemapPresentation]);
 
   useEffect(() => {
     synchronizeMapStateRef.current?.();
   }, [heatmap, preview, heatmapStale]);
 
+  useEffect(() => {
+    const returnToOfflineMap = () => {
+      if (basemapPresentationRef.current === "satellite") {
+        setSatelliteFallback(true);
+        setBasemapPresentation("map");
+      }
+    };
+    window.addEventListener("offline", returnToOfflineMap);
+    return () => window.removeEventListener("offline", returnToOfflineMap);
+  }, []);
+
   const trustedProtomaps = isTrustedProtomapsBasemap(basemap);
   const trustedTianditu = isTrustedTiandituBasemap(basemap);
+  const satelliteAvailable = isTrustedSatelliteBasemap(basemap);
+  const usingSatellite = satelliteAvailable && basemapPresentation === "satellite";
   return (
     <section className="map-shell" aria-label="发射点选择地图">
       <div ref={containerRef} className="map-canvas" />
       <div className="map-warning">
         <span className="map-warning-dot" />
-        {trustedProtomaps
+        {usingSatellite
+          ? "Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证"
+          : satelliteFallback
+          ? "卫星影像不可用，已切回区域离线地图"
+          : trustedProtomaps
           ? "区域离线底图 · 内部验证"
           : trustedTianditu
-            ? "天地图在线真实底图 · 内部验证"
-            : "WGS84 内部测试画布 · 未配置真实底图"}
+          ? "天地图在线真实底图 · 内部验证"
+          : "WGS84 内部测试画布 · 未配置真实底图"}
       </div>
+      {satelliteAvailable && (
+        <div className="map-style-switch" role="group" aria-label="底图样式">
+          <button
+            type="button"
+            className={basemapPresentation === "map" ? "active" : undefined}
+            aria-pressed={basemapPresentation === "map"}
+            onClick={() => {
+              setSatelliteFallback(false);
+              setBasemapPresentation("map");
+            }}
+          >
+            地图
+          </button>
+          <button
+            type="button"
+            className={basemapPresentation === "satellite" ? "active" : undefined}
+            aria-pressed={basemapPresentation === "satellite"}
+            onClick={() => {
+              setSatelliteFallback(false);
+              setBasemapPresentation("satellite");
+            }}
+          >
+            卫星 <small>联网</small>
+          </button>
+        </div>
+      )}
       {isTrustedBasemap(basemap) && (
         <div className="map-attribution">
-          {basemap.attribution} · {trustedProtomaps ? "本地区域底图" : "在线底图"}
+          {usingSatellite
+            ? `${basemap.satellite?.attribution} · ${basemap.attribution} 地名`
+            : `${basemap.attribution} · ${trustedProtomaps ? "本地区域底图" : "在线底图"}`}
         </div>
       )}
       {!point && (

@@ -16,6 +16,7 @@
 - 前端：React 19.2.7 + TypeScript 7.0.2 + Vite 8.1.4。
 - 地图：MapLibre GL JS 5.24.0；普通 preview 和未配置 token 的 validation 构建使用无行政边界的 WGS84 空白坐标画布，私有 validation 可选择通过同源代理显示天地图在线 `vec/cva`。该路径不是桌面离线 provider 或公开发行合规结论。
 - 私有 validation 区域底图：MapLibre GL JS 5.24.0 + PMTiles JavaScript 4.4.1；fflate 0.8.3 为传递解压依赖。该接入以 HTTP Range 读取固定 gzip MVT 归档，天地图保留为 fallback/历史路径。
+- 私有 validation 卫星视图：已接 EOxCloudless Sentinel-2 2025 EPSG:3857 WMTS z0-14；浏览器只见固定同源路径，Rust 代理固定 HTTPS 上游、零重定向并返回 `no-store`。
 - 前端工具链：项目内固定 Node.js 24.18.0，不依赖 JAIST 主机全局 Node。
 - 后端：Rust stable。
 - 传播核心：NTIA ITM C++ 源码，以本地静态库或 DLL 方式绑定。
@@ -66,7 +67,7 @@ hamheatmap/
 
 ### 4.1 前端层
 
-- `MapView`：合规底图、发射点、200 km 圆、不可检查的热力图和图例；不渲染高程视觉层。
+- `MapView`：合规底图、中文地名、地图/卫星切换、发射点、200 km 圆、不可检查的热力图和图例；不渲染高程视觉层，也不把卫星影像解释为传播输入。
 - `ParameterPanel`：场景、频率、功率、增益、AGL 天线高度、发射点地面海拔来源和值、极化。
 - `CalculationPanel`：开始、取消、进度、状态、模型名称。
 - `CacheManager`：已缓存区域、分类大小、删除和 2.5 GB 硬限制。
@@ -210,11 +211,25 @@ MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最
 
 validation server 只通过同源 HTTP Range 暴露该固定归档。端点保持回环绑定；合法单段 Range 必须返回精确的 206、Content-Range、Accept-Ranges 和长度，无效、越界或不支持的 Range 按固定契约失败，不得默默退化为整包响应。bootstrap 只返回浏览器完成协议注册所需的相对 URL 与非秘密元数据。
 
-MapLibre 注册 PMTiles protocol 后只构建五类可见 layer：earth、landcover、landuse、water、roads。boundaries、places、pois 不进入可见样式；道路/水体/土地覆盖位于传播覆盖层下方，发射点和必要控件保持上层。地图始终显示 © OpenStreetMap contributors，ScaleControl 和既有 desired-state 重放逻辑继续复用。
+MapLibre 注册 PMTiles protocol 后构建六类可信可见 source layer：earth、landcover、landuse、water、roads、places。boundaries 与 pois 不进入可见样式。`places` 分成省级、主要城市、县区和乡镇 symbol layer；文字表达式按 `name:zh-Hans`、本地 `name`、`name:en` 回退，按 `min_zoom`、`kind`、`kind_detail` 与碰撞优先级控制密度。固定 z0-9 归档只承诺省、市、区县和乡镇级可用，不保证村、自然村或街道名称完整。
+
+样式不配置 glyph URL。MapLibre GL JS 5.24.0 在无 glyph URL 时由 TinySDF 从本机字体生成字形；地图构造显式使用 `Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif` 中文系统字体栈。本轮不下载或打包 WOFF/TTF、glyph PBF 或第二份地名数据，Tauri 与 validation CSP 也不增加外部字体源。
+
+渲染顺序固定为：基础地表/道路/水体 < 经纬网 < 传播热力图 < 200 km 范围与地名注记 < 发射点。用于插入热力图的“首个地名层”必须同时识别 PMTiles 和天地图注记，使预览、最终结果、主题切换和 desired-state 重放都不能把热力图压到文字之上。地图始终显示 © OpenStreetMap contributors，ScaleControl 和既有状态重放逻辑继续复用。
 
 原始归档仍含 boundaries 以及 Natural Earth/OSM 内容，显示过滤不等于删除；当前只用于私有验证、不纳入正式 EXE，且不作公开发行结论。源数据按 ODbL Produced Work 处理，landcover 上游署名要求仍待确认。
 
 自动化、固定 SHA-256、同源 Range、受管运行及 PMTiles JavaScript getHeader/getZxy 实际读取均已通过；真实浏览器视觉因 Codex 桌面 ACL 故障仍待人工确认。证据统一记录在 docs/21-protomaps-four-province-basemap.md。
+
+### 4.2.6 地图/卫星切换与 EOxCloudless 代理
+
+地图模式以固定四省 PMTiles 为离线权威视觉底图；卫星模式使用 EOxCloudless Sentinel-2 2025 的 `s2cloudless-2025_3857` WMTS，矩阵集为 EPSG:3857，支持 z0-14。前端只接受固定 bootstrap 契约并请求同源模板 `/api/basemap/satellite/{z}/{x}/{y}`；服务器把它映射到固定 `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg`。2026-08-01 的 live 四省请求已确认响应为 JPEG，代理返回 `Cache-Control: no-store`。
+
+代理沿用最小网络面：只允许规范十进制 z/x/y 和 z0-14，固定 HTTPS 主机与路径，不接受查询字符串、用户 URL、凭据或重定向；设置有界连接/读取/总超时、响应体上限、JPEG MIME 与签名校验，并对客户端返回 `Cache-Control: no-store`。浏览器 CSP 仍只需 `connect-src 'self'`。卫星请求不写入 Rust 缓存、SQLite、浏览器持久存储或 Service Worker，不出现在缓存管理中，因此十进制 2.5 GB 配额和现有预算保持不变。
+
+卫星 raster 位于本地 `places` 注记和传播热力图之下；切换时保留 camera、发射点、200 km 圆、预览/最终热力图和参数状态。浏览器断网或卫星 source 请求失败时切回 PMTiles 地图模式并给出非阻塞提示，不能留下空白画布；此回退不把失败瓦片写入缓存。EOx 署名在卫星模式持续可见：`EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。
+
+EOxCloudless 只是视觉背景，不进入 DEM/WBM 采样、ITM、路径陆水比例或结果统计。Google Maps / Google Satellite 不采用，因为其 API key、计费、调用策略以及离线缓存/再分发限制会引入凭据和不可控持久化边界。详细取舍见 ADR 0018。
 
 ### 4.3 原生传播层
 

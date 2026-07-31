@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BasemapInfo, CalculationResult } from "../lib/types";
@@ -46,6 +46,7 @@ const maplibreMocks = vi.hoisted(() => {
     removeSource: vi.fn((id: string) => {
       sources.delete(id);
     }),
+    setLayoutProperty: vi.fn(),
     setPaintProperty: vi.fn(),
   };
   const navigationControl = { kind: "navigation-control" };
@@ -112,10 +113,21 @@ const configuredProtomaps: BasemapInfo = {
     { id: "landuse", displayName: "土地利用" },
     { id: "water", displayName: "水体" },
     { id: "roads", displayName: "道路" },
+    { id: "places", displayName: "地名" },
   ],
   resourcePath: "/api/basemap/pmtiles/four-provinces.pmtiles",
   bounds: [107.5, 18, 125.5, 33.5],
   archiveBytes: 33_044_072,
+  satellite: {
+    enabled: true,
+    providerId: "eoxcloudless",
+    displayName: "Sentinel-2 2025",
+    attribution:
+      "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)",
+    mode: "same-origin-proxy",
+    maxZoom: 14,
+    tilePathTemplate: "/api/basemap/satellite/{z}/{x}/{y}",
+  },
 };
 
 describe("MapView controls and desired-state replay", () => {
@@ -148,6 +160,12 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.addProtocol).toHaveBeenCalledWith(
       "pmtiles",
       expect.any(Function),
+    );
+    expect(maplibreMocks.Map).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxZoom: 12,
+        localIdeographFontFamily: expect.stringContaining("Microsoft YaHei"),
+      }),
     );
     expect(maplibreMocks.NavigationControl).toHaveBeenCalledWith({ showCompass: false });
     expect(maplibreMocks.ScaleControl).toHaveBeenCalledWith({
@@ -196,7 +214,7 @@ describe("MapView controls and desired-state replay", () => {
     expect(getByText("© OpenStreetMap contributors · 本地区域底图")).toBeDefined();
     expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
       expect.objectContaining({ id: "coverage-heatmap-layer" }),
-      "coverage-circle-fill",
+      "basemap-protomaps-place-province",
     );
     expect(maplibreMocks.map.setPaintProperty).toHaveBeenCalledWith(
       "basemap-protomaps-earth",
@@ -229,6 +247,57 @@ describe("MapView controls and desired-state replay", () => {
       "line-color",
       "#8b8174",
     );
+
+    unmount();
+  });
+
+  it("switches between the offline map and online satellite imagery", () => {
+    const { getByRole, getByText, unmount } = render(
+      <MapView
+        theme="dark"
+        point={null}
+        heatmap={null}
+        preview={null}
+        heatmapStale={false}
+        onPointSelect={vi.fn()}
+        basemap={configuredProtomaps}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+
+    expect(getByText("Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证")).toBeDefined();
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-satellite",
+      expect.objectContaining({
+        type: "raster",
+        tiles: ["/api/basemap/satellite/{z}/{x}/{y}"],
+        maxzoom: 14,
+      }),
+    );
+    expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "basemap-satellite-layer" }),
+      "graticule-lines",
+    );
+    expect(maplibreMocks.map.setLayoutProperty).toHaveBeenCalledWith(
+      "basemap-protomaps-earth",
+      "visibility",
+      "none",
+    );
+
+    fireEvent.click(getByRole("button", { name: "地图" }));
+    expect(maplibreMocks.map.removeLayer).toHaveBeenCalledWith(
+      "basemap-satellite-layer",
+    );
+    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith("basemap-satellite");
+
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-satellite" });
+    });
+    expect(getByText("卫星影像不可用，已切回区域离线地图")).toBeDefined();
 
     unmount();
   });

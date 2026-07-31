@@ -13,15 +13,34 @@ export const TIANDITU_LABEL_SOURCE_ID = "basemap-tianditu-label";
 export const TIANDITU_VECTOR_LAYER_ID = "basemap-tianditu-vector-layer";
 export const TIANDITU_LABEL_LAYER_ID = "basemap-tianditu-label-layer";
 
+export const SATELLITE_TILE_PATH_TEMPLATE =
+  "/api/basemap/satellite/{z}/{x}/{y}";
+export const SATELLITE_SOURCE_ID = "basemap-satellite";
+export const SATELLITE_LAYER_ID = "basemap-satellite-layer";
+export const SATELLITE_ATTRIBUTION =
+  "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)";
+
+export type BasemapPresentation = "map" | "satellite";
+
 export const PROTOMAPS_RESOURCE_PATH =
   "/api/basemap/pmtiles/four-provinces.pmtiles";
 export const PROTOMAPS_SOURCE_ID = "basemap-protomaps";
-export const PROTOMAPS_LAYER_IDS = [
+export const PROTOMAPS_GEOMETRY_LAYER_IDS = [
   "basemap-protomaps-earth",
   "basemap-protomaps-landcover",
   "basemap-protomaps-landuse",
   "basemap-protomaps-water",
   "basemap-protomaps-roads",
+] as const;
+export const PROTOMAPS_LABEL_LAYER_IDS = [
+  "basemap-protomaps-place-province",
+  "basemap-protomaps-place-major-city",
+  "basemap-protomaps-place-county",
+  "basemap-protomaps-place-town",
+] as const;
+export const PROTOMAPS_LAYER_IDS = [
+  ...PROTOMAPS_GEOMETRY_LAYER_IDS,
+  ...PROTOMAPS_LABEL_LAYER_IDS,
 ] as const;
 
 const PROTOMAPS_MAX_ZOOM = 9;
@@ -34,6 +53,7 @@ const PROTOMAPS_SOURCE_LAYERS = [
   "landuse",
   "water",
   "roads",
+  "places",
 ] as const;
 
 const PROTOMAPS_THEME_PALETTES = {
@@ -43,6 +63,10 @@ const PROTOMAPS_THEME_PALETTES = {
     landuse: "#d9d2bd",
     water: "#9fc9d8",
     roads: "#8b8174",
+    provinceText: "#53656c",
+    placeText: "#24343b",
+    secondaryPlaceText: "#42545b",
+    placeHalo: "#f7f4eb",
   },
   dark: {
     earth: "#17242b",
@@ -50,6 +74,10 @@ const PROTOMAPS_THEME_PALETTES = {
     landuse: "#3b3327",
     water: "#123b4c",
     roads: "#7e898e",
+    provinceText: "#b9d6d2",
+    placeText: "#edf5f3",
+    secondaryPlaceText: "#c5d4d2",
+    placeHalo: "#101820",
   },
 } as const;
 
@@ -97,6 +125,21 @@ export function isTrustedTiandituBasemap(
   return layerIds.has("vec") && layerIds.has("cva");
 }
 
+export function isTrustedSatelliteBasemap(
+  basemap: BasemapInfo | null | undefined,
+): boolean {
+  const satellite = basemap?.satellite;
+  return (
+    basemap?.enabled === true &&
+    satellite?.enabled === true &&
+    satellite.providerId === "eoxcloudless" &&
+    satellite.mode === "same-origin-proxy" &&
+    satellite.tilePathTemplate === SATELLITE_TILE_PATH_TEMPLATE &&
+    satellite.maxZoom === 14 &&
+    satellite.attribution === SATELLITE_ATTRIBUTION
+  );
+}
+
 export function isTrustedProtomapsBasemap(
   basemap: BasemapInfo | null | undefined,
 ): basemap is TrustedProtomapsBasemap {
@@ -116,8 +159,7 @@ export function isTrustedProtomapsBasemap(
   const layerIds = basemap.layers.map(({ id }) => id);
   return (
     layerIds.length === PROTOMAPS_SOURCE_LAYERS.length &&
-    new Set(layerIds).size === PROTOMAPS_SOURCE_LAYERS.length &&
-    PROTOMAPS_SOURCE_LAYERS.every((layerId) => layerIds.includes(layerId))
+    PROTOMAPS_SOURCE_LAYERS.every((layerId, index) => layerIds[index] === layerId)
   );
 }
 
@@ -145,6 +187,59 @@ function removeProtomapsBasemap(map: MapLibreMap): void {
     if (map.getLayer(layerId)) map.removeLayer(layerId);
   }
   if (map.getSource(PROTOMAPS_SOURCE_ID)) map.removeSource(PROTOMAPS_SOURCE_ID);
+}
+function removeSatelliteBasemap(map: MapLibreMap): void {
+  if (map.getLayer(SATELLITE_LAYER_ID)) map.removeLayer(SATELLITE_LAYER_ID);
+  if (map.getSource(SATELLITE_SOURCE_ID)) map.removeSource(SATELLITE_SOURCE_ID);
+}
+
+function setBaseGeometryVisibility(map: MapLibreMap, visible: boolean): void {
+  const visibility = visible ? "visible" : "none";
+  for (const layerId of [
+    ...PROTOMAPS_GEOMETRY_LAYER_IDS,
+    TIANDITU_VECTOR_LAYER_ID,
+  ]) {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, "visibility", visibility);
+    }
+  }
+}
+
+function synchronizeSatelliteBasemap(
+  map: MapLibreMap,
+  basemap: BasemapInfo,
+  presentation: BasemapPresentation,
+): void {
+  const enabled =
+    presentation === "satellite" && isTrustedSatelliteBasemap(basemap);
+  setBaseGeometryVisibility(map, !enabled);
+  if (!enabled) {
+    removeSatelliteBasemap(map);
+    return;
+  }
+  const satellite = basemap.satellite!;
+  if (!map.getSource(SATELLITE_SOURCE_ID)) {
+    map.addSource(SATELLITE_SOURCE_ID, {
+      type: "raster",
+      tiles: [satellite.tilePathTemplate],
+      tileSize: 256,
+      minzoom: 0,
+      maxzoom: satellite.maxZoom,
+      attribution: satellite.attribution,
+    });
+  }
+  if (!map.getLayer(SATELLITE_LAYER_ID)) {
+    addLayerBeforeGraticule(map, {
+      id: SATELLITE_LAYER_ID,
+      type: "raster",
+      source: SATELLITE_SOURCE_ID,
+      paint: {
+        "raster-fade-duration": 0,
+        "raster-saturation": -0.08,
+        "raster-contrast": 0.06,
+      },
+    });
+  }
 }
 
 function addLayerBeforeGraticule(map: MapLibreMap, layer: LayerSpecification): void {
@@ -237,20 +332,169 @@ function protomapsLayers(theme: ResolvedTheme): LayerSpecification[] {
         "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.35, 9, 1.5],
       },
     },
+    {
+      id: PROTOMAPS_LABEL_LAYER_IDS[0],
+      type: "symbol",
+      source: PROTOMAPS_SOURCE_ID,
+      "source-layer": "places",
+      minzoom: 3.5,
+      maxzoom: 8.5,
+      filter: [
+        "in",
+        ["get", "kind_detail"],
+        ["literal", ["state", "province"]],
+      ],
+      layout: {
+        "text-field": [
+          "coalesce",
+          ["get", "name:zh-Hans"],
+          ["get", "name"],
+          ["get", "name:en"],
+          "",
+        ],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 3.5, 12, 7, 15],
+        "symbol-sort-key": ["to-number", ["get", "sort_key"], 999999],
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-padding": 8,
+      },
+      paint: {
+        "text-color": palette.provinceText,
+        "text-halo-color": palette.placeHalo,
+        "text-halo-width": 1.6,
+        "text-halo-blur": 0.2,
+      },
+    },
+    {
+      id: PROTOMAPS_LABEL_LAYER_IDS[1],
+      type: "symbol",
+      source: PROTOMAPS_SOURCE_ID,
+      "source-layer": "places",
+      minzoom: 3.5,
+      filter: [
+        "all",
+        ["==", ["get", "kind_detail"], "city"],
+        ["<=", ["to-number", ["get", "min_zoom"], 99], 7],
+      ],
+      layout: {
+        "text-field": [
+          "coalesce",
+          ["get", "name:zh-Hans"],
+          ["get", "name"],
+          ["get", "name:en"],
+          "",
+        ],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 3.5, 12, 8, 14],
+        "symbol-sort-key": ["to-number", ["get", "sort_key"], 999999],
+        "text-variable-anchor": ["top", "bottom", "left", "right"],
+        "text-radial-offset": 0.35,
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-padding": 5,
+      },
+      paint: {
+        "text-color": palette.placeText,
+        "text-halo-color": palette.placeHalo,
+        "text-halo-width": 1.7,
+        "text-halo-blur": 0.2,
+      },
+    },
+    {
+      id: PROTOMAPS_LABEL_LAYER_IDS[2],
+      type: "symbol",
+      source: PROTOMAPS_SOURCE_ID,
+      "source-layer": "places",
+      minzoom: 7,
+      filter: [
+        "all",
+        ["==", ["get", "kind_detail"], "city"],
+        [">=", ["to-number", ["get", "min_zoom"], 99], 8],
+        ["<=", ["to-number", ["get", "min_zoom"], 99], 9],
+      ],
+      layout: {
+        "text-field": [
+          "coalesce",
+          ["get", "name:zh-Hans"],
+          ["get", "name"],
+          ["get", "name:en"],
+          "",
+        ],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10.5, 11, 12.5],
+        "symbol-sort-key": ["to-number", ["get", "sort_key"], 999999],
+        "text-variable-anchor": ["top", "bottom", "left", "right"],
+        "text-radial-offset": 0.3,
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-padding": 4,
+      },
+      paint: {
+        "text-color": palette.secondaryPlaceText,
+        "text-halo-color": palette.placeHalo,
+        "text-halo-width": 1.45,
+        "text-halo-blur": 0.2,
+      },
+    },
+    {
+      id: PROTOMAPS_LABEL_LAYER_IDS[3],
+      type: "symbol",
+      source: PROTOMAPS_SOURCE_ID,
+      "source-layer": "places",
+      minzoom: 9.5,
+      filter: ["==", ["get", "kind_detail"], "town"],
+      layout: {
+        "text-field": [
+          "coalesce",
+          ["get", "name:zh-Hans"],
+          ["get", "name"],
+          ["get", "name:en"],
+          "",
+        ],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 9.5, 10, 12, 11.5],
+        "symbol-sort-key": ["to-number", ["get", "sort_key"], 999999],
+        "text-variable-anchor": ["top", "bottom", "left", "right"],
+        "text-radial-offset": 0.25,
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-padding": 3,
+      },
+      paint: {
+        "text-color": palette.secondaryPlaceText,
+        "text-halo-color": palette.placeHalo,
+        "text-halo-width": 1.35,
+        "text-halo-blur": 0.2,
+      },
+    },
   ];
 }
 
-export function applyProtomapsTheme(map: MapLibreMap, theme: ResolvedTheme): void {
+export function applyProtomapsTheme(
+  map: MapLibreMap,
+  theme: ResolvedTheme,
+  presentation: BasemapPresentation = "map",
+): void {
   const palette = PROTOMAPS_THEME_PALETTES[theme];
-  const colors = [
-    [PROTOMAPS_LAYER_IDS[0], "fill-color", palette.earth],
-    [PROTOMAPS_LAYER_IDS[1], "fill-color", palette.landcover],
-    [PROTOMAPS_LAYER_IDS[2], "fill-color", palette.landuse],
-    [PROTOMAPS_LAYER_IDS[3], "fill-color", palette.water],
-    [PROTOMAPS_LAYER_IDS[4], "line-color", palette.roads],
+  const geometryColors = [
+    [PROTOMAPS_GEOMETRY_LAYER_IDS[0], "fill-color", palette.earth],
+    [PROTOMAPS_GEOMETRY_LAYER_IDS[1], "fill-color", palette.landcover],
+    [PROTOMAPS_GEOMETRY_LAYER_IDS[2], "fill-color", palette.landuse],
+    [PROTOMAPS_GEOMETRY_LAYER_IDS[3], "fill-color", palette.water],
+    [PROTOMAPS_GEOMETRY_LAYER_IDS[4], "line-color", palette.roads],
   ] as const;
-  for (const [layerId, property, color] of colors) {
+  for (const [layerId, property, color] of geometryColors) {
     if (map.getLayer(layerId)) map.setPaintProperty(layerId, property, color);
+  }
+  const satellite = presentation === "satellite";
+  const labelColors = [
+    [PROTOMAPS_LABEL_LAYER_IDS[0], satellite ? "#f3fbff" : palette.provinceText],
+    [PROTOMAPS_LABEL_LAYER_IDS[1], satellite ? "#ffffff" : palette.placeText],
+    [PROTOMAPS_LABEL_LAYER_IDS[2], satellite ? "#f3f8f7" : palette.secondaryPlaceText],
+    [PROTOMAPS_LABEL_LAYER_IDS[3], satellite ? "#eef6f4" : palette.secondaryPlaceText],
+  ] as const;
+  const haloColor = satellite ? "#101619" : palette.placeHalo;
+  for (const [layerId, color] of labelColors) {
+    if (!map.getLayer(layerId)) continue;
+    map.setPaintProperty(layerId, "text-color", color);
+    map.setPaintProperty(layerId, "text-halo-color", haloColor);
   }
 }
 
@@ -258,6 +502,7 @@ function synchronizeProtomapsBasemap(
   map: MapLibreMap,
   basemap: TrustedProtomapsBasemap,
   theme: ResolvedTheme,
+  presentation: BasemapPresentation,
 ): void {
   if (!map.getSource(PROTOMAPS_SOURCE_ID)) {
     const archiveUrl = new URL(basemap.resourcePath, window.location.href).href;
@@ -271,12 +516,23 @@ function synchronizeProtomapsBasemap(
   }
 
   for (const layer of protomapsLayers(theme)) {
-    if (!map.getLayer(layer.id)) addLayerBeforeGraticule(map, layer);
+    if (map.getLayer(layer.id)) continue;
+    if (PROTOMAPS_LABEL_LAYER_IDS.some((layerId) => layerId === layer.id)) {
+      map.addLayer(
+        layer,
+        map.getLayer("selected-point-halo") ? "selected-point-halo" : undefined,
+      );
+    } else {
+      addLayerBeforeGraticule(map, layer);
+    }
   }
-  applyProtomapsTheme(map, theme);
+  applyProtomapsTheme(map, theme, presentation);
 }
 
 export function firstBasemapLabelLayerId(map: MapLibreMap): string | undefined {
+  for (const layerId of PROTOMAPS_LABEL_LAYER_IDS) {
+    if (map.getLayer(layerId)) return layerId;
+  }
   return map.getLayer(TIANDITU_LABEL_LAYER_ID) ? TIANDITU_LABEL_LAYER_ID : undefined;
 }
 
@@ -284,17 +540,21 @@ export function synchronizeBasemap(
   map: MapLibreMap,
   basemap: BasemapInfo | null | undefined,
   theme: ResolvedTheme,
+  presentation: BasemapPresentation = "map",
 ): void {
   if (isTrustedProtomapsBasemap(basemap)) {
     removeTiandituBasemap(map);
-    synchronizeProtomapsBasemap(map, basemap, theme);
+    synchronizeProtomapsBasemap(map, basemap, theme, presentation);
+    synchronizeSatelliteBasemap(map, basemap, presentation);
     return;
   }
   if (isTrustedTiandituBasemap(basemap)) {
     removeProtomapsBasemap(map);
     synchronizeTiandituBasemap(map, basemap);
+    synchronizeSatelliteBasemap(map, basemap, presentation);
     return;
   }
+  removeSatelliteBasemap(map);
   removeTiandituBasemap(map);
   removeProtomapsBasemap(map);
 }

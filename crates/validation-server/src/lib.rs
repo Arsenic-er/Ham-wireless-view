@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use basemap::{Basemap, BasemapError, PMTILES_PATH, PmtilesError};
+use basemap::{Basemap, BasemapError, PMTILES_PATH, PmtilesError, SATELLITE_TILE_PATH_PREFIX};
 use hamheatmap_app_service::{
     AppService, CalculationPreview, CalculationProgress, CalculationRequest, DownloadProgressView,
     MapPoint,
@@ -271,6 +271,9 @@ impl ValidationServer {
             ("GET", "/api/bootstrap") => Some(self.bootstrap_response()),
             ("GET", PMTILES_PATH) => Some(self.pmtiles_response(&request, false)),
             ("HEAD", PMTILES_PATH) => Some(self.pmtiles_response(&request, true)),
+            ("GET", path) if path.starts_with(SATELLITE_TILE_PATH_PREFIX) => {
+                Some(self.satellite_basemap_response(path))
+            }
             ("GET", path) if path.starts_with("/api/basemap/") => {
                 Some(self.tianditu_basemap_response(path))
             }
@@ -383,6 +386,30 @@ impl ValidationServer {
             }
             Err(BasemapError::InvalidUpstreamResponse) => {
                 ApiError::bad_gateway("basemap upstream returned an invalid tile").into_response()
+            }
+        }
+    }
+    fn satellite_basemap_response(&self, path: &str) -> Response {
+        match self.state.basemap.fetch_satellite(path) {
+            Ok(tile) => Response {
+                status: 200,
+                content_type: tile.content_type,
+                body: tile.body,
+                head_only: false,
+                cache_control: "no-store",
+                content_length: None,
+                accept_ranges: false,
+                content_range: None,
+            },
+            Err(BasemapError::InvalidPath) => ApiError::not_found().into_response(),
+            Err(BasemapError::Disabled) => {
+                ApiError::unavailable("satellite basemap is disabled").into_response()
+            }
+            Err(BasemapError::UpstreamUnavailable) => {
+                ApiError::bad_gateway("satellite upstream is unavailable").into_response()
+            }
+            Err(BasemapError::InvalidUpstreamResponse) => {
+                ApiError::bad_gateway("satellite upstream returned an invalid tile").into_response()
             }
         }
     }
@@ -2489,6 +2516,24 @@ mod tests {
                 .status,
             405
         );
+        assert_eq!(
+            fixture
+                .request("GET", "/api/basemap/satellite/15/0/0", None, b"")
+                .status,
+            404
+        );
+        assert_eq!(
+            fixture
+                .request("GET", "/api/basemap/satellite/2/0/0?source=evil", None, b"")
+                .status,
+            400
+        );
+        assert_eq!(
+            fixture
+                .request("POST", "/api/basemap/satellite/2/0/0", None, b"")
+                .status,
+            405
+        );
         assert_eq!(fixture.request("POST", "/", None, b"").status, 405);
         assert_eq!(
             fixture
@@ -2519,9 +2564,23 @@ mod tests {
         );
         assert_eq!(bootstrap_json["basemap"]["layers"][0]["id"], "vec");
         assert_eq!(bootstrap_json["basemap"]["layers"][1]["id"], "cva");
+        assert_eq!(
+            bootstrap_json["basemap"]["satellite"]["providerId"],
+            "eoxcloudless"
+        );
+        assert_eq!(
+            bootstrap_json["basemap"]["satellite"]["mode"],
+            "same-origin-proxy"
+        );
+        assert_eq!(bootstrap_json["basemap"]["satellite"]["maxZoom"], 14);
+        assert_eq!(
+            bootstrap_json["basemap"]["satellite"]["tilePathTemplate"],
+            "/api/basemap/satellite/{z}/{x}/{y}"
+        );
         let encoded_bootstrap = String::from_utf8(bootstrap.body.clone()).unwrap();
         assert!(!encoded_bootstrap.contains("token"));
         assert!(!encoded_bootstrap.contains("t0.tianditu.gov.cn"));
+        assert!(!encoded_bootstrap.contains("tiles.maps.eox.at"));
 
         let point_body = br#"{"point":{"lat":30.5,"lon":103.5}}"#;
         let inspection = fixture.request(
