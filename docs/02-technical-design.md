@@ -15,6 +15,7 @@
 - 桌面框架：Tauri 2.11.5。
 - 前端：React 19.2.7 + TypeScript 7.0.2 + Vite 8.1.4。
 - 地图：MapLibre GL JS 5.24.0；普通 preview 和未配置 token 的 validation 构建使用无行政边界的 WGS84 空白坐标画布，私有 validation 可选择通过同源代理显示天地图在线 `vec/cva`。该路径不是桌面离线 provider 或公开发行合规结论。
+- 私有 validation 区域底图：MapLibre GL JS 5.24.0 + PMTiles JavaScript 4.4.1；fflate 0.8.3 为传递解压依赖。该接入以 HTTP Range 读取固定 gzip MVT 归档，天地图保留为 fallback/历史路径。
 - 前端工具链：项目内固定 Node.js 24.18.0，不依赖 JAIST 主机全局 Node。
 - 后端：Rust stable。
 - 传播核心：NTIA ITM C++ 源码，以本地静态库或 DLL 方式绑定。
@@ -193,7 +194,7 @@ POST /api/operation-preview
 
 React 分开保存临时 `preview` 和权威 `result`。地图可以显示二者之一，但导出只读取 `result`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；成功响应先成为权威结果并替换预览。MapLibre 对相同 data URL 复用对象 URL，替换与卸载时释放旧对象 URL。决策依据见 ADR 0016，运行证据见 `18-progressive-coverage-preview-validation.md`。
 
-### 4.2.4 私有 validation 在线底图与地图状态
+### 4.2.4 天地图 fallback、历史验证与地图状态
 
 validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu.token` 读取可选天地图 token。token 只保留在服务器进程；bootstrap 返回不含凭据和上游主机的 `BasemapInfo`，浏览器只请求固定同源模板 `/api/basemap/tianditu/{layer}/{z}/{x}/{y}`。代理只允许 `vec/cva`、规范十进制 `z/x/y` 和 `z<=18`，固定访问 `https://t0.tianditu.gov.cn`，禁止重定向，并对超时、2 MiB 上限、MIME 和图片签名 fail closed。响应为 `no-store`，不进入 2.5 GB 离线缓存。
 
@@ -202,6 +203,18 @@ validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu
 MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最大宽度，随 move 事件自动更新。MapView 以 refs 保存最新 basemap、point、result、preview 和 stale 状态；若 style 暂不可操作，同步标记为 pending，并在 load 后或 `styledata/idle` 恢复时重放。这样清空 props 不会因一次 `isStyleLoaded=false` 而丢失，恢复时会删除 heatmap layer/source 并释放 Blob URL。验证记录见 `20-tianditu-basemap-proxy.md`。
 
 该代理只用于回环 validation 在线验证。正式 Windows 离线底图仍需要完整 `CompliantBasemapProvider`、有效审图号、离线/再分发/导出授权和签名清单。
+
+### 4.2.5 私有区域 PMTiles 主验证底图
+
+四省验证归档固定为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes；SHA-256 为 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0。归档包含 939 个 region tiles、837 个 archive entries，占 2.5 GB 上限的 1.32%，payload 为 gzip 压缩 MVT。
+
+validation server 只通过同源 HTTP Range 暴露该固定归档。端点保持回环绑定；合法单段 Range 必须返回精确的 206、Content-Range、Accept-Ranges 和长度，无效、越界或不支持的 Range 按固定契约失败，不得默默退化为整包响应。bootstrap 只返回浏览器完成协议注册所需的相对 URL 与非秘密元数据。
+
+MapLibre 注册 PMTiles protocol 后只构建五类可见 layer：earth、landcover、landuse、water、roads。boundaries、places、pois 不进入可见样式；道路/水体/土地覆盖位于传播覆盖层下方，发射点和必要控件保持上层。地图始终显示 © OpenStreetMap contributors，ScaleControl 和既有 desired-state 重放逻辑继续复用。
+
+原始归档仍含 boundaries 以及 Natural Earth/OSM 内容，显示过滤不等于删除；当前只用于私有验证、不纳入正式 EXE，且不作公开发行结论。源数据按 ODbL Produced Work 处理，landcover 上游署名要求仍待确认。
+
+自动化、固定 SHA-256、同源 Range、受管运行及 PMTiles JavaScript getHeader/getZxy 实际读取均已通过；真实浏览器视觉因 Codex 桌面 ACL 故障仍待人工确认。证据统一记录在 docs/21-protomaps-four-province-basemap.md。
 
 ### 4.3 原生传播层
 
@@ -385,6 +398,9 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - 用户删除正在使用区域时必须先取消相关计算。
 - Phase 1 实现以整个应用数据根目录的实际文件长度为准，而不是只相信 SQLite 记账；索引、锁文件、未登记文件和 `.partial` 都计入 2.5 GB。下载另保留最多 16 MB 的索引/事务安全余量，用户不可配置。
 - 配额不足与文件系统可用空间不足分别返回错误；不自动淘汰旧区域。
+
+- 四省 PMTiles 固定归档为 33,044,072 bytes，占十进制 2.5 GB 的 1.32%；validation 启动前必须先做大小与 SHA-256 基线检查，不能只依赖目录或文件名。
+- Range 读取不改变配额口径，也不得用浏览器整包缓存复制出未登记副本。
 
 ### 10.2 下载完整性
 

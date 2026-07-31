@@ -12,7 +12,11 @@ import {
   maidenheadLocator,
 } from "../lib/geodesy";
 import {
-  TIANDITU_LABEL_LAYER_ID,
+  acquirePmtilesProtocol,
+  applyProtomapsTheme,
+  firstBasemapLabelLayerId,
+  isTrustedBasemap,
+  isTrustedProtomapsBasemap,
   isTrustedTiandituBasemap,
   synchronizeBasemap,
 } from "../lib/basemap";
@@ -108,9 +112,7 @@ function updateHeatmap(
       source: "coverage-heatmap",
       paint: { "raster-opacity": stale ? 0.28 : 0.84, "raster-resampling": "linear" },
     },
-    map.getLayer(TIANDITU_LABEL_LAYER_ID)
-      ? TIANDITU_LABEL_LAYER_ID
-      : "coverage-circle-fill",
+    firstBasemapLabelLayerId(map) ?? "coverage-circle-fill",
   );
 }
 
@@ -126,16 +128,19 @@ export function MapView({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const synchronizeMapStateRef = useRef<(() => void) | null>(null);
+  const protomapsViewFittedRef = useRef(false);
   const heatmapBlobUrlsRef = useRef<MapOverlayBlobUrlLease | null>(null);
   if (!heatmapBlobUrlsRef.current) {
     heatmapBlobUrlsRef.current = new MapOverlayBlobUrlLease();
   }
+  const themeRef = useRef(theme);
   const pointRef = useRef(point);
   const heatmapRef = useRef(heatmap);
   const previewRef = useRef(preview);
   const heatmapStaleRef = useRef(heatmapStale);
   const onPointSelectRef = useRef(onPointSelect);
   const basemapRef = useRef(basemap);
+  themeRef.current = theme;
   pointRef.current = point;
   heatmapRef.current = heatmap;
   previewRef.current = preview;
@@ -146,6 +151,7 @@ export function MapView({
   useEffect(() => {
     if (!containerRef.current || !heatmapBlobUrlsRef.current) return;
     const heatmapBlobUrls = heatmapBlobUrlsRef.current;
+    const releasePmtilesProtocol = acquirePmtilesProtocol();
     const dark = theme === "dark";
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -184,7 +190,23 @@ export function MapView({
         return;
       }
       synchronizationPending = false;
-      synchronizeBasemap(map, basemapRef.current);
+      synchronizeBasemap(map, basemapRef.current, themeRef.current);
+      if (
+        !protomapsViewFittedRef.current &&
+        isTrustedProtomapsBasemap(basemapRef.current)
+      ) {
+        protomapsViewFittedRef.current = true;
+        if (!pointRef.current) {
+          const [west, south, east, north] = basemapRef.current.bounds;
+          map.fitBounds(
+            [
+              [west, south],
+              [east, north],
+            ],
+            { padding: 48, duration: 0, maxZoom: 4.5 },
+          );
+        }
+      }
       updateSelection(map, pointRef.current);
       updateHeatmap(
         map,
@@ -273,12 +295,16 @@ export function MapView({
       mapRef.current = null;
       heatmapBlobUrls.clear();
       map.remove();
+      releasePmtilesProtocol();
     };
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
+    if (!map?.isStyleLoaded()) {
+      synchronizeMapStateRef.current?.();
+      return;
+    }
     map.setPaintProperty(
       "neutral-background",
       "background-color",
@@ -291,6 +317,7 @@ export function MapView({
         theme === "dark" ? "#35505f" : "#bfd0d7",
       );
     }
+    applyProtomapsTheme(map, theme);
   }, [theme]);
 
   useEffect(() => {
@@ -305,17 +332,23 @@ export function MapView({
     synchronizeMapStateRef.current?.();
   }, [heatmap, preview, heatmapStale]);
 
+  const trustedProtomaps = isTrustedProtomapsBasemap(basemap);
+  const trustedTianditu = isTrustedTiandituBasemap(basemap);
   return (
     <section className="map-shell" aria-label="发射点选择地图">
       <div ref={containerRef} className="map-canvas" />
       <div className="map-warning">
         <span className="map-warning-dot" />
-        {isTrustedTiandituBasemap(basemap)
-          ? "天地图在线真实底图 · 内部验证"
-          : "WGS84 内部测试画布 · 未配置真实底图"}
+        {trustedProtomaps
+          ? "区域离线底图 · 内部验证"
+          : trustedTianditu
+            ? "天地图在线真实底图 · 内部验证"
+            : "WGS84 内部测试画布 · 未配置真实底图"}
       </div>
-      {isTrustedTiandituBasemap(basemap) && (
-        <div className="map-attribution">{basemap.attribution} · 在线底图</div>
+      {isTrustedBasemap(basemap) && (
+        <div className="map-attribution">
+          {basemap.attribution} · {trustedProtomaps ? "本地区域底图" : "在线底图"}
+        </div>
       )}
       {!point && (
         <div className="map-empty-state">

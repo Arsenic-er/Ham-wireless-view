@@ -574,3 +574,50 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] 在线天地图内部验证不能替代正式 `CompliantBasemapProvider`、中国大陆有效区、签名瓦片清单或 Windows 10/11 实机。
 
 完整边界见 `20-tianditu-basemap-proxy.md`。
+
+## 28. 四省 Protomaps PMTiles 内部底图（2026-07-31，部分已验证）
+
+本检查点固定的资产事实为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes、SHA-256 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0、gzip MVT、939 个 region tiles 与 837 个 archive entries；该归档占 2.5 GB 的 1.32%。已执行项按真实日志回填，浏览器视觉没有证据的项目继续保持未勾选。
+
+### 28.1 资产、Range 与安全
+
+- [x] HEAD 与 bootstrap 报告固定文件大小 33,044,072 bytes。
+- [ ] 本轮日志未记录 SHA-256 重新计算，不能用已知基线值替代执行证据。
+- [x] live header 为 PMTiles v3；bootstrap 的 bbox、maxZoom 与 archiveBytes 匹配固定值。
+- [ ] archive directory 尚未独立检查。
+- [x] live GET 单段 Range 返回 206、精确 Content-Range 与长度；HEAD 另行确认 Accept-Ranges: bytes。
+- [x] Rust 自动化覆盖缺 Range、越界、多段、开放/后缀区间和超过 8 MiB 的 Range，并按契约拒绝。
+- [x] bootstrap 不暴露服务器文件路径，Range 端点只由回环 validation server 提供。
+- [ ] gzip MVT 可由 PMTiles/MapLibre 解码，首屏、缩放和平移不会触发整包下载。
+
+### 28.2 图层、署名与交互
+
+- [x] 前端自动化只构建 earth、landcover、landuse、water、roads 五个 style layer，并拒绝 boundaries、places、pois。
+- [ ] 道路、水体与土地覆盖在热力图下方正确对齐；发射点、比例尺和必要控件层级正常。
+- [x] 前端测试确认 © OpenStreetMap contributors 文本，第三方清单记录 PMTiles/fflate/ODbL 与 landcover caveat；真实浏览器可读性仍待验。
+- [x] PMTiles 主路径与天地图 fallback 的固定契约均通过前端信任检查。
+- [x] 地图 desired-state、区域 fit 与延迟清空重放测试通过。
+
+### 28.3 已完成自动化与受管运行
+
+- [x] frontend check PASS，9 files / 59 tests PASS。
+- [x] Rust workspace all-targets locked offline 为 112 passed / 5 ignored；validation server 定向测试 27 / 27 PASS。
+- [x] workspace Clippy -D warnings、validation-platform bash -n 与 self-test PASS。
+- [x] dirty workspace 受管 build/start 成功；PID 2342699 只监听 127.0.0.1:1421，health 正常。
+- [x] bootstrap 返回 enabled=true、providerId=protomaps、固定 resourcePath、bounds、maxZoom=9 与 archiveBytes=33044072；cache total=293,517,252 bytes。
+- [x] live GET bytes=0-7 返回 206，Content-Range 为 bytes 0-7/33044072，body hex 为 50 4d 54 69 6c 65 73 03。
+- [x] live HEAD 返回 200，Content-Length 为 33044072，Accept-Ranges 为 bytes。
+- [x] 运行数据根约 293.5 MB；约 108 MB 的试验目录已删除，本轮底图试验资产只保留约 33 MB 归档。
+
+构建 metadata 的 revision 仍为 130043e，只表示 dirty build 时检出的旧 HEAD；不能把它写成包含本轮未提交源码的提交号。本轮没有 commit 或 push。
+
+### 28.4 仍未关闭
+
+- [ ] 自动浏览器视觉因 Codex 桌面 node_repl 的 Windows sandbox ACL 故障未完成；没有截图、控制台、WebGL、图层对齐或真实 MVT 解码证据。
+- [ ] 本轮日志未记录 SHA-256 重新计算、archive directory 独立检查或重启后哈希对比。
+
+本机 127.0.0.1:1421 已连通，用户可直接刷新页面人工验证；可访问性本身不算浏览器视觉通过。
+
+原始归档仍含 boundaries 与 Natural Earth/OSM 内容；当前只作私有验证、不纳入正式 EXE，且本检查点不作公开发行结论。
+
+完整资产与逐项证据见 docs/21-protomaps-four-province-basemap.md。

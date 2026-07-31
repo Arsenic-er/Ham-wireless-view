@@ -13,6 +13,10 @@ data_dir="$runtime_root/data"
 secrets_dir="$runtime_root/secrets"
 basemap_token_file="$secrets_dir/tianditu.token"
 dist_dir="$project_root/app/dist"
+basemap_dir="$data_dir/basemap"
+basemap_pmtiles_file="$basemap_dir/four-provinces.pmtiles"
+basemap_pmtiles_bytes=33044072
+basemap_pmtiles_sha256="5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0"
 server_binary="$project_root/target/release/hamheatmap-validation-server"
 pid_file="$state_dir/server.pid"
 runner_pid_file="$state_dir/runner.pid"
@@ -85,10 +89,10 @@ validate_log_rotation_paths() {
 
 validate_managed_paths() {
     local path=""
-    for path in "$runtime_root" "$state_dir" "$log_dir" "$data_dir" "$secrets_dir" "$dist_dir" \
+    for path in "$runtime_root" "$state_dir" "$log_dir" "$data_dir" "$basemap_dir" "$secrets_dir" "$dist_dir" \
         "$server_binary" "$pid_file" "$runner_pid_file" "$lock_dir" \
         "$runner_claim_dir" "$server_log" "$launcher_log" "$build_metadata" \
-        "$server_help" "$basemap_token_file"; do
+        "$server_help" "$basemap_token_file" "$basemap_pmtiles_file"; do
         path_is_safe_project_path "$path" || fail "unsafe or symlinked managed path: $path"
     done
     validate_log_rotation_paths
@@ -96,11 +100,27 @@ validate_managed_paths() {
 
 ensure_layout() {
     validate_managed_paths
-    mkdir -p "$state_dir" "$log_dir" "$data_dir" "$secrets_dir"
+    mkdir -p "$state_dir" "$log_dir" "$data_dir" "$basemap_dir" "$secrets_dir"
     validate_managed_paths
-    chmod 700 "$runtime_root" "$state_dir" "$log_dir" "$data_dir" "$secrets_dir"
+    chmod 700 "$runtime_root" "$state_dir" "$log_dir" "$data_dir" "$basemap_dir" "$secrets_dir"
 }
 
+validate_pmtiles_archive() {
+    local archive="${1:-$basemap_pmtiles_file}" size="" digest="" owner="" permissions=""
+    if [[ ! -e "$archive" && ! -L "$archive" ]]; then
+        return
+    fi
+    path_is_safe_project_path "$archive" || fail "unsafe PMTiles archive path: $archive"
+    [[ -f "$archive" && ! -L "$archive" ]] ||         fail "PMTiles archive must be a regular non-symlink file: $archive"
+    owner="$(stat -c '%u' "$archive" 2>/dev/null)" || fail "cannot inspect PMTiles archive owner"
+    [[ "$owner" == "$(id -u)" ]] || fail "PMTiles archive has an unexpected owner"
+    permissions="$(stat -c '%a' "$archive" 2>/dev/null)" ||         fail "cannot inspect PMTiles archive permissions"
+    [[ "$permissions" == "600" ]] || fail "PMTiles archive permissions must be 600"
+    size="$(stat -c '%s' "$archive" 2>/dev/null)" || fail "cannot inspect PMTiles archive size"
+    [[ "$size" == "$basemap_pmtiles_bytes" ]] ||         fail "PMTiles archive size mismatch: expected $basemap_pmtiles_bytes, got $size"
+    digest="$(sha256sum "$archive" | awk '{print $1}')" || fail "cannot hash PMTiles archive"
+    [[ "$digest" == "$basemap_pmtiles_sha256" ]] || fail "PMTiles archive SHA-256 mismatch"
+}
 process_start_time() {
     local pid="$1" stat_line="" remainder=""
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
@@ -318,18 +338,39 @@ argv_matches() {
         ((index += 1))
     done
 }
+array_values_equal() {
+    local actual_name="$1" expected_name="$2" index=0
+    local -n actual_ref="$actual_name"
+    local -n expected_ref="$expected_name"
+    (( ${#actual_ref[@]} == ${#expected_ref[@]} )) || return 1
+    for ((index = 0; index < ${#actual_ref[@]}; index++)); do
+        [[ "${actual_ref[$index]}" == "${expected_ref[$index]}" ]] || return 1
+    done
+}
+
+managed_server_arguments_match() {
+    local -a actual=("$@")
+    local -a expected=(
+        "$server_binary"
+        "--bind" "$listen_address"
+        "--dist-dir" "$dist_dir"
+        "--data-root" "$data_dir"
+        "--basemap-token-file" "$basemap_token_file"
+        "--basemap-pmtiles-file" "$basemap_pmtiles_file"
+    )
+    array_values_equal actual expected
+}
 
 pid_is_managed_server() {
     local pid="$1" executable=""
+    local -a actual=()
     [[ "$pid" =~ ^[1-9][0-9]*$ && -d "/proc/$pid" ]] || return 1
     [[ "$(stat -c '%u' "/proc/$pid" 2>/dev/null)" == "$(id -u)" ]] || return 1
     executable="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
     [[ "$executable" == "$server_binary" ]] || return 1
-    argv_matches "$pid" "$server_binary" \
-        "--bind" "$listen_address" \
-        "--dist-dir" "$dist_dir" \
-        "--data-root" "$data_dir" \
-        "--basemap-token-file" "$basemap_token_file"
+    [[ -r "/proc/$pid/cmdline" ]] || return 1
+    mapfile -d '' -t actual < "/proc/$pid/cmdline" || return 1
+    managed_server_arguments_match "${actual[@]}"
 }
 pid_is_managed_runner() {
     local pid="$1" executable=""
@@ -433,6 +474,7 @@ run_server() {
     local server_status=0 state=0
     acquire_runner_claim
     trap runner_cleanup EXIT
+    validate_pmtiles_archive
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -451,7 +493,7 @@ run_server() {
     chmod 600 "$server_log"
     "$server_binary" --bind "$listen_address" --dist-dir "$dist_dir" \
         --data-root "$data_dir" --basemap-token-file "$basemap_token_file" \
-        >> "$server_log" 2>&1 &
+        --basemap-pmtiles-file "$basemap_pmtiles_file" >> "$server_log" 2>&1 &
     runner_server_pid=$!
     runner_server_start="$(process_start_time "$runner_server_pid")" || fail "cannot identify server process"
     write_pid_file "$pid_file" "$runner_server_pid"
@@ -472,7 +514,7 @@ run_server() {
 }
 
 build_platform() {
-    local revision="" state=0
+    local revision="" worktree_dirty="" state=0
     acquire_lock
     if resolve_server; then
         fail "stop PID $managed_pid before rebuilding"
@@ -482,6 +524,7 @@ build_platform() {
     [[ "$state" -ne 2 ]] || fail "PID file is unsafe; inspect $pid_file"
     [[ "$state" -ne 3 ]] || rm -f -- "$pid_file"
     acquire_runner_claim
+    validate_pmtiles_archive
     trap 'release_runner_claim; release_lock' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
@@ -499,10 +542,18 @@ build_platform() {
     grep -Fq -- "--data-root" "$server_help" || fail "server --help lacks --data-root"
     grep -Fq -- "--basemap-token-file" "$server_help" || \
         fail "server --help lacks --basemap-token-file"
+    grep -Fq -- "--basemap-pmtiles-file" "$server_help" || \
+        fail "server --help lacks --basemap-pmtiles-file"
     revision="$(git -C "$project_root" rev-parse HEAD)"
     {
+    if [[ -n "$(git -C "$project_root" status --porcelain=v1 --untracked-files=normal)" ]]; then
+        worktree_dirty=true
+    else
+        worktree_dirty=false
+    fi
         printf 'revision=%s\n' "$revision"
         printf 'built_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'worktree_dirty=%s\n' "$worktree_dirty"
         printf 'frontend_mode=validation-server\nlisten=%s\n' "$listen_address"
         printf 'server_sha256='
         sha256sum "$server_binary" | awk '{print $1}'
@@ -700,6 +751,7 @@ self_test_platform() {
     local saved_runner_claim_dir="$runner_claim_dir"
     local saved_runner_claim_owner_file="$runner_claim_owner_file"
     local child_pid="" child_start="" runner_pid="" command='while :; do sleep 1; done'
+    local pmtiles_bad="" pmtiles_link=""
     local signal_pid="" signal_result="$test_root/signal-probe.txt"
     local saved_server_log="$server_log" saved_launcher_log="$launcher_log"
     local outside_root="" outside_target="" outside_sentinel=""
@@ -711,6 +763,54 @@ self_test_platform() {
 
     state_dir="$test_root"
     lock_dir="$test_root/control.lock"
+    validate_pmtiles_archive
+    validate_pmtiles_archive "$test_root/missing.pmtiles"
+    pmtiles_bad="$test_root/bad.pmtiles"
+    pmtiles_link="$test_root/link.pmtiles"
+    printf 'PMTiles\003' > "$pmtiles_bad"
+    chmod 600 "$pmtiles_bad"
+    if (validate_pmtiles_archive "$pmtiles_bad") >/dev/null 2>&1; then
+        fail "PMTiles size mismatch was accepted"
+    fi
+    truncate -s "$basemap_pmtiles_bytes" "$pmtiles_bad"
+    if (validate_pmtiles_archive "$pmtiles_bad") >/dev/null 2>&1; then
+        fail "PMTiles SHA-256 mismatch was accepted"
+    fi
+    ln -s -- "$pmtiles_bad" "$pmtiles_link"
+    if (validate_pmtiles_archive "$pmtiles_link") >/dev/null 2>&1; then
+        fail "symlinked PMTiles archive was accepted"
+    fi
+    rm -f -- "$pmtiles_link" "$pmtiles_bad"
+    managed_server_arguments_match "$server_binary" \
+        "--bind" "$listen_address" \
+        "--dist-dir" "$dist_dir" \
+        "--data-root" "$data_dir" \
+        "--basemap-token-file" "$basemap_token_file" \
+        "--basemap-pmtiles-file" "$basemap_pmtiles_file" || \
+        fail "current managed server argv was rejected"
+    if managed_server_arguments_match "$server_binary" \
+        "--bind" "$listen_address" \
+        "--dist-dir" "$dist_dir" \
+        "--data-root" "$data_dir" \
+        "--basemap-token-file" "$basemap_token_file"; then
+        fail "legacy managed server argv was accepted"
+    fi
+    if managed_server_arguments_match "$server_binary" \
+        "--bind" "$listen_address" \
+        "--dist-dir" "$dist_dir" \
+        "--data-root" "$data_dir" \
+        "--basemap-token-file" "$basemap_token_file" \
+        "--basemap-pmtiles-file" "$basemap_pmtiles_file" extra; then
+        fail "managed server argv accepted an extra argument"
+    fi
+    if managed_server_arguments_match "$server_binary" \
+        "--bind" "$listen_address" \
+        "--dist-dir" "$dist_dir" \
+        "--data-root" "$data_dir" \
+        "--basemap-token-file" "$basemap_token_file" \
+        "--basemap-pmtiles-file" "$test_root/wrong.pmtiles"; then
+        fail "managed server argv accepted a different PMTiles path"
+    fi
     lock_owner_file="$lock_dir/owner"
     mkdir -- "$lock_dir"
     if (acquire_lock) >/dev/null 2>&1; then

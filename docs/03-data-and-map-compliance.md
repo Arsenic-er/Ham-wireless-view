@@ -4,6 +4,8 @@
 - 日期：2026-07-16
 - 状态：地图合规路线为 P0 公开发布阻断项
 
+本轮四省 PMTiles 只用于私有工程验证；本文保留最小数据来源、署名和使用边界，不把公开发行审查作为本轮接入完成条件。
+
 ## 1. 原则
 
 计算数据与显示地图严格分离：
@@ -66,7 +68,16 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 - 不制作含未经确认国界的宣传截图或公开演示包。
 - 私有 validation 平台可以通过同源代理在线显示天地图 `vec/cva` 以验证地图交互；必须保留来源和内部验证标记。在线服务可访问不等于已经取得桌面离线、再分发、应用分发或 PNG/PDF 导出授权，也不自动关闭审图门槛。
 
-### 5.2 公开发行阶段
+### 5.2 私有四省 PMTiles 验证
+
+- 固定归档：source build 20260731，bbox 107.5,18,125.5,33.5，z0-9，33,044,072 bytes，SHA-256 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0。
+- 归档含 939 个 region tiles、837 个 archive entries，占 2.5 GB 上限的 1.32%；tile payload 为 gzip 压缩 MVT。
+- 只经回环 validation server 的同源 HTTP Range 读取；显示层限于 earth、landcover、landuse、water、roads。
+- boundaries、places、pois 不显示，但原始归档仍含 boundaries 以及 Natural Earth/OSM 内容。当前只用于私有验证、不纳入正式 EXE，且不作公开发行结论。
+- 地图持续显示 © OpenStreetMap contributors；源数据按 ODbL Produced Work 记录，landcover 上游署名要求仍待确认。
+- PMTiles JavaScript 4.4.1 为 BSD-3-Clause，传递依赖 fflate 为 MIT。天地图继续作为联网 fallback 与历史验证路径。
+
+### 5.3 公开发行阶段
 
 必须同时满足：
 
@@ -98,6 +109,8 @@ CompliantBasemapProvider
 
 私有 validation 的 `BasemapInfo` 只是在线验证元数据子集：enabled、provider、署名、同源模式、最大缩放、`vec/cva` 和路径模板。它刻意不伪造 `review_number`、离线/导出授权、覆盖多边形或完整性清单，因此不能被当作 `CompliantBasemapProvider`。当前 token 未配置，真实天地图瓦片尚未完成烟雾验证。
 
+私有 PMTiles 的 bootstrap 元数据只公开 provider、相对 Range URL、bbox、zoom、大小和可见署名，不公开服务器文件路径；SHA-256 留在部署复核基线中。它是 validation 能力描述，不替代正式 provider 接口。PMTiles 主路径与天地图 fallback 必须能被前端明确区分。
+
 token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0600` 普通非符号链接文件管理；bootstrap、浏览器、日志和文档不得包含 token。浏览器只访问同源路径，上游固定 HTTPS 请求由回环 validation server 代发。该设计降低凭据暴露，不改变地图内容和使用方式的许可/审核义务。
 
 生产构建在以下任一条件不满足时拒绝启动地图：
@@ -117,6 +130,8 @@ token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0
 - 缓存页只显示区域覆盖和大小，不显示 DEM 高程预览。
 - 删除数据前明确告知哪些离线区域将失效。
 
+- PMTiles 固定归档为 33,044,072 bytes（占 2.5 GB 的 1.32%）；Range 读取不得产生未登记的浏览器整包副本。
+
 ## 8. 署名与导出
 
 应用地图界面和导出文件均保留：
@@ -134,6 +149,8 @@ token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0
 正式 provider 必须在发行清单中同时给出非空审图号、署名、离线授权和导出授权；任一字段缺失时生产构建必须拒绝带底图地图导出，不能仅显示警告后继续。
 
 Copernicus 数据署名以发布时适用的许可文本为准。当前工程记录的基础措辞为：`produced using Copernicus WorldDEM-90 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved`；若发布布尔 WBM 或其他派生物，还需明确标注应用进行了改编。
+
+私有 PMTiles 地图界面必须持续显示 © OpenStreetMap contributors；PMTiles/fflate 许可和 landcover 署名 caveat 同步记录在 THIRD_PARTY_LICENSES.md。
 
 ## 9. 发布检查清单
 

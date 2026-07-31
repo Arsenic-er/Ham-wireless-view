@@ -12,7 +12,7 @@ export interface MapPoint {
 }
 
 export interface BasemapLayer {
-  id: "vec" | "cva";
+  id: "vec" | "cva" | "earth" | "landcover" | "landuse" | "water" | "roads";
   displayName: string;
 }
 
@@ -24,7 +24,10 @@ export interface BasemapInfo {
   mode: string;
   maxZoom: number;
   layers: BasemapLayer[];
-  tilePathTemplate: string;
+  tilePathTemplate?: string;
+  resourcePath?: string;
+  bounds?: [number, number, number, number];
+  archiveBytes?: number;
 }
 
 export interface CacheUsage {

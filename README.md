@@ -22,6 +22,10 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 2026-07-31 新增私有 validation 平台天地图在线同源代理、右下动态公制比例尺和 MapLibre desired-state 重放，并以 revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 完成受管构建、启动和回环 readiness。浏览器不接触 `tk` 或上游 URL；token 由项目运行目录中的 `0600` 私密文件管理。当前未配置 token，bootstrap 正确返回 `enabled=false`，瓦片端点返回 503；尚未取得真实瓦片或完成浏览器视觉烟雾。该在线验证路径也不提供离线底图或正式地图导出，审图号、服务/离线/导出授权仍是公开发布门槛。
 
+同日，私有 validation 平台决定以四省区域 Protomaps PMTiles 作为内部验证主底图，天地图改作联网 fallback 与历史验证。固定归档为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes（2.5 GB 的 1.32%），SHA-256 为 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0；只允许同源 HTTP Range 读取。样式仅显示 earth、landcover、landuse、water、roads，并持续显示 © OpenStreetMap contributors。原始归档仍含 boundaries 和 Natural Earth/OSM 内容，因此只能私有内部验证，不是中国大陆公开地图合规底图，也不得纳入正式 EXE；自动化与受管运行证据已完成，真实浏览器视觉仍待验证。
+
+本轮 dirty workspace 已通过 frontend check、9 files/59 tests、Rust workspace 112 passed/5 ignored、validation server 27/27、Clippy、bash -n 与管理 self-test；受管服务 PID 2342699 健康且只监听 127.0.0.1:1421，live Range 与 HEAD 契约通过。构建 metadata 的 revision 130043e 只是旧 HEAD，不是包含未提交源码的新提交。自动浏览器视觉受 Codex 桌面 Windows sandbox ACL 故障阻断；用户可刷新已连通的本机 127.0.0.1:1421 人工验证，详情见 docs/21-protomaps-four-province-basemap.md。
+
 > [!WARNING]
 > 当前版本是未签名的内部 Alpha。传播结果是模型估算，尚未经过外场测量校准，不得作为生命安全、应急指挥或法规合规决策的唯一依据。仓库公开的是源代码；这不代表当前占位地图或导出报告已经满足中国大陆公开地图发行要求。
 
@@ -62,6 +66,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 - `docs/19-parameter-sensitivity-validation.md`：真实成都逐像素参数矩阵、双 PNG 确定性和缓存快照不变性证据。
 - `docs/20-tianditu-basemap-proxy.md`：天地图在线同源代理、token 边界、动态比例尺、清空重放与未验证门槛。
 - `docs/decisions/`：带证据的工程决策记录。
+- docs/21-protomaps-four-province-basemap.md：四省 PMTiles 资产、Range、图层白名单、许可边界与待验证矩阵。
 
 ## 开发与构建
 
@@ -205,6 +210,8 @@ scripts/tauri-windows-cross.sh
 ## 技术栈
 
 桌面端使用 Tauri 2.11.5、React 19.2.7、TypeScript 7.0.2、Vite 8.1.4 和 MapLibre GL JS 5.24.0。后端使用 Rust、内嵌 SQLite、NTIA 官方 ITM C++ v1.4、纯 Rust `tiff` 和 rustls HTTPS。
+
+区域底图验证客户端新增 PMTiles JavaScript 4.4.1（BSD-3-Clause）及其传递依赖 fflate 0.8.3（MIT）。
 
 ## 许可证
 

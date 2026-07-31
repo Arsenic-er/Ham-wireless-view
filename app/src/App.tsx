@@ -19,6 +19,10 @@ import {
   listenDownloadProgress,
 } from "./lib/backend";
 import {
+  isTrustedProtomapsBasemap,
+  isTrustedTiandituBasemap,
+} from "./lib/basemap";
+import {
   createExportReportPngDataUrl,
   suggestedExportFileName,
 } from "./lib/export";
@@ -606,6 +610,18 @@ export function App() {
   }
 
   const cacheUsage = inspection?.cacheUsage ?? bootstrapInfo?.cacheUsage;
+  const offlineBasemapBytes = isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
+    ? bootstrapInfo.basemap.archiveBytes
+    : 0;
+  const displayedMetadataBytes = Math.max(
+    0,
+    (cacheUsage?.metadataBytes ?? 0) - offlineBasemapBytes,
+  );
+  const basemapStatus = isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
+    ? "已接入区域离线真实底图（OpenStreetMap / Protomaps）；服务器管理的固定区域数据可用。"
+    : isTrustedTiandituBasemap(bootstrapInfo?.basemap)
+      ? "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。"
+      : "未配置受信任的真实底图；当前只显示 WGS84 坐标网格。";
   const cachePercent = cacheUsage
     ? Math.min(100, (cacheUsage.totalBytes / cacheUsage.capBytes) * 100)
     : 0;
@@ -667,11 +683,7 @@ export function App() {
 
       <div className="compliance-banner">
         <strong>{bootstrapInfo?.internalBuildWarning ?? "内部测试底图，不得公开发布"}</strong>
-        <span>
-          {bootstrapInfo?.basemap?.enabled
-            ? "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。"
-            : "天地图令牌尚未配置；当前只显示 WGS84 坐标网格。"}
-        </span>
+        <span>{basemapStatus}</span>
       </div>
 
       {validationServerMode && (
@@ -892,7 +904,14 @@ export function App() {
               <div><span>高程 DEM</span><strong>{formatBytes(cacheUsage?.demBytes ?? 0)}</strong></div>
               <div><span>水体 WBM</span><strong>{formatBytes(cacheUsage?.waterBytes ?? 0)}</strong></div>
               <div><span>临时下载</span><strong>{formatBytes(cacheUsage?.partialBytes ?? 0)}</strong></div>
-              <div><span>索引与元数据</span><strong>{formatBytes(cacheUsage?.metadataBytes ?? 0)}</strong></div>
+              {offlineBasemapBytes > 0 && (
+                <div>
+                  <span>离线底图</span>
+                  <strong>{formatBytes(offlineBasemapBytes)}</strong>
+                  <small>固定区域 · 服务器管理</small>
+                </div>
+              )}
+              <div><span>索引与元数据</span><strong>{formatBytes(displayedMetadataBytes)}</strong></div>
             </div>
             <div className="cache-region-heading">
               <div>

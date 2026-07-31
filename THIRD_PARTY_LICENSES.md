@@ -17,7 +17,16 @@ bill of materials and notice file required before public distribution.
 | `printpdf` | 0.11.1 | MIT | Offline single-page PDF report encoding |
 | `tauri-plugin-dialog` | 2.7.1 | Apache-2.0 OR MIT | Native Windows save dialog |
 | `fs4` | 1.1.0 | MIT OR Apache-2.0 | Cross-platform disk-space inspection |
+| PMTiles JavaScript | 4.4.1 | BSD-3-Clause | MapLibre PMTiles protocol and Range client |
+| fflate | 0.8.3 (transitive) | MIT | PMTiles gzip/decompression support |
+| Protomaps four-province validation archive | source build 20260731 | ODbL 1.0 Produced Work; upstream notices apply | Private validation basemap only |
 
 The complete NTIA terms are preserved at `third_party/ntia-itm/LICENSE.md`.
 Rust transitive versions are fixed in `Cargo.lock`; their license texts must be
 collected automatically and reviewed before packaging a release.
+
+The validation archive is 33,044,072 bytes with SHA-256
+5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0.
+Its UI attribution is © OpenStreetMap contributors. The raw archive still contains
+Natural Earth/OSM boundaries, and the upstream landcover attribution chain remains
+to be confirmed; the archive is private-validation-only and is not included in the formal EXE.

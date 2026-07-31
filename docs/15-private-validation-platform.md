@@ -5,10 +5,13 @@
 - operation 协议切片更新：2026-07-27
 - 渐进覆盖预览更新：2026-07-27
 - 在线底图与地图控件更新：2026-07-31
+- 四省 PMTiles 内部底图更新：2026-07-31（自动化、Range、SSH 与受管运行已通过；浏览器视觉待人工确认）
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`
 - 状态：历史构建保留为分节证据；可选天地图在线同源代理、动态比例尺和地图 desired-state 重放已受管部署。当前未配置 token，禁用态 readiness/fail-closed 已验证，但真实瓦片和浏览器视觉烟雾尚未执行；Windows/Tauri 实机和地图合规仍待验
+
+四省 PMTiles 现作为私有验证主底图，天地图保留为联网 fallback 与历史验证。新路径在实际测试证据回填前不改变既有已验证状态。
 
 ## 1. 目标与边界
 
@@ -45,6 +48,8 @@ HTTP 层只做协议适配。频段、单位换算、坐标校验、固定数据
 
 可选在线底图走另一条只读路径：浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`，validation server 从私密文件读取 token 并访问固定天地图 HTTPS WMTS。token、上游 URL 和文件路径不进入 bootstrap 或浏览器。该路径不写底图缓存，也不提供导出。
 
+主验证底图走固定同源 /api/basemap/pmtiles/four-provinces.pmtiles。validation server 启动时校验普通非符号链接文件、33,044,072 bytes、固定 SHA-256 与 PMTiles v3 header。浏览器只使用 HTTP Range，不接触服务器路径；仅在 PMTiles 文件启动时缺失时回退天地图，不提供运行时自动切换。
+
 ## 3. 三态前端
 
 | 模式 | 选择条件 | 数据准备/缓存 | 传播计算 | PNG/PDF 文件导出 |
@@ -62,6 +67,8 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 | GET | `/healthz` | 进程健康与 schema 版本 |
 | GET | `/api/bootstrap` | 模型、网格、缓存配额和无凭据底图元数据 |
 | GET | `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}` | 可选在线瓦片同源代理 |
+| GET | /api/basemap/pmtiles/four-provinces.pmtiles | 固定归档的单段 HTTP Range 响应 |
+| HEAD | /api/basemap/pmtiles/four-provinces.pmtiles | 固定长度、类型与 Range 能力 |
 | GET | `/api/cache-overview` | 实际缓存用量与区域列表 |
 | POST | `/api/inspect-point` | 区域计划、ready 状态和中心高程 |
 | POST | `/api/operation-ticket` | 为 estimate/download/calculation 签发短期 capability |
@@ -113,6 +120,7 @@ validation 浏览器在长请求前领取 ticket，以约 250 ms 的递归定时
 - operation ID 作为 bearer capability，只放在同源 POST JSON body；不写 URL，不提供 current/list，不增加 CORS，也不把 ID 视为跨用户认证机制；
 - CSPRNG UUIDv4、60 秒 reserved TTL、5 分钟 terminal TTL、双 32 项上限和 exact-ID ack 共同限制 capability 暴露窗口与内存占用；
 - status 输出按字段白名单构造，不序列化工作结果、PNG、URL、服务器路径或详细错误；HTTP 日志也不应记录请求 body 中的 capability。
+- PMTiles 端点只允许 GET/HEAD 与单段 bytes Range；响应为 application/vnd.pmtiles，拒绝多段/无效/越界请求，且不把浏览器请求退化为整包文件传输。
 
 validation 模式是一项明确的内部隐私例外：浏览器中的测试坐标、参数和计算请求会离开 Windows 本机并进入用户控制的服务器。不要使用敏感真实位置。服务没有遥测、账号、第三方计算 API 或服务器文件导出；DEM/WBM 下载仍只访问既有固定 Copernicus HTTPS 来源。配置 token 后，在线底图代理还会从服务器访问固定天地图 HTTPS 主机，但不把浏览器坐标或无线电参数作为上游参数。
 
@@ -242,6 +250,14 @@ full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2
 功能 revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 已完成受管 `stop → build → start → status/health`，`built_at=2026-07-31T12:19:55Z`，server SHA-256 为 `d5f57bd71de4f64c62359591edbbee9b23461461d63265b68dd2a5f9dac640f9`。新 PID `2306446` 只监听 `127.0.0.1:1421`；bootstrap 明确 `enabled=false`，合法瓦片路径返回 HTTP 503 和 `Cache-Control: no-store`。
 
 当前 token 未配置，因此没有真实瓦片、上游 HTTP 200、浏览器截图或控制台证据。完整方法和发布边界见 `20-tianditu-basemap-proxy.md`。
+
+### 8.7 四省 PMTiles 接入
+
+固定资产为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes、SHA-256 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0、gzip MVT、939 个 region tiles / 837 个 archive entries，占 2.5 GB 的 1.32%。
+
+实现目标是同源 Range-only 读取，MapLibre 仅显示 earth、landcover、landuse、water、roads，并持续显示 © OpenStreetMap contributors。boundaries、places、pois 不进入可见样式。原始归档仍含 boundaries 与 Natural Earth/OSM 内容；当前只作私有验证、不纳入正式 EXE，且不作公开发行结论。
+
+前端 9 文件/62 测试、Rust workspace 112 passed/5 ignored、validation-server 27/27、固定 SHA-256、Range/HEAD/bootstrap、SSH 隧道及 PMTiles JavaScript getHeader/getZxy MVT 读取均通过。真实浏览器视觉与控制台因 Codex 桌面 ACL 故障仍待人工确认；最终 clean stop/build/start 由根任务完成，详细证据见 docs/21-protomaps-four-province-basemap.md。
 
 ## 9. 真实成都验证
 
@@ -392,6 +408,7 @@ revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管 stop/build/s
 
 ## 10. 尚未关闭
 
+- 四省 PMTiles 的自动化、Range、SSH 隧道、固定资产校验和受管运行已回填；真实浏览器视觉仍待人工确认；
 - operation capability 与渐进覆盖预览的代码回归、新构建和受管 HTTP 烟雾已通过；SSH 隧道浏览器可见预览、取消/重试 UI 和控制台仍待验证；
 - 在线天地图当前未配置 token；禁用态已受管部署并 fail closed，真实 `vec/cva`、缩放、比例尺、署名、热力图层级与清空浏览器烟雾待验证；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；

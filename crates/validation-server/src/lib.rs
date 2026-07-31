@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use basemap::{BasemapError, BasemapProxy};
+use basemap::{Basemap, BasemapError, PMTILES_PATH, PmtilesError};
 use hamheatmap_app_service::{
     AppService, CalculationPreview, CalculationProgress, CalculationRequest, DownloadProgressView,
     MapPoint,
@@ -34,6 +34,7 @@ pub struct ServerConfig {
     pub dist_dir: PathBuf,
     pub data_root: PathBuf,
     pub basemap_token_file: PathBuf,
+    pub basemap_pmtiles_file: PathBuf,
     pub request_body_limit: usize,
 }
 
@@ -50,6 +51,12 @@ impl ServerConfig {
             data_root: std::env::var_os("HAMHEATMAP_VALIDATION_DATA_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| current_dir.join(".runtime/validation-server/data")),
+            basemap_pmtiles_file: std::env::var_os("HAMHEATMAP_VALIDATION_BASEMAP_PMTILES_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    current_dir
+                        .join(".runtime/validation-server/data/basemap/four-provinces.pmtiles")
+                }),
             basemap_token_file: std::env::var_os("HAMHEATMAP_VALIDATION_BASEMAP_TOKEN_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
@@ -65,6 +72,7 @@ impl ServerConfig {
                 | "--dist-dir"
                 | "--data-root"
                 | "--basemap-token-file"
+                | "--basemap-pmtiles-file"
                 | "--request-body-limit" => args
                     .next()
                     .ok_or_else(|| format!("{argument} requires a value"))?,
@@ -77,6 +85,9 @@ impl ServerConfig {
                 "--data-root" => config.data_root = PathBuf::from(value),
                 "--basemap-token-file" => {
                     config.basemap_token_file = PathBuf::from(value);
+                }
+                "--basemap-pmtiles-file" => {
+                    config.basemap_pmtiles_file = PathBuf::from(value);
                 }
                 "--request-body-limit" => {
                     config.request_body_limit = value
@@ -112,8 +123,8 @@ impl ServerConfig {
 pub fn help_text() -> &'static str {
     "HamHeatmap internal validation server\n\n\
 Usage:\n  hamheatmap-validation-server [OPTIONS]\n\n\
-Options:\n  --bind <ADDRESS>              Loopback listen address (default 127.0.0.1:1421)\n  --dist-dir <PATH>             Built frontend directory (default app/dist)\n  --data-root <PATH>            Runtime data directory (default .runtime/validation-server/data)\n  --basemap-token-file <PATH>   Optional TianDiTu token file\n  --request-body-limit <BYTES>  Maximum JSON request body (default 1048576)\n  -h, --help                    Show this help\n\n\
-Environment:\n  HAMHEATMAP_VALIDATION_BIND\n  HAMHEATMAP_VALIDATION_DIST_DIR\n  HAMHEATMAP_VALIDATION_DATA_ROOT\n  HAMHEATMAP_VALIDATION_BASEMAP_TOKEN_FILE\n"
+Options:\n  --bind <ADDRESS>              Loopback listen address (default 127.0.0.1:1421)\n  --dist-dir <PATH>             Built frontend directory (default app/dist)\n  --data-root <PATH>            Runtime data directory (default .runtime/validation-server/data)\n  --basemap-token-file <PATH>   Optional TianDiTu token file\n  --basemap-pmtiles-file <PATH> Optional local PMTiles archive\n  --request-body-limit <BYTES>  Maximum JSON request body (default 1048576)\n  -h, --help                    Show this help\n\n\
+Environment:\n  HAMHEATMAP_VALIDATION_BIND\n  HAMHEATMAP_VALIDATION_DIST_DIR\n  HAMHEATMAP_VALIDATION_DATA_ROOT\n  HAMHEATMAP_VALIDATION_BASEMAP_TOKEN_FILE\n  HAMHEATMAP_VALIDATION_BASEMAP_PMTILES_FILE\n"
 }
 
 #[derive(Clone)]
@@ -123,7 +134,7 @@ pub struct ValidationServer {
 
 struct ServerState {
     service: AppService,
-    basemap: BasemapProxy,
+    basemap: Basemap,
     dist_dir: PathBuf,
     listen_address: SocketAddr,
     request_body_limit: usize,
@@ -163,7 +174,7 @@ impl ValidationServer {
         if data_root.starts_with(&dist_dir) || dist_dir.starts_with(&data_root) {
             return Err("frontend and runtime data directories must not overlap".into());
         }
-        let basemap = BasemapProxy::load(&config.basemap_token_file)?;
+        let basemap = Basemap::load(&config.basemap_pmtiles_file, &config.basemap_token_file)?;
         Ok(Self {
             state: Arc::new(ServerState {
                 service: AppService::new(data_root),
@@ -258,7 +269,11 @@ impl ValidationServer {
                 },
             )),
             ("GET", "/api/bootstrap") => Some(self.bootstrap_response()),
-            ("GET", path) if path.starts_with("/api/basemap/") => Some(self.basemap_response(path)),
+            ("GET", PMTILES_PATH) => Some(self.pmtiles_response(&request, false)),
+            ("HEAD", PMTILES_PATH) => Some(self.pmtiles_response(&request, true)),
+            ("GET", path) if path.starts_with("/api/basemap/") => {
+                Some(self.tianditu_basemap_response(path))
+            }
             ("GET", "/api/cache-overview") => {
                 Some(self.with_operation(|_| self.state.service.cache_overview()))
             }
@@ -347,14 +362,17 @@ impl ValidationServer {
         })
     }
 
-    fn basemap_response(&self, path: &str) -> Response {
-        match self.state.basemap.fetch(path) {
+    fn tianditu_basemap_response(&self, path: &str) -> Response {
+        match self.state.basemap.fetch_tianditu(path) {
             Ok(tile) => Response {
                 status: 200,
                 content_type: tile.content_type,
                 body: tile.body,
                 head_only: false,
                 cache_control: "no-store",
+                content_length: None,
+                accept_ranges: false,
+                content_range: None,
             },
             Err(BasemapError::InvalidPath) => ApiError::not_found().into_response(),
             Err(BasemapError::Disabled) => {
@@ -365,6 +383,45 @@ impl ValidationServer {
             }
             Err(BasemapError::InvalidUpstreamResponse) => {
                 ApiError::bad_gateway("basemap upstream returned an invalid tile").into_response()
+            }
+        }
+    }
+    fn pmtiles_response(&self, request: &Request, head_only: bool) -> Response {
+        match self
+            .state
+            .basemap
+            .read_pmtiles(request.range.as_deref(), head_only)
+        {
+            Ok(part) => Response {
+                status: part.status,
+                content_type: "application/vnd.pmtiles",
+                body: part.body,
+                head_only,
+                cache_control: "no-store",
+                content_length: Some(part.content_length),
+                accept_ranges: true,
+                content_range: part.content_range,
+            },
+            Err(PmtilesError::InvalidRange) => {
+                let mut response = json_response(
+                    416,
+                    &ErrorPayload {
+                        message: "one closed bytes=start-end range of at most 8 MiB is required",
+                    },
+                );
+                response.accept_ranges = true;
+                response.content_range = self
+                    .state
+                    .basemap
+                    .pmtiles_length()
+                    .map(|length| format!("bytes */{length}"));
+                response
+            }
+            Err(PmtilesError::Disabled) => {
+                ApiError::unavailable("PMTiles basemap is disabled").into_response()
+            }
+            Err(PmtilesError::ReadFailed) => {
+                ApiError::internal("cannot read PMTiles archive range").into_response()
             }
         }
     }
@@ -503,6 +560,9 @@ impl ValidationServer {
             body,
             head_only,
             cache_control: "no-cache",
+            content_length: None,
+            accept_ranges: false,
+            content_range: None,
         })
     }
 }
@@ -1286,6 +1346,7 @@ struct Request {
     host: String,
     content_type: Option<String>,
     body: Vec<u8>,
+    range: Option<String>,
 }
 
 fn read_request(stream: &mut impl Read, body_limit: usize) -> Result<Request, ApiError> {
@@ -1338,6 +1399,7 @@ fn read_request(stream: &mut impl Read, body_limit: usize) -> Result<Request, Ap
     let mut content_length = None;
     let mut content_type = None;
     let mut host = None;
+    let mut range = None;
     for line in lines {
         let (name, value) = line
             .split_once(':')
@@ -1351,6 +1413,14 @@ fn read_request(stream: &mut impl Read, body_limit: usize) -> Result<Request, Ap
                 }
                 if host.replace(value.to_string()).is_some() {
                     return Err(ApiError::bad_request("duplicate Host header"));
+                }
+            }
+            "range" => {
+                if value.is_empty() {
+                    return Err(ApiError::bad_request("Range header must not be empty"));
+                }
+                if range.replace(value.to_string()).is_some() {
+                    return Err(ApiError::bad_request("duplicate Range header"));
                 }
             }
             "content-length" => {
@@ -1394,6 +1464,7 @@ fn read_request(stream: &mut impl Read, body_limit: usize) -> Result<Request, Ap
     Ok(Request {
         method: method.to_string(),
         target: target.to_string(),
+        range,
         host,
         content_type,
         body: bytes[header_end..required].to_vec(),
@@ -1482,6 +1553,9 @@ struct Response {
     body: Vec<u8>,
     head_only: bool,
     cache_control: &'static str,
+    content_length: Option<u64>,
+    accept_ranges: bool,
+    content_range: Option<String>,
 }
 
 fn json_response(value: u16, payload: &impl Serialize) -> Response {
@@ -1492,6 +1566,9 @@ fn json_response(value: u16, payload: &impl Serialize) -> Response {
             body,
             head_only: false,
             cache_control: "no-store",
+            content_length: None,
+            accept_ranges: false,
+            content_range: None,
         },
         Err(error) => {
             ApiError::internal(format!("cannot serialize JSON response: {error}")).into_response()
@@ -1506,6 +1583,9 @@ fn no_content_response() -> Response {
         body: Vec::new(),
         head_only: true,
         cache_control: "no-store",
+        content_length: None,
+        accept_ranges: false,
+        content_range: None,
     }
 }
 
@@ -1513,26 +1593,34 @@ fn write_response(stream: &mut impl Write, response: Response) -> io::Result<()>
     let reason = match response.status {
         200 => "OK",
         204 => "No Content",
+        206 => "Partial Content",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
         409 => "Conflict",
         413 => "Payload Too Large",
         415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
         422 => "Unprocessable Entity",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
         _ => "Internal Server Error",
     };
+    let content_length = response
+        .content_length
+        .unwrap_or(response.body.len() as u64);
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: {}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' data: blob:; worker-src 'self' blob:; child-src 'self' blob:\r\n\r\n",
-        response.status,
-        reason,
-        response.content_type,
-        response.body.len(),
-        response.cache_control,
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: {}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' data: blob:; worker-src 'self' blob:; child-src 'self' blob:\r\n",
+        response.status, reason, response.content_type, content_length, response.cache_control,
     )?;
+    if response.accept_ranges {
+        write!(stream, "Accept-Ranges: bytes\r\n")?;
+    }
+    if let Some(content_range) = response.content_range.as_deref() {
+        write!(stream, "Content-Range: {content_range}\r\n")?;
+    }
+    write!(stream, "\r\n")?;
     if !response.head_only {
         stream.write_all(&response.body)?;
     }
@@ -1674,6 +1762,8 @@ mod tests {
             "runtime".into(),
             "--basemap-token-file".into(),
             "runtime/tianditu.token".into(),
+            "--basemap-pmtiles-file".into(),
+            "runtime/four-provinces.pmtiles".into(),
             "--request-body-limit".into(),
             "2048".into(),
         ])
@@ -1684,6 +1774,10 @@ mod tests {
         assert_eq!(
             config.basemap_token_file,
             PathBuf::from("runtime/tianditu.token")
+        );
+        assert_eq!(
+            config.basemap_pmtiles_file,
+            PathBuf::from("runtime/four-provinces.pmtiles")
         );
         assert_eq!(config.request_body_limit, 2048);
         assert!(ServerConfig::from_args(["--bind".into(), "bad".into()]).is_err());
@@ -1737,6 +1831,11 @@ mod tests {
         let duplicate_error = read_request(&mut duplicate_host, 1024).unwrap_err();
         assert_eq!(duplicate_error.status, 400);
         assert!(duplicate_error.message.contains("duplicate Host"));
+        let mut duplicate_range =
+            b"GET /api/basemap/pmtiles/four-provinces.pmtiles HTTP/1.1\r\nHost: localhost:1421\r\nRange: bytes=0-7\r\nRange: bytes=8-15\r\n\r\n".as_slice();
+        let duplicate_range_error = read_request(&mut duplicate_range, 1024).unwrap_err();
+        assert_eq!(duplicate_range_error.status, 400);
+        assert!(duplicate_range_error.message.contains("duplicate Range"));
     }
 
     #[test]
@@ -2138,6 +2237,7 @@ mod tests {
             let config = ServerConfig {
                 bind_address: "127.0.0.1:0".into(),
                 dist_dir,
+                basemap_pmtiles_file: root.join("missing.pmtiles"),
                 data_root: root.join("data"),
                 basemap_token_file: root.join("missing-tianditu.token"),
                 request_body_limit: 1024,
@@ -2166,6 +2266,7 @@ mod tests {
         ) -> Response {
             self.server.route(Request {
                 method: method.into(),
+                range: None,
                 target: target.into(),
                 host: host.into(),
                 content_type: content_type.map(str::to_owned),
@@ -2194,6 +2295,7 @@ mod tests {
         let config = ServerConfig {
             bind_address: "127.0.0.1:0".into(),
             data_root: dist_dir.join("runtime"),
+            basemap_pmtiles_file: fixture.root.join("missing.pmtiles"),
             dist_dir,
             basemap_token_file: fixture.root.join("missing-tianditu.token"),
             request_body_limit: 1024,
@@ -2786,6 +2888,7 @@ mod tests {
         let config = ServerConfig {
             bind_address: "127.0.0.1:0".into(),
             dist_dir: fixture.root.join("dist"),
+            basemap_pmtiles_file: fixture.root.join("missing.pmtiles"),
             data_root: fixture.root.join("http-data"),
             basemap_token_file: fixture.root.join("missing-tianditu.token"),
             request_body_limit: 1024,
@@ -2871,5 +2974,74 @@ mod tests {
                 "broad https: source in {key}"
             );
         }
+    }
+    #[test]
+    fn pmtiles_http_contract_requires_bounded_range_and_supports_head() {
+        let fixture = ServerFixture::new();
+        let archive_path = fixture.root.join("four-provinces.pmtiles");
+        let mut archive = fs::File::create(&archive_path).unwrap();
+        archive.write_all(b"PMTiles\x03").unwrap();
+        archive.set_len(33_044_072).unwrap();
+
+        let config = ServerConfig {
+            bind_address: "127.0.0.1:0".into(),
+            dist_dir: fixture.root.join("dist"),
+            data_root: fixture.root.join("pmtiles-data"),
+            basemap_token_file: fixture.root.join("missing-tianditu.token"),
+            basemap_pmtiles_file: fixture.root.join("missing.pmtiles"),
+            request_body_limit: 1024,
+        };
+        let mut server = ValidationServer::new(&config).unwrap();
+        Arc::get_mut(&mut server.state).unwrap().basemap = Basemap::load_unchecked_for_test(
+            &archive_path,
+            &fixture.root.join("missing-tianditu.token"),
+        )
+        .unwrap();
+        let request = |method: &str, range: Option<&str>| Request {
+            method: method.into(),
+            target: PMTILES_PATH.into(),
+            host: "localhost:0".into(),
+            content_type: None,
+            range: range.map(str::to_owned),
+            body: Vec::new(),
+        };
+
+        let partial = server.route(request("GET", Some("bytes=0-7")));
+        assert_eq!(partial.status, 206);
+        assert_eq!(partial.content_type, "application/vnd.pmtiles");
+        assert_eq!(partial.body, b"PMTiles\x03");
+        assert_eq!(partial.content_length, Some(8));
+        assert!(partial.accept_ranges);
+        assert_eq!(partial.content_range.as_deref(), Some("bytes 0-7/33044072"));
+
+        let mut wire = Vec::new();
+        write_response(&mut wire, server.route(request("GET", Some("bytes=0-7")))).unwrap();
+        let wire_header_end = find_bytes(&wire, b"\r\n\r\n").unwrap();
+        let wire_headers = std::str::from_utf8(&wire[..wire_header_end]).unwrap();
+        assert!(wire_headers.starts_with("HTTP/1.1 206 Partial Content\r\n"));
+        assert!(wire_headers.contains("Accept-Ranges: bytes\r\n"));
+        assert!(wire_headers.contains("Content-Range: bytes 0-7/33044072"));
+        assert!(wire_headers.contains("Content-Length: 8\r\n"));
+
+        let head = server.route(request("HEAD", None));
+        assert_eq!(head.status, 200);
+        assert!(head.body.is_empty());
+        assert_eq!(head.content_length, Some(33_044_072));
+        assert!(head.accept_ranges);
+
+        for range in [
+            None,
+            Some("bytes=0-"),
+            Some("bytes=0-1,4-5"),
+            Some("bytes=0-8388608"),
+            Some("bytes=33044072-33044072"),
+        ] {
+            let response = server.route(request("GET", range));
+            assert_eq!(response.status, 416, "{range:?}");
+            assert!(response.accept_ranges);
+            assert_eq!(response.content_range.as_deref(), Some("bytes */33044072"));
+        }
+
+        assert_eq!(server.route(request("POST", Some("bytes=0-7"))).status, 405);
     }
 }

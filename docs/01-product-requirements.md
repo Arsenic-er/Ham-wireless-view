@@ -187,6 +187,14 @@ HamHeatmap 是面向业余无线电新手的中国大陆 VHF/UHF 地形传播覆
 - “清空热力图”不删除任何已下载数据。
 - 未缓存区域在离线状态下不得用零海拔或伪造数据继续计算。
 
+### 7.1 私有四省 PMTiles 验证底图（非交付物）
+
+- 私有 validation 平台可使用 source build 20260731 的区域 PMTiles；bbox 107.5,18,125.5,33.5，zoom 0-9，大小 33,044,072 bytes，SHA-256 为 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0。
+- 该归档通过同源 HTTP Range 读取，MVT payload 为 gzip；只显示 earth、landcover、landuse、water、roads，并持续显示 © OpenStreetMap contributors。
+- 天地图保留为联网 fallback 与历史验证路径。
+- 原始归档仍含 boundaries 及 Natural Earth/OSM 内容，landcover 上游署名链尚待确认；显示过滤不等于删除。当前只用于私有验证、不纳入正式 EXE，且不作公开发行结论。
+- 939 个 region tiles、837 个 archive entries 与 1.32% 配额占比是资产基线；自动化、浏览器和受管部署是否通过必须由实际证据回填。
+
 ## 8. 清空与替换规则
 
 - 地图始终只有一个发射点。

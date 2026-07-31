@@ -1,13 +1,14 @@
-# 天地图同源底图代理与地图控件验证
+# 天地图同源底图代理：fallback 与历史验证
 
 - 日期：2026-07-31
 - 范围：私有 validation server 在线底图、MapLibre 动态比例尺和覆盖层状态重放
 - 状态：代码级回归和无 token 受管部署已通过；当前未配置天地图 token，未执行真实瓦片或浏览器视觉烟雾
+- 当前角色：四省 PMTiles 为私有验证主底图；天地图保留为需要 token 和网络的 fallback / 历史验证
 - 发布结论：不构成中国大陆公开地图合规、审图号、离线授权或导出授权证明
 
 ## 1. 目的与边界
 
-验证平台使用天地图 Web Mercator 矢量底图与中文注记。浏览器只能访问同源路径：
+验证平台可在 PMTiles 不可用或需要复核历史行为时使用天地图 Web Mercator 矢量底图与中文注记。浏览器只能访问同源路径：
 
 - `/api/basemap/tianditu/vec/{z}/{x}/{y}`
 - `/api/basemap/tianditu/cva/{z}/{x}/{y}`
@@ -139,3 +140,11 @@ revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 于 2026-07-31 完成受管 
 - 在 Windows 10/11 WebView2 实机验证网络、缓存、安装/卸载和导出。
 
 在线代理响应为 `Cache-Control: no-store`，本切片没有离线底图缓存或正式地图导出。在门槛关闭前，界面的“天地图在线真实底图 · 内部验证”只描述瓦片来源和运行模式，不能解释为软件已经满足公开地图发行要求。
+
+## 10. 与区域 PMTiles 的关系
+
+私有验证主路径固定为 /api/basemap/pmtiles/four-provinces.pmtiles，通过 HTTP Range 读取 source build 20260731 的 33,044,072-byte 归档；天地图不参与该归档解码、哈希校验或图层样式构建。
+
+天地图继续保留现有同源代理、token 隔离和 no-store 行为，作为联网 fallback 与历史回归入口。两条路径必须在 bootstrap 和前端信任检查中明确区分，任何 fallback 失败都不得静默切换到未知来源。
+
+区域 PMTiles 的自动化、浏览器与受管部署证据单独记录在 docs/21-protomaps-four-province-basemap.md；本文件已有天地图证据不能外推为 PMTiles 已通过。

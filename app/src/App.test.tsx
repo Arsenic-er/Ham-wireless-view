@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendMode } from "./lib/backend";
 import type {
+  BasemapInfo,
   CalculationPreview,
   CalculationResult,
   RadioParameters,
@@ -117,6 +118,39 @@ const cacheUsage = {
   capBytes: 2_500_000_000,
 };
 
+const protomapsBasemap: BasemapInfo = {
+  enabled: true,
+  providerId: "protomaps",
+  displayName: "区域离线底图",
+  attribution: "© OpenStreetMap contributors",
+  mode: "same-origin-pmtiles",
+  maxZoom: 9,
+  layers: [
+    { id: "earth", displayName: "陆地" },
+    { id: "landcover", displayName: "地表覆盖" },
+    { id: "landuse", displayName: "土地利用" },
+    { id: "water", displayName: "水体" },
+    { id: "roads", displayName: "道路" },
+  ],
+  resourcePath: "/api/basemap/pmtiles/four-provinces.pmtiles",
+  bounds: [107.5, 18, 125.5, 33.5],
+  archiveBytes: 33_044_072,
+};
+
+const tiandituBasemap: BasemapInfo = {
+  enabled: true,
+  providerId: "tianditu",
+  displayName: "天地图",
+  attribution: "天地图",
+  mode: "same-origin-proxy",
+  maxZoom: 18,
+  layers: [
+    { id: "vec", displayName: "矢量底图" },
+    { id: "cva", displayName: "中文注记" },
+  ],
+  tilePathTemplate: "/api/basemap/tianditu/{layer}/{z}/{x}/{y}",
+};
+
 const result: CalculationResult = {
   schemaVersion: 3,
   modelName: "NTIA ITM Point-to-Point",
@@ -207,6 +241,9 @@ describe("validation server UI", () => {
 
     expect(await screen.findByText("\u5185\u90e8\u670d\u52a1\u5668\u9a8c\u8bc1")).toBeTruthy();
     expect(screen.getByText(/\u5750\u6807.*\u53d1\u9001\u5230\u672c\u670d\u52a1\u5668/)).toBeTruthy();
+    expect(
+      screen.getByText("未配置受信任的真实底图；当前只显示 WGS84 坐标网格。"),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "select-point" }));
     await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
@@ -379,6 +416,107 @@ describe("validation server UI", () => {
     await waitFor(() => expect((blockedButton as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(blockedButton);
     await waitFor(() => expect(backendMocks.calculate).toHaveBeenCalledTimes(2));
+  });
+
+  it("identifies a trusted TianDiTu basemap without confusing it with Protomaps", async () => {
+    backendMocks.bootstrap.mockResolvedValueOnce({
+      schemaVersion: 2,
+      modelName: "NTIA ITM Point-to-Point",
+      modelVersion: "land-water-v1",
+      coverageRadiusKm: 200,
+      gridSize: 401,
+      cacheUsage,
+      internalBuildWarning: "internal",
+      basemap: tiandituBasemap,
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByText(
+        "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "已接入区域离线真实底图（OpenStreetMap / Protomaps）；服务器管理的固定区域数据可用。",
+      ),
+    ).toBeNull();
+  });
+
+  it("shows the fixed offline basemap separately without changing the backend total", async () => {
+    const usageWithBasemap = {
+      ...cacheUsage,
+      totalBytes: 153_044_072,
+      metadataBytes: 34_044_072,
+      remainingBytes: 2_346_955_928,
+    };
+    backendMocks.bootstrap.mockResolvedValueOnce({
+      schemaVersion: 2,
+      modelName: "NTIA ITM Point-to-Point",
+      modelVersion: "land-water-v1",
+      coverageRadiusKm: 200,
+      gridSize: 401,
+      cacheUsage: usageWithBasemap,
+      internalBuildWarning: "internal",
+      basemap: protomapsBasemap,
+    });
+    backendMocks.cacheOverview.mockResolvedValueOnce({
+      usage: usageWithBasemap,
+      regions: [],
+    });
+
+    render(<App />);
+    await screen.findByText("等待选择发射点");
+    fireEvent.click(screen.getByRole("button", { name: /缓存/ }));
+    expect(
+      screen.getByText(
+        "已接入区域离线真实底图（OpenStreetMap / Protomaps）；服务器管理的固定区域数据可用。",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/已接入天地图在线真实底图/)).toBeNull();
+    await screen.findByText("缓存概览");
+
+    const basemapRow = screen.getByText("离线底图").parentElement;
+    expect(basemapRow?.querySelector("strong")?.textContent).toBe("33.0 MB");
+    expect(basemapRow?.querySelector("small")?.textContent).toBe(
+      "固定区域 · 服务器管理",
+    );
+    expect(basemapRow?.querySelector("button")).toBeNull();
+
+    const metadataRow = screen.getByText("索引与元数据").parentElement;
+    expect(metadataRow?.querySelector("strong")?.textContent).toBe("1.0 MB");
+    expect(screen.getByText("153.0 MB")).toBeTruthy();
+  });
+
+  it("saturates displayed metadata at zero when it is smaller than the basemap archive", async () => {
+    const usageWithSmallMetadata = {
+      ...cacheUsage,
+      metadataBytes: 1_000_000,
+    };
+    backendMocks.bootstrap.mockResolvedValueOnce({
+      schemaVersion: 2,
+      modelName: "NTIA ITM Point-to-Point",
+      modelVersion: "land-water-v1",
+      coverageRadiusKm: 200,
+      gridSize: 401,
+      cacheUsage: usageWithSmallMetadata,
+      internalBuildWarning: "internal",
+      basemap: protomapsBasemap,
+    });
+    backendMocks.cacheOverview.mockResolvedValueOnce({
+      usage: usageWithSmallMetadata,
+      regions: [],
+    });
+
+    render(<App />);
+    await screen.findByText("等待选择发射点");
+    fireEvent.click(screen.getByRole("button", { name: /缓存/ }));
+    await screen.findByText("缓存概览");
+
+    const metadataRow = screen.getByText("索引与元数据").parentElement;
+    expect(metadataRow?.querySelector("strong")?.textContent).toBe("0.0 KB");
+    expect(screen.getByText("120.0 MB")).toBeTruthy();
   });
 
   it("keeps ordinary preview interface-only and disables confirmed download", async () => {

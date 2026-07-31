@@ -504,6 +504,7 @@ dependencies = [
  "hamheatmap-app-service",
  "serde",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 
