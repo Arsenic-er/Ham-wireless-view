@@ -257,7 +257,7 @@ full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2
 
 实现目标是同源 Range-only 读取，MapLibre 仅显示 earth、landcover、landuse、water、roads，并持续显示 © OpenStreetMap contributors。boundaries、places、pois 不进入可见样式。原始归档仍含 boundaries 与 Natural Earth/OSM 内容；当前只作私有验证、不纳入正式 EXE，且不作公开发行结论。
 
-前端 9 文件/62 测试、Rust workspace 112 passed/5 ignored、validation-server 27/27、固定 SHA-256、Range/HEAD/bootstrap、SSH 隧道及 PMTiles JavaScript getHeader/getZxy MVT 读取均通过。真实浏览器视觉与控制台因 Codex 桌面 ACL 故障仍待人工确认；最终 clean stop/build/start 由根任务完成，详细证据见 docs/21-protomaps-four-province-basemap.md。
+前端 9 文件/62 测试、Rust workspace 112 passed/5 ignored、validation-server 27/27、固定 SHA-256、Range/HEAD/bootstrap、SSH 隧道及 PMTiles JavaScript getHeader/getZxy MVT 读取均通过。功能提交 db052e6 已完成 clean stop/build/start；真实浏览器视觉与控制台因 Codex 桌面 ACL 故障仍待人工确认，详细证据见 docs/21-protomaps-four-province-basemap.md。
 
 ## 9. 真实成都验证
 

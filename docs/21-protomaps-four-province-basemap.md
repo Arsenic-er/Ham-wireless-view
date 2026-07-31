@@ -78,11 +78,11 @@
 
 ### 5.4 受管部署
 
-- [x] dirty workspace build、受管 start、health 与 bootstrap 全链路成功。
+- [x] clean commit db052e6 的受管 stop/build/start、health 与 bootstrap 全链路成功。
 - [x] Range 端点由只监听 127.0.0.1:1421 的 validation server 提供。
 - [x] SSH 端口转发后的同源端点与 Range 访问成功；浏览器视觉烟测仍在 5.3 单列待验。
-- [ ] 重启后仍从同一受控资产读取，且哈希未漂移。
-- [ ] 构建产物与正式 EXE/安装包不包含该原始 PMTiles。
+- [x] 重启后仍从同一受控资产读取，SHA-256 未漂移。
+- [x] 当前 validation 前端与服务器构建产物不包含原始 PMTiles；正式 EXE/安装包尚未生成。
 
 ## 6. 已执行证据
 
@@ -97,11 +97,12 @@
 | validation server targeted tests | 27 / 27 PASS |
 | validation platform bash -n + self-test | PASS |
 
-这些结果来自包含未提交 PMTiles 改动的 dirty workspace。构建 metadata 中的 revision 仍为 130043e，只表示构建时检出的旧 HEAD，不是包含本轮未提交源码的提交号；本轮没有 commit 或 push。
+这些结果覆盖功能提交 db052e6 的源码；提交后工作树干净，并已推送到 origin/codex/new-server-projection-validation。
 
 ### 6.2 受管运行与 HTTP
 
-- 受管 build/start 成功，PID 2342699，只监听 127.0.0.1:1421，health 正常。
+- clean stop/build/start 成功，PID 2372828，只监听 127.0.0.1:1421，health 正常。
+- build metadata：revision=db052e6505830d48a51b2dd4711792163eba422b、built_at=2026-07-31T13:52:15Z、worktree_dirty=false、server SHA-256=cec01dc9d959334b9aba088b2ae91d1cc251f33c1d0592f81cdae54b95a97546。
 - bootstrap 返回 enabled=true、providerId=protomaps、resourcePath=/api/basemap/pmtiles/four-provinces.pmtiles、bounds=[107.5,18,125.5,33.5]、maxZoom=9、archiveBytes=33044072。
 - bootstrap/cache 报告 total=293,517,252 bytes；运行数据根约 293.5 MB。
 - 实际安装的 PMTiles JavaScript 4.4.1 客户端对 live endpoint 执行 getHeader 和 getZxy(5,26,13) 成功，tile payload 为 117,880 bytes。
