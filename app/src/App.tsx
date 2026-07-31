@@ -27,6 +27,10 @@ import {
   suggestedExportFileName,
 } from "./lib/export";
 import { DEFAULT_PARAMETERS, parameterValidationMessage } from "./lib/parameters";
+import {
+  MAX_SESSION_COVERAGES,
+  mergeSessionCoverage,
+} from "./lib/sessionCoverages";
 import type {
   BootstrapInfo,
   CacheOverview,
@@ -42,12 +46,12 @@ import type {
   PointInspection,
   RadioParameters,
   ResolvedTheme,
+  SessionCoverageResult,
   ThemePreference,
   WorkflowState,
 } from "./lib/types";
 
 const THEME_STORAGE_KEY = "hamheatmap-theme";
-
 function currentSystemTheme(): ResolvedTheme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -103,6 +107,7 @@ export function App() {
   const cacheLoadingRef = useRef(false);
   const deletingRegionRef = useRef(false);
   const exportingRef = useRef(false);
+  const coverageSequenceRef = useRef(0);
   const cancellationPendingRef = useRef(false);
   const previewSuppressedRef = useRef(true);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
@@ -116,6 +121,9 @@ export function App() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [downloadEstimate, setDownloadEstimate] = useState<DownloadEstimate | null>(null);
   const [result, setResult] = useState<CalculationResult | null>(null);
+  const [resultParameters, setResultParameters] = useState<RadioParameters | null>(null);
+  const [sessionResults, setSessionResults] = useState<SessionCoverageResult[]>([]);
+  const [activeResultId, setActiveResultId] = useState<string | null>(null);
   const [resultStale, setResultStale] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [cancellationPending, setCancellationPending] = useState(false);
@@ -485,6 +493,8 @@ export function App() {
     if (!point || !canCalculate) return;
     setWorkflow("calculating");
     setResult(null);
+    setResultParameters(null);
+    setActiveResultId(null);
     setResultStale(false);
     previewSuppressedRef.current = false;
     setPreview(null);
@@ -497,8 +507,20 @@ export function App() {
     setErrorMessage(null);
     try {
       const value = await calculate(buildRequest(point, parameters));
+      const parameterSnapshot = { ...parameters };
+      const coverageId = `coverage-${++coverageSequenceRef.current}`;
       previewSuppressedRef.current = true;
       setResult(value);
+      setResultParameters(parameterSnapshot);
+      setSessionResults((current) => {
+        return mergeSessionCoverage(current, {
+          id: coverageId,
+          result: value,
+          parameters: parameterSnapshot,
+          completedAt: Date.now(),
+        });
+      });
+      setActiveResultId(coverageId);
       setPreview(null);
       setResultStale(false);
       setWorkflow("completed");
@@ -507,6 +529,8 @@ export function App() {
       const message = error instanceof Error ? error.message : String(error);
       if (message.toLowerCase().includes("cancel")) {
         setResult(null);
+        setResultParameters(null);
+        setActiveResultId(null);
         setPreview(null);
         setWorkflow("cancelled");
       } else {
@@ -532,9 +556,9 @@ export function App() {
   }
 
   async function handleExport(format: ExportFormat) {
-    if (!result || resultStale || exportingRef.current || !capabilities.canExport) return;
+    if (!result || !resultParameters || resultStale || exportingRef.current || !capabilities.canExport) return;
     const resultSnapshot = result;
-    const parameterSnapshot = { ...parameters };
+    const parameterSnapshot = { ...resultParameters };
     const generatedAt = new Date();
     exportingRef.current = true;
     setExportingFormat(format);
@@ -551,7 +575,9 @@ export function App() {
         setExportMessage("已取消保存，没有写入文件。");
       } else {
         setExportMessage(
-          `已保存 ${format.toUpperCase()} · ${formatBytes(exported.bytesWritten)}${exported.path ? `\n${exported.path}` : ""}`,
+          exported.path
+            ? `已保存 ${format.toUpperCase()} · ${formatBytes(exported.bytesWritten)}\n${exported.path}`
+            : `已触发 ${format.toUpperCase()} 下载 · ${formatBytes(exported.bytesWritten)}`,
         );
       }
     } catch (error) {
@@ -578,6 +604,8 @@ export function App() {
       );
     }
     setResult(null);
+    setResultParameters(null);
+    setActiveResultId(null);
     setPreview(null);
     setResultStale(false);
     setProgress(null);
@@ -599,6 +627,9 @@ export function App() {
     if (isBusy) return;
     previewSuppressedRef.current = true;
     setResult(null);
+    setResultParameters(null);
+    setSessionResults([]);
+    setActiveResultId(null);
     setPreview(null);
     setResultStale(false);
     setProgress(null);
@@ -689,7 +720,7 @@ export function App() {
       {validationServerMode && (
         <div className="validation-server-banner" role="status">
           <strong>内部服务器验证</strong>
-          <span>坐标、无线电参数和计算请求会发送到本服务器；文件导出仅在 Windows/Tauri 桌面版可用。</span>
+          <span>坐标、无线电参数和计算请求会发送到本服务器；诊断 PNG/PDF 由当前浏览器直接下载。</span>
         </div>
       )}
 
@@ -698,7 +729,8 @@ export function App() {
           <MapView
             theme={resolvedTheme}
             point={point}
-            heatmap={result}
+            heatmaps={sessionResults}
+            activeHeatmapId={activeResultId}
             preview={preview}
             heatmapStale={resultStale}
             onPointSelect={handlePointSelect}
@@ -725,6 +757,9 @@ export function App() {
               &lt; -140 透明
             </div>
             <div className="legend-note">颜色仅表示预测值，不保证实际通联</div>
+            {sessionResults.length > 0 && (
+              <div className="legend-note">会话结果 {sessionResults.length} / {MAX_SESSION_COVERAGES}</div>
+            )}
           </div>
         </div>
 
@@ -862,14 +897,16 @@ export function App() {
                 onClick={() => void handleExport("pdf")}
               >
                 <strong>PDF 报告</strong>
-                <span>A4 横向，内嵌同一无损画布</span>
+                <span>A4 横向，内嵌同一报告画布</span>
                 <small>{exportingFormat === "pdf" ? "正在生成并等待保存…" : "适合归档与打印"}</small>
               </button>
             </div>
             {exportMessage && <p className="export-message">{exportMessage}</p>}
             {exportError && <p className="export-error">{exportError}</p>}
             <p className="export-note">
-              文件只写入你在 Windows 原生保存对话框中选择的位置。坐标与结果不会上传。
+              {validationServerMode
+                ? "文件由当前浏览器直接下载；报告只使用本次已完成结果，不新增服务器文件。"
+                : "文件只写入你在 Windows 原生保存对话框中选择的位置。坐标与结果不会上传。"}
             </p>
           </section>
         </div>

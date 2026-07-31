@@ -6,9 +6,10 @@
 - 渐进覆盖预览更新：2026-07-27
 - 在线底图与地图控件更新：2026-07-31
 - 四省 PMTiles 内部底图更新：2026-07-31（自动化、Range、SSH 与受管运行已通过；浏览器视觉待人工确认）
+- 会话覆盖层与浏览器诊断导出更新：2026-08-01（自动化已通过，受管部署待回填）
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
-- 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`
+- 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`、`decisions/0019-session-coverage-layers-and-browser-export.md`
 - 状态：历史构建保留为分节证据；可选天地图在线同源代理、动态比例尺和地图 desired-state 重放已受管部署。当前未配置 token，禁用态 readiness/fail-closed 已验证，但真实瓦片和浏览器视觉烟雾尚未执行；Windows/Tauri 实机和地图合规仍待验
 
 四省 PMTiles 现作为私有验证主底图，天地图保留为联网 fallback 与历史验证。新路径在实际测试证据回填前不改变既有已验证状态。
@@ -21,7 +22,7 @@
 
 - 不是公开网站，不开放服务器公网端口；
 - 不替代 Windows Tauri/WebView2、安装包和文件系统验收；
-- 不提供 PNG/PDF 文件导出；
+- 只提供浏览器本地诊断 PNG/PDF 下载，不提供服务器导出路由或服务器文件写入；
 - 不证明合规底图、审图号或公开地图导出已经完成；
 - 不改变正式桌面版坐标与结果本地处理的产品目标。
 
@@ -46,7 +47,7 @@ gpu-273312 127.0.0.1:1421
 
 HTTP 层只做协议适配。频段、单位换算、坐标校验、固定数据源、缓存完整性、配额、DEM/WBM 读取、ITM 和覆盖层仍由共享 Rust 服务执行。
 
-可选在线底图走另一条只读路径：浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`，validation server 从私密文件读取 token 并访问固定天地图 HTTPS WMTS。token、上游 URL 和文件路径不进入 bootstrap 或浏览器。该路径不写底图缓存，也不提供导出。
+可选在线底图走另一条只读路径：浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`，validation server 从私密文件读取 token 并访问固定天地图 HTTPS WMTS。token、上游 URL 和文件路径不进入 bootstrap 或浏览器。该路径不写底图缓存，也不进入诊断报告。
 
 主验证底图走固定同源 /api/basemap/pmtiles/four-provinces.pmtiles。validation server 启动时校验普通非符号链接文件、33,044,072 bytes、固定 SHA-256 与 PMTiles v3 header。浏览器只使用 HTTP Range，不接触服务器路径；仅在 PMTiles 文件启动时缺失时回退天地图，不提供运行时自动切换。
 
@@ -55,10 +56,10 @@ HTTP 层只做协议适配。频段、单位换算、坐标校验、固定数据
 | 模式 | 选择条件 | 数据准备/缓存 | 传播计算 | PNG/PDF 文件导出 |
 |---|---|---:|---:|---:|
 | `tauri` | `window.__TAURI_INTERNALS__` 存在 | 是 | 是 | 是 |
-| `validation-server` | 非 Tauri 且 `VITE_VALIDATION_SERVER=1` | 是 | 是 | 否 |
+| `validation-server` | 非 Tauri 且 `VITE_VALIDATION_SERVER=1` | 是 | 是 | 浏览器本地诊断下载 |
 | `preview` | 其他普通浏览器构建 | 否 | 否 | 否 |
 
-Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明坐标、无线电参数和计算请求会发送到本服务器；计算和数据准备按钮可按真实状态启用，导出按钮始终禁用。普通 preview 继续只显示确认流程和界面状态，不执行写入或返回模拟传播结果。
+Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明坐标、无线电参数和计算请求会发送到本服务器；计算和数据准备按钮可按真实状态启用。当前最新结果完成且参数未过期时，导出按钮允许浏览器本地生成并下载诊断 PNG/PDF；报告正文和目标路径不发送到服务器。普通 preview 继续只显示确认流程和界面状态，不执行写入、返回模拟传播结果或导出。
 
 ## 4. HTTP 契约
 
@@ -82,7 +83,7 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 | POST | `/api/cancel-download` | exact ID + download family 取消 |
 | POST | `/api/cancel-calculation` | exact ID + calculation family 取消 |
 
-没有导出端点、current operation 端点或 operation list。POST JSON 继续拒绝未知字段；服务一次只允许一个共享操作，冲突返回 HTTP 409。
+没有导出端点、current operation 端点或 operation list。浏览器导出只消费前端内存中的已完成结果，使用 Blob 下载。POST JSON 继续拒绝未知字段；服务一次只允许一个共享操作，冲突返回 HTTP 409。
 
 `POST /api/operation-ticket {"kind":…}` 只接受 `estimate-download`、`download`、`calculation`。服务器用密码学安全随机源生成 UUIDv4 `operationId`；客户端不能自选 ID。reserved ticket 最多 32 项、TTL 60 秒。匹配长请求在同一个状态 mutex 内原子消费 ticket；gate 忙时不消费，错 kind、过期或重复 ticket 不能进入 worker。
 
@@ -122,7 +123,7 @@ validation 浏览器在长请求前领取 ticket，以约 250 ms 的递归定时
 - status 输出按字段白名单构造，不序列化工作结果、PNG、URL、服务器路径或详细错误；HTTP 日志也不应记录请求 body 中的 capability。
 - PMTiles 端点只允许 GET/HEAD 与单段 bytes Range；响应为 application/vnd.pmtiles，拒绝多段/无效/越界请求，且不把浏览器请求退化为整包文件传输。
 
-validation 模式是一项明确的内部隐私例外：浏览器中的测试坐标、参数和计算请求会离开 Windows 本机并进入用户控制的服务器。不要使用敏感真实位置。服务没有遥测、账号、第三方计算 API 或服务器文件导出；DEM/WBM 下载仍只访问既有固定 Copernicus HTTPS 来源。配置 token 后，在线底图代理还会从服务器访问固定天地图 HTTPS 主机，但不把浏览器坐标或无线电参数作为上游参数。
+validation 模式是一项明确的内部隐私例外：浏览器中的测试坐标、参数和计算请求会离开 Windows 本机并进入用户控制的服务器。不要使用敏感真实位置。服务没有遥测、账号、第三方计算 API 或服务器文件导出；浏览器下载的报告不回传服务器。DEM/WBM 下载仍只访问既有固定 Copernicus HTTPS 来源。配置 token 后，在线底图代理还会从服务器访问固定天地图 HTTPS 主机，但不把浏览器坐标或无线电参数作为上游参数。
 
 ## 6. 构建、启动与访问
 
@@ -258,6 +259,14 @@ full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2
 实现目标是同源 Range-only 读取，MapLibre 仅显示 earth、landcover、landuse、water、roads，并持续显示 © OpenStreetMap contributors。boundaries、places、pois 不进入可见样式。原始归档仍含 boundaries 与 Natural Earth/OSM 内容；当前只作私有验证、不纳入正式 EXE，且不作公开发行结论。
 
 前端 9 文件/62 测试、Rust workspace 112 passed/5 ignored、validation-server 27/27、固定 SHA-256、Range/HEAD/bootstrap、SSH 隧道及 PMTiles JavaScript getHeader/getZxy MVT 读取均通过。功能提交 db052e6 已完成 clean stop/build/start；真实浏览器视觉与控制台因 Codex 桌面 ACL 故障仍待人工确认，详细证据见 docs/21-protomaps-four-province-basemap.md。
+
+### 8.8 会话覆盖层与浏览器诊断导出
+
+2026-08-01 当前切片把已完成覆盖结果扩展为最多 8 个会话层：不同坐标累积、同点替换、最新置顶、第 9 项淘汰最早项；选择新点或取消重算不删除旧会话层，“清空”删除全部层。结果不持久化，重叠不计算联合场强。
+
+validation 能力矩阵现在允许浏览器本地诊断导出。PNG 使用固定 1600×1100 报告画布 Blob 下载；PDF 在浏览器内构造单页 A4 横向文件。服务器路由、请求体上限和文件系统权限均未扩展，未知 `/api/export-result` 仍被拒绝。第 8.2、9.3 节中“导出禁用”“取消重算清除唯一旧图”的文字是当时版本的历史证据，已由本节和 ADR 0019 取代。
+
+专项自动化已完成 5 文件/46 项测试；前端全量为 11 文件/73 项，Rust workspace 为 `113 passed / 5 ignored`，rustfmt、Clippy `--all-targets -D warnings`、validation 管理脚本 `bash -n` 与 self-test 均通过。提交、受管重建与浏览器实测在本轮结束时回填。
 
 ## 9. 真实成都验证
 

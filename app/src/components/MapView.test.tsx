@@ -1,7 +1,7 @@
 import { act, fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BasemapInfo, CalculationResult } from "../lib/types";
+import type { BasemapInfo, CalculationResult, SessionCoverageResult } from "../lib/types";
 
 const objectUrlMocks = vi.hoisted(() => ({
   create: vi.fn(() => "blob:coverage-heatmap"),
@@ -91,6 +91,7 @@ import { MapView } from "./MapView";
 
 const sampleHeatmap = {
   mapOverlayProjection: "EPSG:3857",
+  center: { lat: 30, lon: 103 },
   mapOverlayCorners: [
     [101, 31],
     [105, 31],
@@ -99,6 +100,20 @@ const sampleHeatmap = {
   ],
   mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
 } as CalculationResult;
+
+const sampleCoverage = {
+  id: "coverage-1",
+  result: sampleHeatmap,
+} as SessionCoverageResult;
+
+const sampleCoverage2 = {
+  id: "coverage-2",
+  result: {
+    ...sampleHeatmap,
+    center: { lat: 31, lon: 104 },
+    mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgoAAA==",
+  },
+} as SessionCoverageResult;
 
 const configuredProtomaps: BasemapInfo = {
   enabled: true,
@@ -150,7 +165,8 @@ describe("MapView controls and desired-state replay", () => {
       <MapView
         theme="dark"
         point={null}
-        heatmap={null}
+        heatmaps={[]}
+        activeHeatmapId={null}
         preview={null}
         heatmapStale={false}
         onPointSelect={vi.fn()}
@@ -192,7 +208,8 @@ describe("MapView controls and desired-state replay", () => {
     const props = {
       theme: "dark" as const,
       point: null,
-      heatmap: sampleHeatmap,
+      heatmaps: [sampleCoverage],
+      activeHeatmapId: sampleCoverage.id,
       preview: null,
       heatmapStale: false,
       onPointSelect: vi.fn(),
@@ -213,7 +230,7 @@ describe("MapView controls and desired-state replay", () => {
     expect(getByText("区域离线底图 · 内部验证")).toBeDefined();
     expect(getByText("© OpenStreetMap contributors · 本地区域底图")).toBeDefined();
     expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "coverage-heatmap-layer" }),
+      expect.objectContaining({ id: "coverage-heatmap-layer-coverage-1" }),
       "basemap-protomaps-place-province",
     );
     expect(maplibreMocks.map.setPaintProperty).toHaveBeenCalledWith(
@@ -256,7 +273,8 @@ describe("MapView controls and desired-state replay", () => {
       <MapView
         theme="dark"
         point={null}
-        heatmap={null}
+        heatmaps={[]}
+        activeHeatmapId={null}
         preview={null}
         heatmapStale={false}
         onPointSelect={vi.fn()}
@@ -302,6 +320,45 @@ describe("MapView controls and desired-state replay", () => {
     unmount();
   });
 
+  it("keeps separate image sources and layers for completed transmitter sites", () => {
+    const props = {
+      theme: "dark" as const,
+      point: { lat: 30, lon: 103 },
+      preview: null,
+      heatmapStale: false,
+      onPointSelect: vi.fn(),
+    };
+    const { rerender, unmount } = render(
+      <MapView
+        {...props}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    rerender(
+      <MapView
+        {...props}
+        heatmaps={[sampleCoverage, sampleCoverage2]}
+        activeHeatmapId={sampleCoverage2.id}
+      />,
+    );
+
+    expect(maplibreMocks.map.getLayer("coverage-heatmap-layer-coverage-1")).toBeDefined();
+    expect(maplibreMocks.map.getLayer("coverage-heatmap-layer-coverage-2")).toBeDefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-2")).toBeDefined();
+    expect(maplibreMocks.map.removeLayer).not.toHaveBeenCalledWith(
+      "coverage-heatmap-layer-coverage-1",
+    );
+    expect(objectUrlMocks.create).toHaveBeenCalledTimes(2);
+
+    unmount();
+    expect(objectUrlMocks.revoke).toHaveBeenCalledTimes(2);
+  });
+
   it("replays a deferred clear after the style becomes ready", () => {
     const sharedProps = {
       theme: "dark" as const,
@@ -310,22 +367,22 @@ describe("MapView controls and desired-state replay", () => {
       heatmapStale: false,
       onPointSelect: vi.fn(),
     };
-    const { rerender, unmount } = render(<MapView {...sharedProps} heatmap={sampleHeatmap} />);
+    const { rerender, unmount } = render(<MapView {...sharedProps} heatmaps={[sampleCoverage]} activeHeatmapId={sampleCoverage.id} />);
 
     maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
     maplibreMocks.emit("load");
-    expect(maplibreMocks.map.getLayer("coverage-heatmap-layer")).toBeDefined();
+    expect(maplibreMocks.map.getLayer("coverage-heatmap-layer-coverage-1")).toBeDefined();
     expect(objectUrlMocks.create).toHaveBeenCalledOnce();
 
     maplibreMocks.map.isStyleLoaded.mockReturnValue(false);
-    rerender(<MapView {...sharedProps} heatmap={null} />);
+    rerender(<MapView {...sharedProps} heatmaps={[]} activeHeatmapId={null} />);
     expect(maplibreMocks.map.removeLayer).not.toHaveBeenCalled();
     expect(objectUrlMocks.revoke).not.toHaveBeenCalled();
 
     maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
     maplibreMocks.emit("idle");
-    expect(maplibreMocks.map.removeLayer).toHaveBeenCalledWith("coverage-heatmap-layer");
-    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith("coverage-heatmap");
+    expect(maplibreMocks.map.removeLayer).toHaveBeenCalledWith("coverage-heatmap-layer-coverage-1");
+    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith("coverage-heatmap-coverage-1");
     expect(objectUrlMocks.revoke).toHaveBeenCalledWith("blob:coverage-heatmap");
 
     unmount();

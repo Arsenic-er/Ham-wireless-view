@@ -54,9 +54,11 @@
 - 参数变化后旧结果变淡、显示过期状态且禁止导出。
 - 计算时参数锁定；取消后恢复。
 - Rust worker 在接收点之间和长剖面采样期间响应取消；取消后不编码或保留半成品。
-- 场景预设保留手动地面海拔；选择新点重置 DEM 自动并清除旧结果。
-- 清空热力图保留发射点、参数、地面海拔模式/值和缓存，同一点可立即重算。
-- 样式暂时未就绪时的清空不得丢失；style 恢复后必须删除旧 heatmap layer/source 并释放 Blob URL。
+- 场景预设保留手动地面海拔；选择新点重置 DEM 自动、清除当前预览/导出身份，但保留其他已完成会话覆盖层。
+- 不同发射点完成后累积独立覆盖层；完全同点重算替换旧层；最多 8 项，第 9 项淘汰最早项。
+- 清空删除全部会话覆盖层，保留当前发射点、参数、地面海拔模式/值和缓存，同一点可立即重算。
+- 每个结果使用独立 MapLibre source/layer/Blob lease；最新层置顶，历史站点可见，重叠不解释为联合场强。
+- 样式暂时未就绪时的清空不得丢失；style 恢复后必须删除全部旧 heatmap layer/source 并逐项释放 Blob URL。
 - 地图右下显示随缩放和平移变化的公制比例尺，左下发射点坐标不被遮挡。
 - DEM 自动/手动界面显示 DEM 参考值与有效天线 AMSL，且不把 AMSL 误当新的传播输入。
 - validation-server 模式中，计算与下载进度由约 250 ms 的非重叠状态轮询驱动，并复用 Tauri 已有的进度监听接口。
@@ -81,6 +83,9 @@
 ## 6. 导出测试
 
 - 内部诊断 PNG 固定为 `1600×1100`，包含完整 200 km 圆、发射点、100 km 比例尺、精确 dBm 色标、输入、冻结的有效地面海拔/`dem|manual` 来源、统计、版本、时区、限制和不可移除水印。
+- validation 模式的 PNG/PDF 必须由浏览器本地生成并通过 Blob 下载；不得请求服务器导出路由、上传报告正文或提交目标文件路径。
+- 浏览器 PDF 必须具有 `%PDF-1.4` 头、单页 Pages tree、JPEG XObject、有效 xref/startxref 与 EOF；非法 JPEG 或尺寸必须拒绝。
+- 多层会话只导出当前最新且未过期的单个已完成结果及其冻结参数，不导出视觉叠层合成图。
 - 地面海拔及来源必须来自计算结果 schema 3，不得在导出时用当前表单或重新读取 DEM 替换。
 - 内部诊断 PDF 为 A4 横向单页，嵌入同一报告 PNG，解析后页数和页面尺寸正确。
 - 非 PNG MIME、非法 Base64、非 `1600×1100` 图像和超限负载均被 Rust 拒绝。
@@ -661,3 +666,33 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] 必须复核 EOX 官方 capabilities、公共 endpoint 的长期可用性、速率/服务条件，以及 2025 非商业 CC BY-NC-SA 4.0 与项目实际发行方式的兼容性；商业用途需另行授权。
 - [x] EOxCloudless 在线层不是离线卫星方案；断网只保证回退 PMTiles，不保证卫星影像离线可见。
 - [x] Google Maps / Google Satellite 因 key、计费和缓存/再分发限制未进入本实现，不为其建立兼容或回退测试。
+
+## 30. 会话覆盖层与 validation 浏览器导出（2026-08-01，自动化已通过）
+
+本节的规则取代第 16、20、21 节中“validation 导出禁用”“新点/取消重算清除唯一旧结果”的历史切片行为；旧章节保留当时证据，不代表当前产品状态。
+
+### 30.1 会话覆盖层
+
+- [x] 纯状态测试覆盖不同坐标累积、完全同点替换并置顶、最多 8 项及第 9 项淘汰最早项。
+- [x] App 测试覆盖第一点计算完成、选择第二点时第一层继续存在、第二点完成后共两层，以及“清空”后归零但保留当前点。
+- [x] 取消重算只撤销当前导出身份，之前完成的会话覆盖层继续显示；被取消半成品不进入会话结果。
+- [x] MapView 测试确认两个结果拥有独立 source/layer，新增第二层不删除第一层，组件卸载逐项释放两个 Blob URL。
+- [x] desired-state 延迟清空继续覆盖 style 未就绪后在 idle 重放删除，不泄漏 layer/source/Blob。
+- [ ] 受管浏览器连续计算两个真实不同站点，视觉确认旧层、历史站点标记、最新层层级、地图/卫星切换和清空全部。
+
+### 30.2 浏览器诊断导出
+
+- [x] validation 能力矩阵改为 `canExport=true`；普通 preview 仍为 false，Tauri 仍有优先级。
+- [x] PNG 校验签名后使用浏览器 Blob 下载，返回字节数且不调用服务器导出路由。
+- [x] PDF builder 生成单页 A4 横向 PDF，测试覆盖 PDF 头、Pages tree、DCTDecode image、xref、startxref/EOF，以及非法 JPEG/尺寸拒绝。
+- [x] App 只从当前最新结果及其冻结参数创建报告；选择新点或参数过期时禁用导出，多层视觉叠放不进入报告。
+- [x] validation server 路由集合保持不变，未知 `/api/export-result` 继续 fail closed；没有服务器文件写入或任意目标路径。
+- [ ] 受管浏览器分别触发真实 PNG 与 PDF 下载并在另一 PDF 阅读器中确认一页、可打开、内容完整。
+
+### 30.3 当前执行证据
+
+- [x] TypeScript project check 通过。
+- [x] 前端全量 11 文件/73 项通过，其中 `browserExport`、`sessionCoverages`、`backend`、`MapView`、`App` 五个专项文件共 46 项。
+- [x] Rust workspace `113 passed / 5 ignored`、rustfmt、Clippy `--all-targets -D warnings`、validation 管理脚本 `bash -n` 与 self-test 通过；validation build、受管 stop/build/start/health 和 Git push 待本节最终回填。
+
+详细边界与理由见 ADR 0019。

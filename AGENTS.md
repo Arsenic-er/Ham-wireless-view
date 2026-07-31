@@ -20,7 +20,7 @@
 - Heatmap pixels are not inspectable. Do not add hover/click dBm probes.
 - Provide light and dark UI themes; default follows Windows system theme.
 - All persistent data, including partial downloads, has an immutable decimal 2.5 GB cap: 2,500,000,000 bytes.
-- No project save/history, multi-transmitter comparison, telemetry, or cloud sync in MVP.
+- Every propagation run still has one transmitter. The current app session may retain up to eight completed distinct-site coverage layers; same-site recalculation replaces that site. Do not persist them or interpret overlap as joint/multi-transmitter field strength. No project files, cross-start history, telemetry, or cloud sync in MVP.
 
 ## Map compliance
 
@@ -49,8 +49,8 @@
 - The managed platform must bind only to `127.0.0.1:1421`. Access it through SSH local forwarding. Never bind it to `0.0.0.0`, open a cloud firewall port, reuse Cockpit port `9090`, or add a public reverse proxy.
 - Do not use Docker, systemd units, Caddy, Nginx, or system-level storage for this platform. Keep data, PID files, logs, and metadata under `.runtime/validation-platform/`.
 - Use `scripts/validation-platform.sh start|status|health|stop`; never stop processes by a generic name or unverified PID. The script must continue to verify the executable and fixed bind/dist/data arguments before signalling a process.
-- Preserve the three frontend modes: Tauri has download/cache/calculate/export; validation-server has download/cache/calculate but no export; ordinary preview is interface-only and must not perform real mutation or calculation.
-- Never add server-side export or arbitrary filesystem paths to the validation API. PNG/PDF export remains a Windows/Tauri native-save workflow.
+- Preserve the three frontend modes: Tauri has download/cache/calculate/native-save export; validation-server has download/cache/calculate plus browser-local diagnostic downloads; ordinary preview is interface-only and must not perform real mutation or calculation.
+- Never add server-side export or arbitrary filesystem paths to the validation API. Validation PNG/PDF export must stay client-side through a browser Blob download, without sending report bytes or a destination path to the server.
 - Validation mode is an explicit privacy exception: test coordinates and requests leave the Windows browser for the user-controlled server through SSH. Keep the disclosure banner and do not use sensitive real coordinates.
 - Every validation-server calculation or download-family operation must begin with a server-generated CSPRNG UUIDv4 capability from `POST /api/operation-ticket`; a long request may atomically consume only a matching reserved ticket, and a busy response must not consume it.
 - Status, cancellation, progress, finish, drop cleanup, and acknowledgement must bind to the exact operation ID. Never fall back to "the current operation" or cancel by kind alone, and never add a current/list endpoint.

@@ -50,7 +50,7 @@ describe("backend mode", () => {
     });
   });
 
-  it("enables server operations but never server-side file export", () => {
+  it("enables server operations and browser-local report export", () => {
     removeTauriInternals();
     vi.stubEnv("VITE_VALIDATION_SERVER", "1");
 
@@ -59,7 +59,7 @@ describe("backend mode", () => {
       canDownload: true,
       canDeleteCache: true,
       canCalculate: true,
-      canExport: false,
+      canExport: true,
     });
   });
 
@@ -149,23 +149,22 @@ describe("validation server adapter", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("surfaces JSON API errors and refuses server-side export", async () => {
+  it("surfaces JSON API errors and validates browser export input", async () => {
     removeTauriInternals();
     vi.stubEnv("VITE_VALIDATION_SERVER", "1");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(
-        new Response(JSON.stringify({ message: "busy" }), {
-          status: 409,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ message: "busy" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(bootstrap()).rejects.toThrow("busy");
     await expect(
       exportReport({ format: "png", suggestedFileName: "x.png", reportPngDataUrl: "data:" }),
-    ).rejects.toThrow("Tauri Windows");
+    ).rejects.toThrow("图像格式");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 

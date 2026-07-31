@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import { exportReportInBrowser } from "./browserExport";
 import type {
   BootstrapInfo,
   CacheDeleteResult,
@@ -47,7 +48,7 @@ export function backendCapabilities(): BackendCapabilities {
     canDownload: mode !== "preview",
     canDeleteCache: mode !== "preview",
     canCalculate: mode !== "preview",
-    canExport: mode === "tauri",
+    canExport: mode !== "preview",
   };
 }
 
@@ -834,10 +835,11 @@ export async function cancelCalculation(): Promise<void> {
 }
 
 export async function exportReport(request: ExportRequest): Promise<ExportResult> {
-  if (!desktopBackendAvailable()) {
-    throw new Error("文件导出只在 Tauri Windows 桌面应用中可用。");
-  }
-  return invoke<ExportResult>("export_result", { request });
+  if (desktopBackendAvailable())
+    return invoke<ExportResult>("export_result", { request });
+  if (backendMode() === "validation-server")
+    return exportReportInBrowser(request);
+  throw new Error("文件导出仅在验证平台或 Tauri Windows 桌面应用中可用。");
 }
 
 export async function listenCalculationProgress(

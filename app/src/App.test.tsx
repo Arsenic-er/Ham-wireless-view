@@ -7,6 +7,7 @@ import type {
   CalculationPreview,
   CalculationResult,
   RadioParameters,
+  SessionCoverageResult,
 } from "./lib/types";
 
 const backendMocks = vi.hoisted(() => ({
@@ -26,7 +27,7 @@ vi.mock("./lib/backend", () => ({
     canDownload: backendMocks.mode !== "preview",
     canDeleteCache: backendMocks.mode !== "preview",
     canCalculate: backendMocks.mode !== "preview",
-    canExport: backendMocks.mode === "tauri",
+    canExport: backendMocks.mode !== "preview",
   }),
   bootstrap: backendMocks.bootstrap,
   inspectPoint: backendMocks.inspectPoint,
@@ -53,12 +54,12 @@ vi.mock("./lib/backend", () => ({
 vi.mock("./components/MapView", () => ({
   MapView: ({
     point,
-    heatmap,
+    heatmaps,
     preview,
     onPointSelect,
   }: {
     point: { lat: number; lon: number } | null;
-    heatmap: CalculationResult | null;
+    heatmaps: SessionCoverageResult[];
     preview: CalculationPreview | null;
     onPointSelect: (point: { lat: number; lon: number }) => void;
   }) => (
@@ -70,7 +71,8 @@ vi.mock("./components/MapView", () => ({
         select-new-point
       </button>
       <span data-testid="selected-point">{point ? `${point.lat},${point.lon}` : "none"}</span>
-      <span data-testid="heatmap">{heatmap ? "present" : "none"}</span>
+      <span data-testid="heatmap">{heatmaps.length ? "present" : "none"}</span>
+      <span data-testid="heatmap-count">{heatmaps.length}</span>
       <span data-testid="preview">{preview ? String(preview.sequence) : "none"}</span>
     </div>
   ),
@@ -237,7 +239,7 @@ afterEach(() => {
 });
 
 describe("validation server UI", () => {
-  it("discloses remote processing, enables calculation, and keeps export disabled", async () => {
+  it("discloses remote processing and enables calculation plus browser export", async () => {
     render(<App />);
 
     expect(await screen.findByText("\u5185\u90e8\u670d\u52a1\u5668\u9a8c\u8bc1")).toBeTruthy();
@@ -257,7 +259,7 @@ describe("validation server UI", () => {
     expect(backendMocks.calculate).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       const exportButton = screen.getByRole("button", { name: /\u5bfc\u51fa/ });
-      expect((exportButton as HTMLButtonElement).disabled).toBe(true);
+      expect((exportButton as HTMLButtonElement).disabled).toBe(false);
     });
   });
 
@@ -293,6 +295,33 @@ describe("validation server UI", () => {
     await waitFor(() => expect(backendMocks.calculate).toHaveBeenCalledTimes(2));
   });
 
+  it("keeps different transmitter results until clear is clicked", async () => {
+    backendMocks.calculate
+      .mockResolvedValueOnce(result)
+      .mockResolvedValueOnce({ ...result, center: { lat: 31, lon: 104 } });
+    render(<App />);
+
+    await screen.findByText("等待选择发射点");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("数据已就绪");
+    fireEvent.click(screen.getByRole("button", { name: /开始计算/ }));
+    await screen.findByText("覆盖计算完成");
+    expect(screen.getByTestId("heatmap-count").textContent).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "select-new-point" }));
+    await waitFor(() => expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("heatmap-count").textContent).toBe("1");
+    await screen.findByText("数据已就绪");
+    fireEvent.click(screen.getByRole("button", { name: /开始计算/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("heatmap-count").textContent).toBe("2"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "清空" }));
+    expect(screen.getByTestId("heatmap-count").textContent).toBe("0");
+    expect(screen.getByTestId("selected-point").textContent).toBe("31,104");
+  });
+
   it("marks a result stale after an override change and resets the override for a new point", async () => {
     render(<App />);
 
@@ -315,10 +344,10 @@ describe("validation server UI", () => {
     await waitFor(() => expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(2));
     await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
     expect(screen.getByTestId("ground-elevation-override").textContent).toBe("automatic");
-    expect(screen.getByTestId("heatmap").textContent).toBe("none");
+    expect(screen.getByTestId("heatmap").textContent).toBe("present");
   });
 
-  it("discards an older result when a recalculation is cancelled and allows a clean retry", async () => {
+  it("keeps an older map result when a recalculation is cancelled and allows a clean retry", async () => {
     backendMocks.mode = "tauri";
     let rejectCalculation: (reason?: unknown) => void = () => undefined;
     backendMocks.calculate
@@ -356,7 +385,7 @@ describe("validation server UI", () => {
     await screen.findByText("\u8ba1\u7b97\u5df2\u53d6\u6d88");
     expect(backendMocks.cancelCalculation).toHaveBeenCalledTimes(1);
     expect(backendMocks.calculate).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("heatmap").textContent).toBe("none");
+    expect(screen.getByTestId("heatmap").textContent).toBe("present");
     expect(
       (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -589,7 +618,7 @@ describe("progressive calculation preview UI", () => {
     expect(screen.getByTestId("heatmap").textContent).toBe("present");
     expect(
       (screen.getByRole("button", { name: /\u5bfc\u51fa/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "\u6e05\u7a7a" }));
     expect(screen.getByTestId("preview").textContent).toBe("none");

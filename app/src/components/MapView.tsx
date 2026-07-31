@@ -27,15 +27,16 @@ import { MapOverlayBlobUrlLease, buildMapOverlayImageSpec } from "../lib/mapOver
 import type {
   BasemapInfo,
   CalculationPreview,
-  CalculationResult,
   MapPoint,
   ResolvedTheme,
+  SessionCoverageResult,
 } from "../lib/types";
 
 interface MapViewProps {
   theme: ResolvedTheme;
   point: MapPoint | null;
-  heatmap: CalculationResult | null;
+  heatmaps: readonly SessionCoverageResult[];
+  activeHeatmapId: string | null;
   preview: CalculationPreview | null;
   heatmapStale: boolean;
   onPointSelect: (point: MapPoint) => void;
@@ -78,51 +79,146 @@ function coverageCircleData(point: MapPoint | null): FeatureCollection {
   };
 }
 
-function updateSelection(map: MapLibreMap, point: MapPoint | null): void {
+function completedPointData(heatmaps: readonly SessionCoverageResult[]): FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: heatmaps.map(({ id, result }) => ({
+      type: "Feature",
+      properties: { id },
+      geometry: {
+        type: "Point",
+        coordinates: [result.center.lon, result.center.lat],
+      },
+    })),
+  };
+}
+
+function updateSelection(
+  map: MapLibreMap,
+  point: MapPoint | null,
+  heatmaps: readonly SessionCoverageResult[],
+): void {
   (map.getSource("selected-point") as GeoJSONSource | undefined)?.setData(
     selectedPointData(point),
   );
   (map.getSource("coverage-circle") as GeoJSONSource | undefined)?.setData(
     coverageCircleData(point),
   );
+  (map.getSource("completed-points") as GeoJSONSource | undefined)?.setData(
+    completedPointData(heatmaps),
+  );
 }
 
-function updateHeatmap(
+function overlayIds(id: string): { sourceId: string; layerId: string } {
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "-");
+  return {
+    sourceId: `coverage-heatmap-${safeId}`,
+    layerId: `coverage-heatmap-layer-${safeId}`,
+  };
+}
+
+function removeOverlay(
   map: MapLibreMap,
-  heatmap: CalculationResult | CalculationPreview | null,
-  stale: boolean,
+  sourceId: string,
+  layerId: string,
   blobUrls: MapOverlayBlobUrlLease,
 ): void {
-  const source = map.getSource("coverage-heatmap") as ImageSource | undefined;
-  if (!heatmap) {
-    if (map.getLayer("coverage-heatmap-layer")) map.removeLayer("coverage-heatmap-layer");
-    if (source) map.removeSource("coverage-heatmap");
-    blobUrls.clear();
-    return;
-  }
+  if (map.getLayer(layerId)) map.removeLayer(layerId);
+  if (map.getSource(sourceId)) map.removeSource(sourceId);
+  blobUrls.clear();
+}
+
+function updateOverlay(
+  map: MapLibreMap,
+  sourceId: string,
+  layerId: string,
+  heatmap: SessionCoverageResult["result"] | CalculationPreview,
+  opacity: number,
+  blobUrls: MapOverlayBlobUrlLease,
+): void {
+  const source = map.getSource(sourceId) as ImageSource | undefined;
   const dataImage = buildMapOverlayImageSpec(heatmap);
   const image = { ...dataImage, url: blobUrls.acquire(dataImage.url) };
   if (source) {
     source.updateImage(image);
-    map.setPaintProperty("coverage-heatmap-layer", "raster-opacity", stale ? 0.28 : 0.84);
+    map.setPaintProperty(layerId, "raster-opacity", opacity);
     return;
   }
-  map.addSource("coverage-heatmap", { type: "image", ...image });
+  map.addSource(sourceId, { type: "image", ...image });
   map.addLayer(
     {
-      id: "coverage-heatmap-layer",
+      id: layerId,
       type: "raster",
-      source: "coverage-heatmap",
-      paint: { "raster-opacity": stale ? 0.28 : 0.84, "raster-resampling": "linear" },
+      source: sourceId,
+      paint: { "raster-opacity": opacity, "raster-resampling": "linear" },
     },
     firstBasemapLabelLayerId(map) ?? "coverage-circle-fill",
   );
 }
 
+function updateHeatmaps(
+  map: MapLibreMap,
+  heatmaps: readonly SessionCoverageResult[],
+  activeHeatmapId: string | null,
+  preview: CalculationPreview | null,
+  stale: boolean,
+  blobUrls: Map<string, MapOverlayBlobUrlLease>,
+  renderedIds: Set<string>,
+  previewBlobUrls: MapOverlayBlobUrlLease,
+): void {
+  const desiredIds = new Set(heatmaps.map(({ id }) => id));
+  for (const id of [...renderedIds]) {
+    if (desiredIds.has(id)) continue;
+    const { sourceId, layerId } = overlayIds(id);
+    const lease = blobUrls.get(id);
+    if (lease) removeOverlay(map, sourceId, layerId, lease);
+    blobUrls.delete(id);
+    renderedIds.delete(id);
+  }
+
+  for (const entry of heatmaps) {
+    const ids = overlayIds(entry.id);
+    let lease = blobUrls.get(entry.id);
+    if (!lease) {
+      lease = new MapOverlayBlobUrlLease();
+      blobUrls.set(entry.id, lease);
+    }
+    updateOverlay(
+      map,
+      ids.sourceId,
+      ids.layerId,
+      entry.result,
+      stale && entry.id === activeHeatmapId ? 0.28 : 0.84,
+      lease,
+    );
+    renderedIds.add(entry.id);
+  }
+
+  const previewIds = overlayIds("preview");
+  if (preview) {
+    updateOverlay(
+      map,
+      previewIds.sourceId,
+      previewIds.layerId,
+      preview,
+      0.84,
+      previewBlobUrls,
+    );
+  } else {
+    removeOverlay(
+      map,
+      previewIds.sourceId,
+      previewIds.layerId,
+      previewBlobUrls,
+    );
+  }
+}
+
 export function MapView({
   theme,
   point,
-  heatmap,
+  heatmaps,
+  activeHeatmapId,
   preview,
   heatmapStale,
   onPointSelect,
@@ -135,13 +231,19 @@ export function MapView({
   const mapRef = useRef<MapLibreMap | null>(null);
   const synchronizeMapStateRef = useRef<(() => void) | null>(null);
   const protomapsViewFittedRef = useRef(false);
-  const heatmapBlobUrlsRef = useRef<MapOverlayBlobUrlLease | null>(null);
+  const heatmapBlobUrlsRef = useRef<Map<string, MapOverlayBlobUrlLease> | null>(null);
+  const previewBlobUrlsRef = useRef<MapOverlayBlobUrlLease | null>(null);
+  const renderedHeatmapIdsRef = useRef<Set<string>>(new Set());
   if (!heatmapBlobUrlsRef.current) {
-    heatmapBlobUrlsRef.current = new MapOverlayBlobUrlLease();
+    heatmapBlobUrlsRef.current = new Map();
+  }
+  if (!previewBlobUrlsRef.current) {
+    previewBlobUrlsRef.current = new MapOverlayBlobUrlLease();
   }
   const themeRef = useRef(theme);
   const pointRef = useRef(point);
-  const heatmapRef = useRef(heatmap);
+  const heatmapsRef = useRef(heatmaps);
+  const activeHeatmapIdRef = useRef(activeHeatmapId);
   const previewRef = useRef(preview);
   const heatmapStaleRef = useRef(heatmapStale);
   const onPointSelectRef = useRef(onPointSelect);
@@ -149,7 +251,8 @@ export function MapView({
   const basemapPresentationRef = useRef(basemapPresentation);
   themeRef.current = theme;
   pointRef.current = point;
-  heatmapRef.current = heatmap;
+  heatmapsRef.current = heatmaps;
+  activeHeatmapIdRef.current = activeHeatmapId;
   previewRef.current = preview;
   heatmapStaleRef.current = heatmapStale;
   onPointSelectRef.current = onPointSelect;
@@ -157,8 +260,10 @@ export function MapView({
   basemapPresentationRef.current = basemapPresentation;
 
   useEffect(() => {
-    if (!containerRef.current || !heatmapBlobUrlsRef.current) return;
+    if (!containerRef.current || !heatmapBlobUrlsRef.current || !previewBlobUrlsRef.current) return;
     const heatmapBlobUrls = heatmapBlobUrlsRef.current;
+    const previewBlobUrls = previewBlobUrlsRef.current;
+    const renderedHeatmapIds = renderedHeatmapIdsRef.current;
     const releasePmtilesProtocol = acquirePmtilesProtocol();
     const dark = theme === "dark";
     const map = new maplibregl.Map({
@@ -222,12 +327,16 @@ export function MapView({
           );
         }
       }
-      updateSelection(map, pointRef.current);
-      updateHeatmap(
+      updateSelection(map, pointRef.current, heatmapsRef.current);
+      updateHeatmaps(
         map,
-        heatmapRef.current ?? previewRef.current,
-        heatmapRef.current ? heatmapStaleRef.current : false,
+        heatmapsRef.current,
+        activeHeatmapIdRef.current,
+        previewRef.current,
+        heatmapStaleRef.current,
         heatmapBlobUrls,
+        renderedHeatmapIds,
+        previewBlobUrls,
       );
     };
     const replayPendingMapState = () => {
@@ -269,6 +378,31 @@ export function MapView({
           "line-color": dark ? "#7be1d7" : "#087f74",
           "line-width": 2,
           "line-dasharray": [3, 2],
+        },
+      });
+      map.addSource("completed-points", {
+        type: "geojson",
+        data: completedPointData(heatmapsRef.current),
+      });
+      map.addLayer({
+        id: "completed-point-halo",
+        type: "circle",
+        source: "completed-points",
+        paint: {
+          "circle-radius": 9,
+          "circle-color": "#087f74",
+          "circle-opacity": 0.2,
+        },
+      });
+      map.addLayer({
+        id: "completed-point-core",
+        type: "circle",
+        source: "completed-points",
+        paint: {
+          "circle-radius": 4,
+          "circle-color": "#087f74",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 1.5,
         },
       });
       map.addSource("selected-point", {
@@ -314,7 +448,10 @@ export function MapView({
         synchronizeMapStateRef.current = null;
       }
       mapRef.current = null;
+      for (const lease of heatmapBlobUrls.values()) lease.clear();
       heatmapBlobUrls.clear();
+      renderedHeatmapIds.clear();
+      previewBlobUrls.clear();
       map.remove();
       releasePmtilesProtocol();
     };
@@ -358,7 +495,7 @@ export function MapView({
 
   useEffect(() => {
     synchronizeMapStateRef.current?.();
-  }, [heatmap, preview, heatmapStale]);
+  }, [heatmaps, activeHeatmapId, preview, heatmapStale]);
 
   useEffect(() => {
     const returnToOfflineMap = () => {

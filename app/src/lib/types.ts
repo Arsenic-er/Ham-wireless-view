@@ -277,6 +277,13 @@ export interface CalculationResult {
   statistics: CalculationStatistics;
 }
 
+export interface SessionCoverageResult {
+  id: string;
+  result: CalculationResult;
+  parameters: RadioParameters;
+  completedAt: number;
+}
+
 export type ExportFormat = "png" | "pdf";
 
 export interface ExportRequest {

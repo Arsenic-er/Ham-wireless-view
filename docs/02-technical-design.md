@@ -23,7 +23,7 @@
 - 并行：Rust Rayon 或等价线程池。
 - 本地数据库：SQLite。
 - 栅格读取：纯 Rust `tiff 0.11.3`（只启用 Deflate）读取本地 GLO-90 DEM/WBM GeoTIFF，不引入 GDAL。计算核心已经完成统一全局栅格寻址、跨边界双线性高程插值、分类水体采样和 200 km 全圆计算；正式缓存索引、原子下载、断点续传和用户发起删除已经通过 Phase 1 验证。
-- 导出：前端固定离屏 Canvas 生成 1600×1100 内部诊断报告；`hamheatmap-export` 校验 PNG、用 `printpdf 0.11.1` 封装 A4 横向 PDF 并原子保存。正式合规地图导出仍待底图授权。
+- 导出：前端固定离屏 Canvas 生成 1600×1100 内部诊断报告；Tauri 下由 `hamheatmap-export` 校验 PNG、用 `printpdf 0.11.1` 封装 A4 横向 PDF 并原子保存，validation 下由浏览器直接下载 PNG，或把报告画布转为高质量 JPEG 后嵌入单页 A4 横向 PDF。validation 不增加服务器导出端点、文件正文上传或目标路径参数。正式合规地图导出仍待底图授权。
 - 安装：Tauri NSIS 64 位安装包；额外打包便携 ZIP。
 - CI/服务器：Linux 执行格式、单元测试、核心基准，并用项目内 cargo-xwin/LLVM/NSIS 生成内部 Windows 交叉构建。
 - 正式发布：Windows 10/11 执行原生安装、WebView2、文件系统、性能和签名验证。
@@ -67,7 +67,7 @@ hamheatmap/
 
 ### 4.1 前端层
 
-- `MapView`：合规底图、中文地名、地图/卫星切换、发射点、200 km 圆、不可检查的热力图和图例；不渲染高程视觉层，也不把卫星影像解释为传播输入。
+- `MapView`：合规底图、中文地名、地图/卫星切换、当前发射点、历史站点标记、200 km 圆、最多 8 个不可检查的会话覆盖层和图例；不渲染高程视觉层，也不把卫星影像解释为传播输入。
 - `ParameterPanel`：场景、频率、功率、增益、AGL 天线高度、发射点地面海拔来源和值、极化。
 - `CalculationPanel`：开始、取消、进度、状态、模型名称。
 - `CacheManager`：已缓存区域、分类大小、删除和 2.5 GB 硬限制。
@@ -193,7 +193,7 @@ POST /api/operation-preview
 
 只有相同 exact ID 的活动 calculation 且存在 `sequence > afterSequence` 的最新帧时返回 HTTP 200；未知但格式有效的 ID、尚无新帧、非计算操作、取消中或终态返回 204，无效 JSON、未知字段、错误媒体类型和无效 ID 格式按 API 错误处理。服务器每个活动任务只保存最新一帧，不把 PNG 放入 status/terminal；取消、完成、失败或 lease Drop 都清除它。浏览器在每次 status 轮询之后串行请求 preview，保持请求不重叠，并同时校验 ID、generation 和 sequence；preview sequence 与 status sequence 相互独立。
 
-React 分开保存临时 `preview` 和权威 `result`。地图可以显示二者之一，但导出只读取 `result`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；成功响应先成为权威结果并替换预览。MapLibre 对相同 data URL 复用对象 URL，替换与卸载时释放旧对象 URL。决策依据见 ADR 0016，运行证据见 `18-progressive-coverage-preview-validation.md`。
+React 分开保存当前临时 `preview`、当前可导出的权威 `result`，以及最多 8 项的 `sessionResults`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；选择新点或取消重算只撤销当前导出身份，不删除 `sessionResults` 中已完成的其他覆盖层。成功响应冻结本次 `RadioParameters`，按精确中心坐标替换同点旧项或追加新项，并把最新项放在最上层；超过 8 项时移除最早项。MapLibre 为每个结果使用由受控 ID 派生的独立 image source/layer 和 Blob URL lease，清空与卸载时逐项释放；历史站点使用独立 GeoJSON source。导出始终只读取当前最新的 `result` 及其冻结参数，不做多层合成。预览决策见 ADR 0016，会话层决策见 ADR 0019。
 
 ### 4.2.4 天地图 fallback、历史验证与地图状态
 
@@ -201,7 +201,7 @@ validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu
 
 前端只有在 provider、模式、模板、缩放和 `vec/cva` 元数据全部匹配固定契约时才增加 raster source。底图矢量层在经纬网下方，中文注记位于热力图上方，发射点标记保持最上层。token 缺失时 `enabled=false`，MapView 继续显示 WGS84 内部测试画布。
 
-MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最大宽度，随 move 事件自动更新。MapView 以 refs 保存最新 basemap、point、result、preview 和 stale 状态；若 style 暂不可操作，同步标记为 pending，并在 load 后或 `styledata/idle` 恢复时重放。这样清空 props 不会因一次 `isStyleLoaded=false` 而丢失，恢复时会删除 heatmap layer/source 并释放 Blob URL。验证记录见 `20-tianditu-basemap-proxy.md`。
+MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最大宽度，随 move 事件自动更新。MapView 以 refs 保存最新 basemap、point、`sessionResults`、active ID、preview 和 stale 状态；若 style 暂不可操作，同步标记为 pending，并在 load 后或 `styledata/idle` 恢复时重放。这样清空 props 不会因一次 `isStyleLoaded=false` 而丢失，恢复时会删除全部不再需要的 heatmap layer/source 并逐项释放 Blob URL。验证记录见 `20-tianditu-basemap-proxy.md`。
 
 该代理只用于回环 validation 在线验证。正式 Windows 离线底图仍需要完整 `CompliantBasemapProvider`、有效审图号、离线/再分发/导出授权和签名清单。
 
@@ -396,7 +396,7 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - 渲染纹理使用固定颜色查找表，禁止按每次结果自动拉伸。
 - 热力图图层设置为无交互；不向前端暴露按像素查询命令。
 - 结果元数据包含输入哈希、模型版本、数据版本、计算时间和 warning 统计。
-- 当前会话只保留一个完整结果。
+- 当前会话最多保留 8 个不同发射点的完整结果；同点重算替换，最新结果置顶，第 9 个不同点淘汰最早项，重启不恢复。
 - 计算结果 schema 3 冻结有效发射点地面海拔与 `dem/manual` 来源；bootstrap schema 仍为 2。
 - 同一结果包含两个固定 `401×401` 渲染产品：局部等距原始 PNG 用于内部报告；反向重采样、轴对齐 EPSG:3857 PNG 用于 MapLibre。
 - 地图覆盖层元数据显式记录 `EPSG:3857`、宽高和 WGS-84 四角；四角对应扩展半个像素后的图像外边缘。
@@ -507,7 +507,7 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 发射点地面海拔字段缺失、`null` 和有限手动值的反序列化；`-500/9000` 边界与非有限/越界拒绝。
 - 手动模式仍读取中心 DEM，且只替换 PFL 首样点；DEM 自动基线、AGL、后续 DEM 与 WBM 语义保持不变。
 - schema 3 的 `txGroundElevationM` 与 `txGroundElevationSource` 序列化，以及 bootstrap schema 2 不变。
-- 场景预设保留覆盖、新点重置 DEM 自动、清空热力图保留覆盖、冻结导出读取结果而非表单。
+- 场景预设保留覆盖、新点重置 DEM 自动但保留其他已完成覆盖层、清空全部会话层并保留当前点/覆盖、冻结导出读取结果快照而非表单。
 - 下载 Agent 的 HTTPS-only、零重定向与有限超时配置；HEAD 只接受 200 元数据。
 - 取消、读取错误、early EOF 和部分写入错误都覆盖 partial/SQLite 一致性；写错误后的游标读取失败、游标越界或检查点失败均不掩盖原始错误，且不可信 partial 不能在同进程或重启后续传。
 
@@ -533,8 +533,9 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 离线选择未缓存区域。
 - 计算中取消。
 - 达到和试图超过 2,500,000,000 字节硬上限。
-- 清空地图不删除缓存。
-- PNG/PDF 导出。
+- 不同发射点连续计算保留独立覆盖层，同点重算替换，超过 8 项淘汰最早项。
+- 清空全部会话覆盖层但不删除缓存。
+- Tauri 原生保存与 validation 浏览器本地 PNG/PDF 导出。
 
 ## 14. 数据与法律风险
 
