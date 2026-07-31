@@ -1,15 +1,17 @@
 # Windows 服务器交叉构建记录
 
-- 日期：2026-07-16
+- 日期：2026-08-01
 - 主机：JAIST `/home/ubuntu/hamheatmap`
 - 目标：`x86_64-pc-windows-msvc`
-- 状态：服务器构建通过；Windows 实机冒烟仍需单独记录
+- 源提交：`59ae5b188f48db52618846246de27eb0cfe6bbba`
+- 状态：Tauri 交叉构建第二次执行退出 0；Windows 实机与真实中国大陆网络仍需单独记录
+- 发布边界：正式 NSIS 内嵌离线 WebView2、按当前用户安装，产物未签名
 
 ## 目标与边界
 
-所有源码、依赖、工具链、缓存和安装包均留在服务器。Windows 开发机只接收原始 `HamHeatmap.exe`，不复制源码、`node_modules`、Rust target、SDK 或 NSIS 安装包。
+所有源码、依赖、工具链和构建缓存均留在服务器。Windows 电脑只接收最终 standalone EXE 或 NSIS 安装包，不复制源码、`node_modules`、Rust target 或 SDK。
 
-该构建用于内部 Alpha 验证。它尚未完成代码签名、Windows 10/11 双系统安装测试、2.5 GB 配额压力测试和中国大陆公开发行地图合规，因此不能公开分发。
+该构建用于内部 Alpha 验证。它尚未完成代码签名、Windows 10/11 双系统安装测试、有效个人天地图 `tk` 实测和中国大陆真实 ISP 可达性验证，因此不能据此宣称桌面或中国大陆网络已经验收。
 
 ## 一条命令构建
 
@@ -20,7 +22,7 @@ cd /home/ubuntu/hamheatmap
 scripts/tauri-windows-cross.sh
 ```
 
-脚本只使用 `.tools/` 中的 Node、Rust、cargo-xwin、xwin SDK、LLVM、NSIS 和 proot，并执行 Tauri production build。它不会写入 Windows 开发机，也不要求服务器安装系统级 NSIS。
+脚本只使用 `.tools/` 中的 Node、Rust、cargo-xwin、xwin SDK、LLVM、NSIS 和 proot，并执行 Tauri production build。2026-08-01 基于上述源提交的第二次完整执行退出 0；它不会写入 Windows 开发机，也不要求服务器安装系统级 NSIS。
 
 ## 产物
 
@@ -36,12 +38,18 @@ app/src-tauri/target/x86_64-pc-windows-msvc/release/HamHeatmap.exe
 app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/HamHeatmap_0.1.0_x64-setup.exe
 ```
 
-2026-07-16 已验证产物：
+2026-08-01 已验证产物：
 
 | 产物 | 大小 | SHA-256 |
 |---|---:|---|
-| `HamHeatmap.exe` | 16,039,936 bytes | `e984f112cb0ba2dc3918beca3a04719fd4e398629604d72d802e48074a55dc8a` |
-| `HamHeatmap_0.1.0_x64-setup.exe` | 211,209,699 bytes | `adad47b3020d4ac86e34f865b5f3a3993ed75aac7e6b6621d39530e2fc7ba58d` |
+| `HamHeatmap.exe` | 16,104,960 bytes | `1146de0f7bbd0e409c676c3f75d5c7f6741700252418ebfcf15212c343bda7ed` |
+| `HamHeatmap_0.1.0_x64-setup.exe` | 217,258,090 bytes | `46434fc5179ae8d5dd65acdb1c251907292aa689a10755aa6ac08a932d2c2000` |
+
+## Windows 在线地图能力
+
+该构建包含天地图在线普通地图 `vec+cva` 和卫星图 `img+cia`。用户在应用内输入个人 `tk`；前端只获得固定 `tianditu:` 模板和配置状态，Windows Rust 后端使用当前用户 DPAPI 加密后保存到应用本地数据目录。
+
+瓦片代理固定请求天地图 HTTPS Web Mercator 服务，执行路径、坐标、大小、MIME 与图片签名检查，响应为 `no-store`。瓦片不会持久缓存，不计入 2.5 GB DEM/WBM 配额，也不进入诊断 PNG/PDF。上述能力已经自动化和交叉编译验证，但尚未使用有效 `tk` 在 Windows 实机或中国大陆真实 ISP 上验收。
 
 ## 运行库策略
 
@@ -68,13 +76,24 @@ scripts/cargo-project.sh clippy --workspace --all-targets --locked -- -D warning
 scripts/node-project.sh --prefix app run check
 scripts/node-project.sh --prefix app test -- --run
 scripts/node-project.sh --prefix app run build
+scripts/cargo-xwin-static.sh check --manifest-path app/src-tauri/Cargo.toml --all-targets --locked --target x86_64-pc-windows-msvc
+scripts/cargo-xwin-static.sh clippy --manifest-path app/src-tauri/Cargo.toml --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
+scripts/cargo-xwin-static.sh test --manifest-path app/src-tauri/Cargo.toml --lib --no-run --locked --target x86_64-pc-windows-msvc
 bash -n scripts/cargo-xwin-static.sh scripts/makensis-project.sh scripts/tauri-windows-cross.sh
 ```
 
+## 自动化与交叉构建结果
+
+本次证据为：前端 `11 files / 79 tests`；Rust workspace `113 passed / 5 ignored`；TypeScript、production build、rustfmt、workspace Clippy 和 validation 管理 self-test 通过；Windows xwin all-target check、严格 Clippy 与测试程序 `--no-run` 通过。交叉编译成功证明目标代码可编译和打包，不等于测试程序已在 Windows 上执行。
+
+正式 NSIS 包含离线 WebView2，安装范围为当前用户；standalone EXE 和 NSIS 均未签名。
+
 ## Windows 实机门槛
 
-- 直接启动原始 EXE，确认主题、空白合规占位地图、参数面板和缓存状态正常。
-- 第二次启动只聚焦已有窗口，不产生第二个主实例。
-- 在 Windows 10 与 11 分别验证离线安装、卸载和 WebView2 安装路径。
-- 验证取消、Range 续传、缓存删除失败回滚、接近 2.5 GB 上限和离线计算。
-- 公开发布前完成代码签名及中国大陆底图授权、审图号和导出授权。
+- [ ] 在 Windows 10 和 Windows 11 分别启动 standalone EXE，验证主题、参数、缓存、计算、导出和第二实例聚焦。
+- [ ] 在 Windows 10 和 Windows 11 分别验证当前用户 NSIS 的离线 WebView2 安装、启动和卸载，以及 SmartScreen/未签名提示。
+- [ ] 使用用户自己的有效天地图 `tk` 验证 `vec+cva`、`img+cia`、中文注记、动态比例尺、替换/清除和重启后 DPAPI 恢复。
+- [ ] 验证断网、弱网、无效 `tk`、配额错误、取消、Range 续传、缓存删除失败回滚、接近 2.5 GB 上限和离线传播计算。
+- [ ] 从至少一个中国大陆家庭或移动网络验证瓦片可达；不得从服务器或其他地区的请求结果外推。
+- [ ] 在实机检查 DevTools、日志、崩溃信息、bootstrap 和导出文件不含 `tk`，并确认诊断 PNG/PDF 不包含在线底图。
+- [ ] 公开发布前完成代码签名以及所需地图服务、应用分发和导出授权审查。

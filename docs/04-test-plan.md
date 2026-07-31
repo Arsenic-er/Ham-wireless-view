@@ -1,7 +1,7 @@
 # HamHeatmap MVP 测试计划
 
 - 文档版本：0.1-draft
-- 日期：2026-07-16
+- 日期：2026-08-01
 
 ## 1. 测试层级
 
@@ -697,29 +697,33 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 详细边界与理由见 ADR 0019。
 
-## 31. Windows 在线天地图与安装包（2026-08-01，开发中）
+## 31. Windows 在线天地图与安装包（2026-08-01，自动化与交叉构建已通过）
 
-本节只把服务器自动化、Windows 交叉编译和 Windows 实机证据分别记录。没有真实用户 Key 和 Windows 10/11 运行证据前，不得宣称中国大陆网络实测或桌面视觉验收通过。
+本节严格区分服务器自动化/交叉构建与 Windows 实机/真实网络证据。以下勾选项只证明代码、测试和产物构建已经通过；没有有效个人 `tk`、Windows 10/11 运行记录和中国大陆真实 ISP 证据前，不得宣称桌面视觉或中国大陆网络可达性已经验收。
 
-### 31.1 必须通过的安全与契约门禁
+### 31.1 已通过的安全与契约门禁
 
-- [ ] Rust 单元测试覆盖 `vec/cva/img/cia`、规范瓦片坐标/矩阵边界、固定 WMTS URL、无 Key 禁用、输入 Key 校验、错误 MIME/签名、超限和无密钥泄漏。
-- [ ] Windows xwin 编译覆盖 DPAPI 加密/解密路径；Linux 测试不得创建明文 Key 文件。
-- [ ] 前端只信任固定 `Tianditu + tianditu:` 元数据和四个完整模板；设置入口只在 Tauri 模式出现，临时 Key 不进入 Web Storage、URL 或渲染文本。
-- [ ] MapView 自动化覆盖普通地图 `vec+cva`、卫星图 `img+cia`、切换保持相机/覆盖层/发射点，以及未配置时 fail closed。
-- [ ] CSP 只放行固定 `tianditu:` 图片协议，不扩展任意远程 HTTPS 或脚本来源。
+- [x] Rust 单元测试覆盖 `vec/cva/img/cia`、规范瓦片坐标与矩阵边界、固定 Web Mercator WMTS URL、无 `tk` 禁用、输入校验、PNG/JPEG MIME 与签名、配额边界和错误响应不泄漏凭据。
+- [x] Windows xwin all-target check、严格 Clippy 和 `test --no-run` 均通过，覆盖 Windows DPAPI FFI 与测试程序编译；非 Windows 回退测试确认不创建明文凭据文件。
+- [x] 前端只信任固定 `Tianditu + tianditu:` 元数据和四个完整模板；设置入口只在 Tauri 模式出现，临时 `tk` 不进入 Web Storage、URL、bootstrap 或渲染文本。
+- [x] MapView 自动化覆盖普通地图 `vec+cva`、卫星图 `img+cia`、切换保持相机/覆盖层/发射点，以及未配置时 fail closed。
+- [x] production/dev CSP 只放行 `tianditu:` 及其固定 Tauri localhost 映射，不增加任意远程 HTTPS 图片源或脚本源。
+- [x] 在线瓦片强制 `no-store`，不写入持久缓存、不计入 2.5 GB DEM/WBM 配额，也不进入诊断 PNG/PDF。
 
-### 31.2 必须通过的打包门禁
+### 31.2 已通过的自动化与打包门禁
 
-- [ ] TypeScript、前端全量测试/构建、Rust workspace test/fmt/clippy、xwin 全目标 check 和脚本语法全部通过。
-- [ ] 从当前提交重新生成 x64 standalone EXE 和内嵌 WebView2 的 NSIS 安装包，并记录大小与 SHA-256。
-- [ ] 验证脚本解析 NSIS 内容，确认嵌入应用/WebView2、x64 GUI PE、静态 MSVC/UCRT、预期文件白名单和未签名状态。
+- [x] 前端 TypeScript 与 production build 通过，前端全量为 `11 files / 79 tests`。
+- [x] Rust workspace 为 `113 passed / 5 ignored`；rustfmt、workspace Clippy、validation 管理 self-test 均通过。
+- [x] Windows xwin all-target check、严格 Clippy 与测试程序 `--no-run` 通过。
+- [x] 基于源提交 `59ae5b188f48db52618846246de27eb0cfe6bbba` 的 Tauri Windows 交叉构建第二次执行退出 0。
+- [x] standalone `HamHeatmap.exe` 为 `16,104,960 bytes`，SHA-256 `1146de0f7bbd0e409c676c3f75d5c7f6741700252418ebfcf15212c343bda7ed`。
+- [x] NSIS `HamHeatmap_0.1.0_x64-setup.exe` 为 `217,258,090 bytes`，SHA-256 `46434fc5179ae8d5dd65acdb1c251907292aa689a10755aa6ac08a932d2c2000`；正式包内嵌离线 WebView2、采用当前用户安装且未签名。
 
 ### 31.3 仍需 Windows/真实网络验收
 
-- [ ] 在 Windows 10 和 Windows 11 安装、启动、卸载并确认 SmartScreen/未签名提示行为。
-- [ ] 用用户自己的有效天地图 Key 实测普通地图、卫星图、中文注记、缩放比例尺、Key 替换/清除、断网、配额错误和重启后 DPAPI 恢复。
+- [ ] 在 Windows 10 和 Windows 11 分别安装、启动、第二实例聚焦、卸载，并确认 SmartScreen/未签名提示和离线 WebView2 安装行为。
+- [ ] 使用用户自己的有效天地图 `tk` 实测普通地图、卫星图、中文注记、动态比例尺、`tk` 替换/清除、断网、配额错误和重启后 DPAPI 恢复。
 - [ ] 从至少一个中国大陆家庭或移动网络验证瓦片可达；该结果只说明测试时点和网络，不保证供应方长期可用。
-- [ ] 检查 DevTools、日志、崩溃信息、bootstrap 和导出文件均不含 Key；诊断 PNG/PDF 不包含在线底图。
+- [ ] 在 Windows 实机检查 DevTools、日志、崩溃信息、bootstrap 和导出文件均不含 `tk`，并确认诊断 PNG/PDF 不包含在线底图。
 
 详细架构和发行边界见 ADR 0020。

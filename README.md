@@ -26,6 +26,11 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 2026-08-01 又加入“地图 / 卫星”切换：联网卫星背景采用 EOxCloudless Sentinel-2 Cloudless 2025，同源代理固定 HTTPS 上游并返回 no-store；本地 places 地名、传播热力图和发射点继续叠加，卫星影像不参与 DEM/WBM 或 ITM 计算。浏览器断网或卫星 source 出错会自动退回离线地图。本轮通过 frontend check、9 files/65 tests、Rust workspace 113 passed/5 ignored、validation server 28/28、Clippy、前端构建和管理 self-test；live 四省卫星瓦片返回 JPEG 与 Cache-Control: no-store。真实浏览器视觉和 Windows 实机字体可读性仍待用户验收，详情见 docs/21-protomaps-four-province-basemap.md。
 
+Windows 桌面版现已接入天地图在线普通地图（`vec+cva`）和卫星图（`img+cia`）。用户在应用内输入自己的 `tk`；前端只取得固定的 `tianditu:` 瓦片模板和“是否已配置”状态，`tk` 由 Rust 保存到应用本地数据目录，并在 Windows 下使用当前用户 DPAPI 加密。在线瓦片响应强制 `no-store`，不会持久缓存、不会计入 2.5 GB DEM/WBM 数据配额，也不会进入诊断 PNG/PDF 导出。
+
+基于源提交 `59ae5b188f48db52618846246de27eb0cfe6bbba` 的 2026-08-01 Tauri Windows 交叉构建已在第二次执行时退出 0，生成 16,104,960 bytes 的 standalone EXE 和 217,258,090 bytes 的当前用户 NSIS 安装包；NSIS 内嵌离线 WebView2，两个产物均未签名。自动化和交叉构建已通过，但 Windows 10/11 实机、有效个人 `tk` 以及中国大陆真实家庭/移动网络的瓦片可达性仍未验收。
+
+
 > [!WARNING]
 > 当前版本是未签名的内部 Alpha。传播结果是模型估算，尚未经过外场测量校准，不得作为生命安全、应急指挥或法规合规决策的唯一依据。仓库公开的是源代码；这不代表当前占位地图或导出报告已经满足中国大陆公开地图发行要求。
 
@@ -39,6 +44,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 - 200 km 圆形范围、1 km 输出、dBm 固定色标。
 - 地形只用于隐藏计算，不在底图显示。
 - 浅色/深色 UI。
+- Windows 桌面在线天地图普通/卫星底图；个人 `tk` 由 DPAPI 加密保存，瓦片不持久缓存且不进入导出。
 - 区域数据缓存和离线计算，所有持久数据硬上限 2.5 GB。
 - 带强制水印的内部诊断 PNG/PDF；正式合规地图导出待底图授权与审图号。
 - Windows 10/11 64 位。

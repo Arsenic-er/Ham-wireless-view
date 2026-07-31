@@ -15,7 +15,7 @@ fail() {
     exit 1
 }
 
-for command in find grep sed sort stat sha256sum realpath mktemp rm cmp wc tr; do
+for command in find grep sed sort stat sha256sum realpath mktemp rm cmp wc tr dd od; do
     command -v "$command" >/dev/null 2>&1 || fail "required host command is missing: $command"
 done
 [[ -x "$readobj" ]] || fail "llvm-readobj is missing or not executable: $readobj"
@@ -158,18 +158,96 @@ webview_cert_size="$(printf '%s\n' "$webview_headers" |
 
 difference_report="$(cmp -l "$app_exe" "$embedded_app" || true)"
 difference_count="$(printf '%s\n' "$difference_report" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-[[ "$difference_count" == "3" ]] || {
-    printf 'Standalone/embedded cmp report:\n%s\n' "$difference_report" >&2
-    fail "expected three Tauri bundle-marker differences, found $difference_count"
+((difference_count >= 3)) || fail "standalone and embedded applications lack the NSIS marker patch"
+
+normalize_headers() {
+    sed -E \
+        -e 's|^File: .*|File: <normalized>|' \
+        -e 's/TimeDateStamp: .*/TimeDateStamp: <normalized>/'
 }
-first_difference="$(printf '%s\n' "$difference_report" |
-    sed -n '1{s/^[[:space:]]*\([0-9][0-9]*\).*/\1/p;}')"
-last_difference="$(printf '%s\n' "$difference_report" |
-    sed -n '$s/^[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
-[[ -n "$first_difference" && -n "$last_difference" ]] ||
-    fail "cannot parse Tauri bundle-marker offsets"
-((last_difference - first_difference <= 8)) ||
-    fail "application differences are not confined to one bundle-marker region"
+standalone_structure="$("$readobj" --file-headers --sections "$app_exe" | normalize_headers)"
+embedded_structure="$("$readobj" --file-headers --sections "$embedded_app" | normalize_headers)"
+[[ "$standalone_structure" == "$embedded_structure" ]] ||
+    fail "embedded application PE structure differs beyond the COFF timestamp"
+printf '%s\n' "$standalone_structure" | grep -F 'AddressOfNewExeHeader: 120' >/dev/null ||
+    fail "application PE header moved; COFF timestamp allowlist is no longer valid"
+
+standalone_debug="$("$readobj" --coff-debug-directory --codeview "$app_exe")"
+embedded_debug="$("$readobj" --coff-debug-directory --codeview "$embedded_app")"
+normalize_debug() {
+    sed -E \
+        -e 's|^File: .*|File: <normalized>|' \
+        -e 's/TimeDateStamp: .*/TimeDateStamp: <normalized>/' \
+        -e 's/PDBGUID: .*/PDBGUID: <normalized>/'
+}
+[[ "$(printf '%s\n' "$standalone_debug" | normalize_debug)" == \
+   "$(printf '%s\n' "$embedded_debug" | normalize_debug)" ]] ||
+    fail "embedded application debug metadata differs beyond timestamp and PDB GUID"
+standalone_debug_raw_hex="$(printf '%s\n' "$standalone_debug" |
+    sed -n 's/.*PointerToRawData: \(0x[0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p')"
+embedded_debug_raw_hex="$(printf '%s\n' "$embedded_debug" |
+    sed -n 's/.*PointerToRawData: \(0x[0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p')"
+[[ "$standalone_debug_raw_hex" =~ ^0x[0-9A-Fa-f]+$ ]] ||
+    fail "cannot locate the standalone CodeView raw data"
+[[ "$standalone_debug_raw_hex" == "$embedded_debug_raw_hex" ]] ||
+    fail "embedded application CodeView raw data moved"
+debug_raw=$((standalone_debug_raw_hex))
+((debug_raw >= 28)) || fail "invalid CodeView raw-data offset"
+debug_timestamp_start=$((debug_raw - 28 + 4 + 1))
+debug_timestamp_end=$((debug_timestamp_start + 3))
+debug_guid_start=$((debug_raw + 4 + 1))
+debug_guid_end=$((debug_guid_start + 15))
+
+marker_prefix='__TAURI_BUNDLE_TYPE_VAR_'
+standalone_marker_matches="$(grep -aobF "$marker_prefix" "$app_exe" || true)"
+embedded_marker_matches="$(grep -aobF "$marker_prefix" "$embedded_app" || true)"
+[[ "$(printf '%s\n' "$standalone_marker_matches" | sed '/^$/d' | wc -l | tr -d '[:space:]')" == "1" ]] ||
+    fail "standalone application does not contain exactly one Tauri bundle marker"
+[[ "$(printf '%s\n' "$embedded_marker_matches" | sed '/^$/d' | wc -l | tr -d '[:space:]')" == "1" ]] ||
+    fail "embedded application does not contain exactly one Tauri bundle marker"
+standalone_marker_offset="${standalone_marker_matches%%:*}"
+embedded_marker_offset="${embedded_marker_matches%%:*}"
+[[ "$standalone_marker_offset" == "$embedded_marker_offset" ]] ||
+    fail "embedded Tauri bundle marker moved"
+marker_value_offset=$((standalone_marker_offset + ${#marker_prefix}))
+marker_start=$((marker_value_offset + 1))
+marker_end=$((marker_start + 3))
+hex_slice() {
+    dd if="$1" bs=1 skip="$2" count="$3" status=none |
+        od -An -v -tx1 | tr -d '[:space:]'
+}
+[[ "$(hex_slice "$app_exe" "$marker_value_offset" 4)" == "554e4bc0" ]] ||
+    fail "standalone application has an unexpected Tauri UNKNOWN marker"
+[[ "$(hex_slice "$embedded_app" "$marker_value_offset" 4)" == "4e5353c0" ]] ||
+    fail "embedded application has an unexpected Tauri NSIS marker"
+
+coff_timestamp_start=129
+coff_timestamp_end=132
+marker_difference_count=0
+unexpected_differences=""
+while read -r position old_byte new_byte; do
+    [[ -n "${position:-}" ]] || continue
+    if ((position >= coff_timestamp_start && position <= coff_timestamp_end)); then
+        continue
+    fi
+    if ((position >= marker_start && position <= marker_end)); then
+        marker_difference_count=$((marker_difference_count + 1))
+        continue
+    fi
+    if ((position >= debug_timestamp_start && position <= debug_timestamp_end)); then
+        continue
+    fi
+    if ((position >= debug_guid_start && position <= debug_guid_end)); then
+        continue
+    fi
+    unexpected_differences+="$position $old_byte $new_byte"$'\n'
+done <<< "$difference_report"
+[[ "$marker_difference_count" == "3" ]] ||
+    fail "Tauri bundle marker does not contain exactly three patched bytes"
+if [[ -n "$unexpected_differences" ]]; then
+    printf 'Unexpected standalone/embedded differences:\n%s' "$unexpected_differences" >&2
+    fail "application differs outside approved timestamp, PDB GUID, and NSIS marker regions"
+fi
 
 echo
 echo "Application imported DLLs:"
@@ -184,8 +262,10 @@ artifact_line "cached nsis utils" "$nsis_utils"
 artifact_line "embedded application" "$embedded_app"
 artifact_line "embedded WebView2" "$embedded_webview"
 artifact_line "embedded nsis utils" "$embedded_nsis_utils"
-printf 'bundle marker bytes      count=%s offsets=%s..%s\n' \
-    "$difference_count" "$first_difference" "$last_difference"
+printf 'approved app differences count=%s marker=%s..%s coff=%s..%s debug-ts=%s..%s debug-guid=%s..%s\n' \
+    "$difference_count" "$marker_start" "$marker_end" \
+    "$coff_timestamp_start" "$coff_timestamp_end" "$debug_timestamp_start" \
+    "$debug_timestamp_end" "$debug_guid_start" "$debug_guid_end"
 printf 'WebView2 cache matches   %s of %s candidate(s)\n' \
     "${#matching_webview_candidates[@]}" "${#webview_candidates[@]}"
 echo "Application and NSIS certificate tables are empty: both artifacts are intentionally unsigned."
