@@ -48,6 +48,19 @@ export interface BasemapInfo {
   archiveBytes?: number;
   satellite?: SatelliteBasemapInfo;
 }
+export interface OnlineBasemapInfo {
+  configured: boolean;
+  provider: "Tianditu";
+  protocolScheme: "tianditu";
+  vectorTemplate: string;
+  vectorLabelTemplate: string;
+  imageryTemplate: string;
+  imageryLabelTemplate: string;
+  attribution: string;
+  minZoom: number;
+  maxZoom: number;
+}
+
 
 export interface CacheUsage {
   totalBytes: number;
@@ -68,6 +81,7 @@ export interface BootstrapInfo {
   cacheUsage: CacheUsage;
   internalBuildWarning: string;
   basemap?: BasemapInfo;
+  onlineBasemap?: OnlineBasemapInfo;
 }
 
 export interface PointInspection {

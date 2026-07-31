@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use hamheatmap_app_service::{
     AppService, BootstrapInfo, CacheDeleteResult, CacheOverview, CalculationPreview,
@@ -14,13 +14,16 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod operation_state;
+mod tile_proxy;
 use operation_state::{CancellationTarget, DesktopOperation, DesktopOperationController};
 #[cfg(windows)]
 use tauri_plugin_dialog::DialogExt;
+use tile_proxy::{BasemapInfo, TILE_PROTOCOL_SCHEME, TileProxy};
 
 struct DesktopState {
     data_root: PathBuf,
     operations: DesktopOperationController,
+    tile_proxy: Arc<TileProxy>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -257,6 +260,30 @@ fn export_result_blocking(
 }
 
 #[tauri::command]
+fn get_online_basemap(state: State<'_, DesktopState>) -> Result<BasemapInfo, String> {
+    state.tile_proxy.info()
+}
+
+#[tauri::command]
+fn configure_online_basemap(
+    token: String,
+    state: State<'_, DesktopState>,
+) -> Result<BasemapInfo, String> {
+    let lease = state
+        .operations
+        .begin(DesktopOperation::ConfiguringBasemap)?;
+    lease.finish(state.tile_proxy.configure(token))
+}
+
+#[tauri::command]
+fn clear_online_basemap(state: State<'_, DesktopState>) -> Result<BasemapInfo, String> {
+    let lease = state
+        .operations
+        .begin(DesktopOperation::ConfiguringBasemap)?;
+    lease.finish(state.tile_proxy.clear())
+}
+
+#[tauri::command]
 fn cancel_calculation(state: State<'_, DesktopState>) {
     let _ = state.operations.cancel(CancellationTarget::Calculation);
 }
@@ -268,7 +295,15 @@ fn cancel_download(state: State<'_, DesktopState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().register_asynchronous_uri_scheme_protocol(
+        TILE_PROTOCOL_SCHEME,
+        |context, request, responder| {
+            let proxy = Arc::clone(&context.app_handle().state::<DesktopState>().tile_proxy);
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(proxy.handle(request));
+            });
+        },
+    );
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         if let Some(window) = app.get_webview_window("main") {
@@ -284,9 +319,11 @@ pub fn run() {
             let data_root = app.path().app_local_data_dir().map_err(|error| {
                 std::io::Error::other(format!("cannot resolve local app data directory: {error}"))
             })?;
+            let tile_proxy = Arc::new(TileProxy::new(&data_root));
             app.manage(DesktopState {
                 data_root,
                 operations: DesktopOperationController::default(),
+                tile_proxy,
             });
             Ok(())
         })
@@ -300,7 +337,10 @@ pub fn run() {
             calculate,
             export_result,
             cancel_calculation,
-            cancel_download
+            cancel_download,
+            get_online_basemap,
+            configure_online_basemap,
+            clear_online_basemap
         ])
         .run(tauri::generate_context!())
         .expect("failed to run HamHeatmap desktop application");

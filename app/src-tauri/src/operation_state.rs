@@ -11,6 +11,7 @@ pub(crate) enum DesktopOperation {
     Calculating,
     DeletingCache,
     Exporting,
+    ConfiguringBasemap,
 }
 
 impl DesktopOperation {
@@ -24,6 +25,7 @@ impl DesktopOperation {
             Self::Calculating => "传播计算",
             Self::DeletingCache => "缓存删除",
             Self::Exporting => "结果导出",
+            Self::ConfiguringBasemap => "在线地图配置",
         }
     }
 }
@@ -212,6 +214,7 @@ mod tests {
             DesktopOperation::Calculating,
             DesktopOperation::DeletingCache,
             DesktopOperation::Exporting,
+            DesktopOperation::ConfiguringBasemap,
         ];
         assert!(
             operations

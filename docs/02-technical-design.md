@@ -14,7 +14,7 @@
 
 - 桌面框架：Tauri 2.11.5。
 - 前端：React 19.2.7 + TypeScript 7.0.2 + Vite 8.1.4。
-- 地图：MapLibre GL JS 5.24.0；普通 preview 和未配置 token 的 validation 构建使用无行政边界的 WGS84 空白坐标画布，私有 validation 可选择通过同源代理显示天地图在线 `vec/cva`。该路径不是桌面离线 provider 或公开发行合规结论。
+- 地图：MapLibre GL JS 5.24.0；Windows/Tauri 通过原生 `tianditu:` 协议显示天地图 `vec/cva` 或 `img/cia`，普通 preview 使用 WGS84 空白坐标画布，私有 validation 继续使用 PMTiles/同源代理能力矩阵。桌面与 validation 的密钥和网络路径彼此隔离。
 - 私有 validation 区域底图：MapLibre GL JS 5.24.0 + PMTiles JavaScript 4.4.1；fflate 0.8.3 为传递解压依赖。该接入以 HTTP Range 读取固定 gzip MVT 归档，天地图保留为 fallback/历史路径。
 - 私有 validation 卫星视图：已接 EOxCloudless Sentinel-2 2025 EPSG:3857 WMTS z0-14；浏览器只见固定同源路径，Rust 代理固定 HTTPS 上游、零重定向并返回 `no-store`。
 - 前端工具链：项目内固定 Node.js 24.18.0，不依赖 JAIST 主机全局 Node。
@@ -230,6 +230,18 @@ MapLibre 注册 PMTiles protocol 后构建六类可信可见 source layer：eart
 卫星 raster 位于本地 `places` 注记和传播热力图之下；切换时保留 camera、发射点、200 km 圆、预览/最终热力图和参数状态。浏览器断网或卫星 source 请求失败时切回 PMTiles 地图模式并给出非阻塞提示，不能留下空白画布；此回退不把失败瓦片写入缓存。EOx 署名在卫星模式持续可见：`EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。
 
 EOxCloudless 只是视觉背景，不进入 DEM/WBM 采样、ITM、路径陆水比例或结果统计。Google Maps / Google Satellite 不采用，因为其 API key、计费、调用策略以及离线缓存/再分发限制会引入凭据和不可控持久化边界。详细取舍见 ADR 0018。
+
+### 4.2.7 Windows/Tauri 在线天地图
+
+桌面版不复用 validation 的 HTTP 代理，而是注册固定自定义协议 `tianditu://localhost/{layer}/{z}/{x}/{y}`。普通地图组合 `vec+cva`，卫星图组合 `img+cia`；四个模板、provider、协议、缩放范围和署名由 Rust `get_online_basemap` 返回，前端严格匹配后才启用。MapLibre 从始至终看不到供应方 Key 或可变上游 URL。
+
+`configure_online_basemap` 校验用户输入后，在 Windows 用当前用户作用域 DPAPI 保存密文；`clear_online_basemap` 删除密文并立即回到未配置态。前端 Key 字段只保存本次编辑的临时值，不进入 localStorage、sessionStorage、查询字符串、bootstrap、错误文本或日志。非 Windows 编译只支持测试所需的内存态，不得用明文文件持久化。
+
+自定义协议后端只接受 `vec/cva/img/cia`、规范十进制坐标和 z1-18；它固定构造 `https://t0.tianditu.gov.cn` WMTS 请求，拒绝重定向，限制连接/读取/总超时与 2 MiB 响应体，同时验证成功状态、图片 MIME 和 PNG/JPEG 签名。响应统一 `Cache-Control: no-store`，不写入 SQLite、缓存目录、浏览器存储或 Service Worker。
+
+桌面 CSP 的 `img-src` 和 `connect-src` 都只放行 `tianditu:` 自定义协议及其 Windows 映射域 `http://tianditu.localhost`、`https://tianditu.localhost`；不开放任意公网 HTTPS。设置入口只在 Tauri 模式可见；普通 preview 和 validation-server 不获得桌面命令能力。地图/卫星切换不改变发射点、传播输入、热力图或相机。未配置 Key、断网、配额或上游错误都 fail closed，并保留可行动的设置提示。
+
+在线瓦片只作实时视觉背景，不进入 DEM/WBM/ITM、2.5 GB 持久配额或诊断 PNG/PDF。高德/腾讯不作为裸瓦片替代，因为其 GCJ-02 地图语义会与 WGS84 传播覆盖产生偏移。完整决策见 ADR 0020。
 
 ### 4.3 原生传播层
 

@@ -1,7 +1,7 @@
 import { act, fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BasemapInfo, CalculationResult, SessionCoverageResult } from "../lib/types";
+import type { BasemapInfo, CalculationResult, OnlineBasemapInfo, SessionCoverageResult } from "../lib/types";
 
 const objectUrlMocks = vi.hoisted(() => ({
   create: vi.fn(() => "blob:coverage-heatmap"),
@@ -46,6 +46,7 @@ const maplibreMocks = vi.hoisted(() => {
     removeSource: vi.fn((id: string) => {
       sources.delete(id);
     }),
+    setMaxZoom: vi.fn(),
     setLayoutProperty: vi.fn(),
     setPaintProperty: vi.fn(),
   };
@@ -143,6 +144,19 @@ const configuredProtomaps: BasemapInfo = {
     maxZoom: 14,
     tilePathTemplate: "/api/basemap/satellite/{z}/{x}/{y}",
   },
+};
+
+const configuredOnlineBasemap: OnlineBasemapInfo = {
+  configured: true,
+  provider: "Tianditu",
+  protocolScheme: "tianditu",
+  vectorTemplate: "tianditu://localhost/vec/{z}/{x}/{y}",
+  vectorLabelTemplate: "tianditu://localhost/cva/{z}/{x}/{y}",
+  imageryTemplate: "tianditu://localhost/img/{z}/{x}/{y}",
+  imageryLabelTemplate: "tianditu://localhost/cia/{z}/{x}/{y}",
+  attribution: "天地图",
+  minZoom: 1,
+  maxZoom: 18,
 };
 
 describe("MapView controls and desired-state replay", () => {
@@ -316,6 +330,85 @@ describe("MapView controls and desired-state replay", () => {
       maplibreMocks.emit("error", { sourceId: "basemap-satellite" });
     });
     expect(getByText("卫星影像不可用，已切回区域离线地图")).toBeDefined();
+
+    unmount();
+  });
+
+  it("uses desktop TianDiTu pairs and falls back to WGS84 on a custom source error", () => {
+    const { getByRole, getByText, unmount } = render(
+      <MapView
+        theme="dark"
+        point={null}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+        preview={null}
+        heatmapStale={false}
+        onPointSelect={vi.fn()}
+        onlineBasemap={configuredOnlineBasemap}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    expect(getByText("天地图在线矢量底图 · 中文地名")).toBeDefined();
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-tianditu-vector",
+      expect.objectContaining({
+        tiles: ["tianditu://localhost/vec/{z}/{x}/{y}"],
+        minzoom: 1,
+        maxzoom: 18,
+      }),
+    );
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-tianditu-label",
+      expect.objectContaining({
+        tiles: ["tianditu://localhost/cva/{z}/{x}/{y}"],
+      }),
+    );
+    expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "coverage-heatmap-layer-coverage-1" }),
+      "basemap-tianditu-label-layer",
+    );
+    expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "basemap-tianditu-label-layer" }),
+      "completed-point-halo",
+    );
+    expect(maplibreMocks.map.setMaxZoom).toHaveBeenCalledWith(18);
+
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(getByText("天地图卫星影像（联网）· 中文地名")).toBeDefined();
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-tianditu-imagery",
+      expect.objectContaining({
+        tiles: ["tianditu://localhost/img/{z}/{x}/{y}"],
+      }),
+    );
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-tianditu-imagery-label",
+      expect.objectContaining({
+        tiles: ["tianditu://localhost/cia/{z}/{x}/{y}"],
+      }),
+    );
+
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-tianditu-imagery" });
+    });
+    expect(getByText("在线地图不可用，已回退 WGS84 坐标网格")).toBeDefined();
+    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith(
+      "basemap-tianditu-imagery",
+    );
+    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith(
+      "basemap-tianditu-imagery-label",
+    );
+    expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(12);
+
+    fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(getByText("天地图在线矢量底图 · 中文地名")).toBeDefined();
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-tianditu-vector",
+      expect.any(Object),
+    );
+    expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(18);
 
     unmount();
   });

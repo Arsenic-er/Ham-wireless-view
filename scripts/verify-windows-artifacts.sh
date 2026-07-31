@@ -47,6 +47,12 @@ artifact_line() {
         "$label" "$(stat -c '%s' "$path")" "${sha%% *}" "$path"
 }
 
+sha_of() {
+    local value
+    value="$(sha256sum "$1")"
+    printf '%s' "${value%% *}"
+}
+
 app_headers="$("$readobj" --file-headers "$app_exe")"
 for field in \
     "Format: COFF-x86-64" \
@@ -83,18 +89,10 @@ fi
 
 mapfile -d '' webview_candidates < <(
     find "$target_root/.tauri/x64" -mindepth 2 -maxdepth 2 -type f \
-        -name 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' -print0
+        -name 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' -print0 | sort -z
 )
-[[ "${#webview_candidates[@]}" -eq 1 ]] ||
-    fail "expected exactly one cached x64 WebView2 installer, found ${#webview_candidates[@]}"
-webview_cache="${webview_candidates[0]}"
-[[ -s "$webview_cache" ]] || fail "cached WebView2 installer is empty"
-webview_headers="$("$readobj" --file-headers "$webview_cache")"
-webview_cert_size="$(printf '%s\n' "$webview_headers" |
-    sed -n 's/.*CertificateTableSize: \(0x[0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p')"
-[[ "$webview_cert_size" =~ ^0x[0-9A-Fa-f]+$ ]] ||
-    fail "cannot read WebView2 certificate table size"
-((webview_cert_size > 0)) || fail "WebView2 has no Authenticode certificate table blob"
+[[ "${#webview_candidates[@]}" -ge 1 ]] ||
+    fail "no cached x64 WebView2 installer was found"
 
 verify_parent="$target_root/verify"
 mkdir -p "$verify_parent"
@@ -134,13 +132,25 @@ for artifact in "$embedded_app" "$embedded_license" "$embedded_webview" "$embedd
     [[ -s "$artifact" ]] || fail "embedded artifact is missing or empty: $artifact"
 done
 
-sha_of() {
-    local value
-    value="$(sha256sum "$1")"
-    printf '%s' "${value%% *}"
-}
-[[ "$(sha_of "$embedded_webview")" == "$(sha_of "$webview_cache")" ]] ||
-    fail "embedded WebView2 differs from its Tauri cache source"
+embedded_webview_sha="$(sha_of "$embedded_webview")"
+matching_webview_candidates=()
+for candidate in "${webview_candidates[@]}"; do
+    [[ -s "$candidate" ]] || continue
+    if [[ "$(sha_of "$candidate")" == "$embedded_webview_sha" ]]; then
+        matching_webview_candidates+=("$candidate")
+    fi
+done
+[[ "${#matching_webview_candidates[@]}" -ge 1 ]] ||
+    fail "embedded WebView2 differs from every cached Tauri installer"
+webview_cache="${matching_webview_candidates[0]}"
+
+webview_headers="$("$readobj" --file-headers "$webview_cache")"
+webview_cert_size="$(printf '%s\n' "$webview_headers" |
+    sed -n 's/.*CertificateTableSize: \(0x[0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p')"
+[[ "$webview_cert_size" =~ ^0x[0-9A-Fa-f]+$ ]] ||
+    fail "cannot read WebView2 certificate table size"
+((webview_cert_size > 0)) || fail "WebView2 has no Authenticode certificate table blob"
+
 [[ "$(sha_of "$embedded_nsis_utils")" == "$(sha_of "$nsis_utils")" ]] ||
     fail "embedded nsis_tauri_utils differs from its Tauri cache source"
 [[ "$(stat -c '%s' "$embedded_app")" == "$(stat -c '%s' "$app_exe")" ]] ||
@@ -176,6 +186,8 @@ artifact_line "embedded WebView2" "$embedded_webview"
 artifact_line "embedded nsis utils" "$embedded_nsis_utils"
 printf 'bundle marker bytes      count=%s offsets=%s..%s\n' \
     "$difference_count" "$first_difference" "$last_difference"
+printf 'WebView2 cache matches   %s of %s candidate(s)\n' \
+    "${#matching_webview_candidates[@]}" "${#webview_candidates[@]}"
 echo "Application and NSIS certificate tables are empty: both artifacts are intentionally unsigned."
 echo "WebView2 CertificateTableSize=$webview_cert_size: Authenticode blob present; chain trust not verified on Linux."
 echo "Windows artifact verification passed."

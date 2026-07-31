@@ -10,6 +10,14 @@ import {
   SATELLITE_LAYER_ID,
   SATELLITE_SOURCE_ID,
   SATELLITE_TILE_PATH_TEMPLATE,
+  TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE,
+  TAURI_TIANDITU_IMAGERY_TEMPLATE,
+  TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE,
+  TAURI_TIANDITU_VECTOR_TEMPLATE,
+  TIANDITU_IMAGERY_LABEL_LAYER_ID,
+  TIANDITU_IMAGERY_LABEL_SOURCE_ID,
+  TIANDITU_IMAGERY_LAYER_ID,
+  TIANDITU_IMAGERY_SOURCE_ID,
   TIANDITU_LABEL_LAYER_ID,
   TIANDITU_LABEL_SOURCE_ID,
   TIANDITU_TILE_PATH_TEMPLATE,
@@ -17,11 +25,12 @@ import {
   TIANDITU_VECTOR_SOURCE_ID,
   firstBasemapLabelLayerId,
   isTrustedProtomapsBasemap,
+  isTrustedOnlineBasemap,
   isTrustedSatelliteBasemap,
   isTrustedTiandituBasemap,
   synchronizeBasemap,
 } from "./basemap";
-import type { BasemapInfo } from "./types";
+import type { BasemapInfo, OnlineBasemapInfo } from "./types";
 
 const configuredSatellite = {
   enabled: true,
@@ -69,9 +78,22 @@ const configuredProtomaps: BasemapInfo = {
   satellite: configuredSatellite,
 };
 
+
+const configuredOnlineBasemap: OnlineBasemapInfo = {
+  configured: true,
+  provider: "Tianditu",
+  protocolScheme: "tianditu",
+  vectorTemplate: TAURI_TIANDITU_VECTOR_TEMPLATE,
+  vectorLabelTemplate: TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE,
+  imageryTemplate: TAURI_TIANDITU_IMAGERY_TEMPLATE,
+  imageryLabelTemplate: TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE,
+  attribution: "天地图",
+  minZoom: 1,
+  maxZoom: 18,
+};
 function mapDouble() {
   const sources = new Set<string>();
-  const layers = new Set<string>(["graticule-lines", "selected-point-halo"]);
+  const layers = new Set<string>(["graticule-lines", "completed-point-halo", "selected-point-halo"]);
   const map = {
     addSource: vi.fn((id: string) => sources.add(id)),
     getSource: vi.fn((id: string) => (sources.has(id) ? { id } : undefined)),
@@ -187,7 +209,7 @@ describe("trusted basemap contracts", () => {
     expect(
       map.addLayer.mock.calls
         .slice(5)
-        .every(([, before]) => before === "selected-point-halo"),
+        .every(([, before]) => before === "completed-point-halo"),
     ).toBe(true);
     expect(firstBasemapLabelLayerId(map as never)).toBe(
       PROTOMAPS_LABEL_LAYER_IDS[0],
@@ -274,7 +296,7 @@ describe("trusted basemap contracts", () => {
     );
     expect(map.addLayer).toHaveBeenCalledWith(
       expect.objectContaining({ id: TIANDITU_LABEL_LAYER_ID }),
-      "selected-point-halo",
+      "completed-point-halo",
     );
 
     synchronizeBasemap(map as never, { ...configuredTianditu, enabled: false }, "light");
@@ -282,5 +304,82 @@ describe("trusted basemap contracts", () => {
     expect(map.removeLayer).toHaveBeenCalledWith(TIANDITU_VECTOR_LAYER_ID);
     expect(map.removeSource).toHaveBeenCalledWith(TIANDITU_LABEL_SOURCE_ID);
     expect(map.removeSource).toHaveBeenCalledWith(TIANDITU_VECTOR_SOURCE_ID);
+  });
+
+  it("accepts only the fixed Tauri TianDiTu custom-protocol metadata", () => {
+    expect(isTrustedOnlineBasemap(configuredOnlineBasemap)).toBe(true);
+    for (const untrusted of [
+      { ...configuredOnlineBasemap, configured: false },
+      { ...configuredOnlineBasemap, provider: "Other" },
+      { ...configuredOnlineBasemap, protocolScheme: "https" },
+      { ...configuredOnlineBasemap, vectorTemplate: "https://example.invalid/{z}/{x}/{y}" },
+      { ...configuredOnlineBasemap, vectorLabelTemplate: TAURI_TIANDITU_VECTOR_TEMPLATE },
+      { ...configuredOnlineBasemap, imageryTemplate: TAURI_TIANDITU_VECTOR_TEMPLATE },
+      { ...configuredOnlineBasemap, imageryLabelTemplate: TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE },
+      { ...configuredOnlineBasemap, minZoom: 0 },
+      { ...configuredOnlineBasemap, maxZoom: 19 },
+    ]) {
+      expect(isTrustedOnlineBasemap(untrusted as OnlineBasemapInfo)).toBe(false);
+    }
+  });
+
+  it("switches fixed desktop vector and imagery pairs with labels above heatmaps and below transmitters", () => {
+    const map = mapDouble();
+    synchronizeBasemap(map as never, null, "light", "map", configuredOnlineBasemap);
+
+    expect(map.addSource).toHaveBeenCalledWith(
+      TIANDITU_VECTOR_SOURCE_ID,
+      expect.objectContaining({
+        tiles: [TAURI_TIANDITU_VECTOR_TEMPLATE],
+        minzoom: 1,
+        maxzoom: 18,
+      }),
+    );
+    expect(map.addSource).toHaveBeenCalledWith(
+      TIANDITU_LABEL_SOURCE_ID,
+      expect.objectContaining({ tiles: [TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE] }),
+    );
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: TIANDITU_VECTOR_LAYER_ID }),
+      "graticule-lines",
+    );
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: TIANDITU_LABEL_LAYER_ID }),
+      "completed-point-halo",
+    );
+    expect(firstBasemapLabelLayerId(map as never)).toBe(TIANDITU_LABEL_LAYER_ID);
+
+    synchronizeBasemap(map as never, null, "dark", "satellite", configuredOnlineBasemap);
+    expect(map.removeLayer).toHaveBeenCalledWith(TIANDITU_LABEL_LAYER_ID);
+    expect(map.removeLayer).toHaveBeenCalledWith(TIANDITU_VECTOR_LAYER_ID);
+    expect(map.addSource).toHaveBeenCalledWith(
+      TIANDITU_IMAGERY_SOURCE_ID,
+      expect.objectContaining({ tiles: [TAURI_TIANDITU_IMAGERY_TEMPLATE] }),
+    );
+    expect(map.addSource).toHaveBeenCalledWith(
+      TIANDITU_IMAGERY_LABEL_SOURCE_ID,
+      expect.objectContaining({ tiles: [TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE] }),
+    );
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: TIANDITU_IMAGERY_LAYER_ID }),
+      "graticule-lines",
+    );
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: TIANDITU_IMAGERY_LABEL_LAYER_ID }),
+      "completed-point-halo",
+    );
+    expect(firstBasemapLabelLayerId(map as never)).toBe(
+      TIANDITU_IMAGERY_LABEL_LAYER_ID,
+    );
+
+    synchronizeBasemap(
+      map as never,
+      null,
+      "dark",
+      "satellite",
+      { ...configuredOnlineBasemap, imageryTemplate: "https://example.invalid" },
+    );
+    expect(map.removeSource).toHaveBeenCalledWith(TIANDITU_IMAGERY_SOURCE_ID);
+    expect(map.removeSource).toHaveBeenCalledWith(TIANDITU_IMAGERY_LABEL_SOURCE_ID);
   });
 });

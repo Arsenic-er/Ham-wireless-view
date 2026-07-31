@@ -6,6 +6,7 @@ import type {
   BasemapInfo,
   CalculationPreview,
   CalculationResult,
+  OnlineBasemapInfo,
   RadioParameters,
   SessionCoverageResult,
 } from "./lib/types";
@@ -18,6 +19,8 @@ const backendMocks = vi.hoisted(() => ({
   cancelCalculation: vi.fn(),
   cacheOverview: vi.fn(),
   estimateDownload: vi.fn(),
+  configureOnlineBasemap: vi.fn(),
+  clearOnlineBasemap: vi.fn(),
   previewHandler: null as ((preview: CalculationPreview) => void) | null,
 }));
 
@@ -28,6 +31,7 @@ vi.mock("./lib/backend", () => ({
     canDeleteCache: backendMocks.mode !== "preview",
     canCalculate: backendMocks.mode !== "preview",
     canExport: backendMocks.mode !== "preview",
+    canConfigureOnlineBasemap: backendMocks.mode === "tauri",
   }),
   bootstrap: backendMocks.bootstrap,
   inspectPoint: backendMocks.inspectPoint,
@@ -39,6 +43,8 @@ vi.mock("./lib/backend", () => ({
   downloadRegion: vi.fn(),
   estimateDownload: backendMocks.estimateDownload,
   exportReport: vi.fn(),
+  configureOnlineBasemap: backendMocks.configureOnlineBasemap,
+  clearOnlineBasemap: backendMocks.clearOnlineBasemap,
   listenCalculationPreview: vi.fn().mockImplementation(
     async (handler: (preview: CalculationPreview) => void) => {
       backendMocks.previewHandler = handler;
@@ -154,6 +160,20 @@ const tiandituBasemap: BasemapInfo = {
   tilePathTemplate: "/api/basemap/tianditu/{layer}/{z}/{x}/{y}",
 };
 
+
+const onlineBasemap: OnlineBasemapInfo = {
+  configured: true,
+  provider: "Tianditu",
+  protocolScheme: "tianditu",
+  vectorTemplate: "tianditu://localhost/vec/{z}/{x}/{y}",
+  vectorLabelTemplate: "tianditu://localhost/cva/{z}/{x}/{y}",
+  imageryTemplate: "tianditu://localhost/img/{z}/{x}/{y}",
+  imageryLabelTemplate: "tianditu://localhost/cia/{z}/{x}/{y}",
+  attribution: "天地图",
+  minZoom: 1,
+  maxZoom: 18,
+};
+
 const result: CalculationResult = {
   schemaVersion: 3,
   modelName: "NTIA ITM Point-to-Point",
@@ -187,6 +207,8 @@ const result: CalculationResult = {
 beforeEach(() => {
   backendMocks.mode = "validation-server";
   backendMocks.previewHandler = null;
+  backendMocks.configureOnlineBasemap.mockResolvedValue(onlineBasemap);
+  backendMocks.clearOnlineBasemap.mockResolvedValue({ ...onlineBasemap, configured: false });
   backendMocks.bootstrap.mockResolvedValue({
     schemaVersion: 2,
     modelName: "NTIA ITM Point-to-Point",
@@ -238,6 +260,53 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("desktop online map settings", () => {
+  it("keeps tk temporary, applies metadata, and clears configuration", async () => {
+    backendMocks.mode = "tauri";
+    backendMocks.bootstrap.mockResolvedValue({
+      schemaVersion: 2,
+      modelName: "NTIA ITM Point-to-Point",
+      modelVersion: "land-water-v1",
+      coverageRadiusKm: 200,
+      gridSize: 401,
+      cacheUsage,
+      internalBuildWarning: "internal",
+      onlineBasemap: { ...onlineBasemap, configured: false },
+    });
+    const storageSpy = vi.spyOn(Storage.prototype, "setItem");
+    render(<App />);
+
+    const settingsButton = await screen.findByRole("button", { name: /在线地图/ });
+    await waitFor(() => {
+      expect((settingsButton as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(settingsButton);
+    expect(screen.getByRole("dialog", { name: "配置天地图" })).toBeTruthy();
+    const input = screen.getByLabelText("天地图 tk") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("");
+
+    const secret = "temporary-secret-token";
+    fireEvent.change(input, { target: { value: secret } });
+    expect(input.value).toBe(secret);
+    fireEvent.click(screen.getByRole("button", { name: "保存并启用" }));
+
+    await waitFor(() => {
+      expect(backendMocks.configureOnlineBasemap).toHaveBeenCalledWith(secret);
+      expect(input.value).toBe("");
+    });
+    expect(screen.queryByDisplayValue(secret)).toBeNull();
+    expect(storageSpy.mock.calls.every(([, value]) => value !== secret)).toBe(true);
+    expect(screen.getByText("在线地图已配置。地图和卫星影像均通过本机安全代理读取。")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "清除配置" }));
+    await waitFor(() => expect(backendMocks.clearOnlineBasemap).toHaveBeenCalledOnce());
+    expect(screen.getByText("已清除在线地图配置，当前使用 WGS84 坐标网格。")).toBeTruthy();
+    expect(
+      screen.getByText("未配置受信任的真实底图；当前只显示 WGS84 坐标网格。"),
+    ).toBeTruthy();
+  });
+});
 describe("validation server UI", () => {
   it("discloses remote processing and enables calculation plus browser export", async () => {
     render(<App />);

@@ -696,3 +696,30 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] Rust workspace `113 passed / 5 ignored`、rustfmt、Clippy `--all-targets -D warnings`、validation 管理脚本 `bash -n` 与 self-test 通过；功能提交 `6261f8dc22bdeeefcdd19e923582d72f5918fbb0` 已推送并完成干净的 validation stop/build/start，PID 2496862 只监听 `127.0.0.1:1421`，服务器与 Windows SSH 隧道 health 均为 HTTP 200。
 
 详细边界与理由见 ADR 0019。
+
+## 31. Windows 在线天地图与安装包（2026-08-01，开发中）
+
+本节只把服务器自动化、Windows 交叉编译和 Windows 实机证据分别记录。没有真实用户 Key 和 Windows 10/11 运行证据前，不得宣称中国大陆网络实测或桌面视觉验收通过。
+
+### 31.1 必须通过的安全与契约门禁
+
+- [ ] Rust 单元测试覆盖 `vec/cva/img/cia`、规范瓦片坐标/矩阵边界、固定 WMTS URL、无 Key 禁用、输入 Key 校验、错误 MIME/签名、超限和无密钥泄漏。
+- [ ] Windows xwin 编译覆盖 DPAPI 加密/解密路径；Linux 测试不得创建明文 Key 文件。
+- [ ] 前端只信任固定 `Tianditu + tianditu:` 元数据和四个完整模板；设置入口只在 Tauri 模式出现，临时 Key 不进入 Web Storage、URL 或渲染文本。
+- [ ] MapView 自动化覆盖普通地图 `vec+cva`、卫星图 `img+cia`、切换保持相机/覆盖层/发射点，以及未配置时 fail closed。
+- [ ] CSP 只放行固定 `tianditu:` 图片协议，不扩展任意远程 HTTPS 或脚本来源。
+
+### 31.2 必须通过的打包门禁
+
+- [ ] TypeScript、前端全量测试/构建、Rust workspace test/fmt/clippy、xwin 全目标 check 和脚本语法全部通过。
+- [ ] 从当前提交重新生成 x64 standalone EXE 和内嵌 WebView2 的 NSIS 安装包，并记录大小与 SHA-256。
+- [ ] 验证脚本解析 NSIS 内容，确认嵌入应用/WebView2、x64 GUI PE、静态 MSVC/UCRT、预期文件白名单和未签名状态。
+
+### 31.3 仍需 Windows/真实网络验收
+
+- [ ] 在 Windows 10 和 Windows 11 安装、启动、卸载并确认 SmartScreen/未签名提示行为。
+- [ ] 用用户自己的有效天地图 Key 实测普通地图、卫星图、中文注记、缩放比例尺、Key 替换/清除、断网、配额错误和重启后 DPAPI 恢复。
+- [ ] 从至少一个中国大陆家庭或移动网络验证瓦片可达；该结果只说明测试时点和网络，不保证供应方长期可用。
+- [ ] 检查 DevTools、日志、崩溃信息、bootstrap 和导出文件均不含 Key；诊断 PNG/PDF 不包含在线底图。
+
+详细架构和发行边界见 ADR 0020。

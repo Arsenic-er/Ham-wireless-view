@@ -15,9 +15,12 @@ tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 hamheatmap-app-service = { path = "../../crates/app-service" }
+hamheatmap-cache = { path = "../../crates/cache" }
 hamheatmap-export = { path = "../../crates/export" }
 serde = { version = "1.0.228", features = ["derive"] }
 tauri = { version = "=2.11.5", features = [] }
+ureq = { version = "=3.3.0", default-features = false, features = ["rustls"] }
+zeroize = "1.8.2"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "=2.4.3"

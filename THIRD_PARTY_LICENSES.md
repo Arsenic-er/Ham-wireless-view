@@ -15,6 +15,8 @@ bill of materials and notice file required before public distribution.
 | `ureq` | 3.3.0 | MIT OR Apache-2.0 | Blocking HTTPS download client |
 | `sha2` | 0.11.0 | MIT OR Apache-2.0 | Streaming SHA-256 integrity checks |
 | `printpdf` | 0.11.1 | MIT | Offline single-page PDF report encoding |
+| `zeroize` | 1.8.2 | MIT OR Apache-2.0 | Clears desktop online-map credential buffers |
+| Tianditu online WMTS | User-supplied account key / current service | Provider service terms apply; no tiles or key bundled | Transient Windows map and imagery display only |
 | `tauri-plugin-dialog` | 2.7.1 | Apache-2.0 OR MIT | Native Windows save dialog |
 | `fs4` | 1.1.0 | MIT OR Apache-2.0 | Cross-platform disk-space inspection |
 | PMTiles JavaScript | 4.4.1 | BSD-3-Clause | MapLibre PMTiles protocol and Range client |

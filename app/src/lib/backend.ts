@@ -19,6 +19,7 @@ import type {
   OperationKind,
   OperationStatus,
   OperationTicket,
+  OnlineBasemapInfo,
   PointInspection,
 } from "./types";
 
@@ -32,6 +33,7 @@ export interface BackendCapabilities {
   canDeleteCache: boolean;
   canCalculate: boolean;
   canExport: boolean;
+  canConfigureOnlineBasemap: boolean;
 }
 
 export function backendMode(): BackendMode {
@@ -49,6 +51,7 @@ export function backendCapabilities(): BackendCapabilities {
     canDeleteCache: mode !== "preview",
     canCalculate: mode !== "preview",
     canExport: mode !== "preview",
+    canConfigureOnlineBasemap: mode === "tauri",
   };
 }
 
@@ -647,9 +650,45 @@ async function cancelValidationOperation(
   }
 }
 
+export async function getOnlineBasemap(): Promise<OnlineBasemapInfo | null> {
+  if (!desktopBackendAvailable()) return null;
+  return invoke<OnlineBasemapInfo | null>("get_online_basemap");
+}
+
+export async function configureOnlineBasemap(token: string): Promise<OnlineBasemapInfo> {
+  if (!desktopBackendAvailable()) {
+    throw new Error("在线地图设置只在 Tauri Windows 桌面应用中可用。");
+  }
+  const value = token.trim();
+  if (!value) throw new Error("请输入天地图 tk。");
+  return invoke<OnlineBasemapInfo>("configure_online_basemap", { token: value });
+}
+
+export async function clearOnlineBasemap(): Promise<OnlineBasemapInfo> {
+  if (!desktopBackendAvailable()) {
+    throw new Error("在线地图设置只在 Tauri Windows 桌面应用中可用。");
+  }
+  return invoke<OnlineBasemapInfo>("clear_online_basemap");
+}
+
 export async function bootstrap(): Promise<BootstrapInfo> {
   if (desktopBackendAvailable()) {
-    return invoke<BootstrapInfo>("bootstrap");
+    const value = await invoke<BootstrapInfo>("bootstrap");
+    try {
+      const onlineBasemap = await getOnlineBasemap();
+      return {
+        ...value,
+        onlineBasemap: onlineBasemap ?? undefined,
+      };
+    } catch {
+      // Propagation features remain available when online map metadata cannot
+      // be loaded. The map will show the local WGS84 grid instead.
+      return {
+        ...value,
+        basemap: undefined,
+        onlineBasemap: undefined,
+      };
+    }
   }
   if (backendMode() === "validation-server") {
     return validationRequest<BootstrapInfo>("/api/bootstrap");

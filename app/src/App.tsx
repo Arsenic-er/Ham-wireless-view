@@ -5,10 +5,12 @@ import { ParameterPanel } from "./components/ParameterPanel";
 import {
   backendCapabilities,
   bootstrap,
+  clearOnlineBasemap,
   cacheOverview as loadCacheOverview,
   calculate,
   cancelCalculation,
   cancelDownload,
+  configureOnlineBasemap,
   deleteCacheRegion,
   exportReport,
   downloadRegion,
@@ -20,6 +22,7 @@ import {
 } from "./lib/backend";
 import {
   isTrustedProtomapsBasemap,
+  isTrustedOnlineBasemap,
   isTrustedTiandituBasemap,
 } from "./lib/basemap";
 import {
@@ -135,10 +138,16 @@ export function App() {
   const [deletingRegion, setDeletingRegion] = useState(false);
   const capabilities = backendCapabilities();
   const validationServerMode = capabilities.mode === "validation-server";
+  const desktopMode = capabilities.mode === "tauri";
   const [exportOpen, setExportOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [mapSettingsOpen, setMapSettingsOpen] = useState(false);
+  const [mapToken, setMapToken] = useState("");
+  const [mapSettingsBusy, setMapSettingsBusy] = useState(false);
+  const [mapSettingsMessage, setMapSettingsMessage] = useState<string | null>(null);
+  const [mapSettingsError, setMapSettingsError] = useState<string | null>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -235,7 +244,8 @@ export function App() {
     isDownloading ||
     isCalculating ||
     cancellationPending;
-  const isBusy = pointSelectionLocked || deletingRegion || exportingFormat !== null;
+  const isBusy =
+    pointSelectionLocked || deletingRegion || exportingFormat !== null || mapSettingsBusy;
   const canCalculate = Boolean(
     capabilities.canCalculate &&
       point &&
@@ -622,6 +632,74 @@ export function App() {
     setPreview(null);
     if (result) setResultStale(true);
   }
+  function openMapSettings() {
+    if (!desktopMode || isBusy) return;
+    setMapToken("");
+    setMapSettingsMessage(null);
+    setMapSettingsError(null);
+    setMapSettingsOpen(true);
+  }
+
+  function closeMapSettings() {
+    if (mapSettingsBusy) return;
+    setMapToken("");
+    setMapSettingsMessage(null);
+    setMapSettingsError(null);
+    setMapSettingsOpen(false);
+  }
+
+  async function handleConfigureOnlineBasemap() {
+    if (mapSettingsBusy) return;
+    if (!mapToken.trim()) {
+      setMapSettingsError("请输入天地图 tk。");
+      return;
+    }
+    setMapSettingsBusy(true);
+    setMapSettingsMessage(null);
+    setMapSettingsError(null);
+    try {
+      const onlineBasemap = await configureOnlineBasemap(mapToken);
+      setBootstrapInfo((current) =>
+        current
+          ? { ...current, basemap: undefined, onlineBasemap }
+          : current,
+      );
+      setMapSettingsMessage("在线地图已配置。地图和卫星影像均通过本机安全代理读取。");
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "请检查 tk 格式或先删除部分缓存。";
+      setMapSettingsError("在线地图配置失败：" + detail);
+    } finally {
+      setMapToken("");
+      setMapSettingsBusy(false);
+    }
+  }
+
+  async function handleClearOnlineBasemap() {
+    if (mapSettingsBusy) return;
+    setMapSettingsBusy(true);
+    setMapToken("");
+    setMapSettingsMessage(null);
+    setMapSettingsError(null);
+    try {
+      const onlineBasemap = await clearOnlineBasemap();
+      setBootstrapInfo((current) =>
+        current
+          ? { ...current, basemap: undefined, onlineBasemap }
+          : current,
+      );
+      setMapSettingsMessage("已清除在线地图配置，当前使用 WGS84 坐标网格。");
+    } catch {
+      setMapSettingsError("无法清除在线地图配置，请稍后重试。");
+    } finally {
+      setMapToken("");
+      setMapSettingsBusy(false);
+    }
+  }
 
   function handleClear() {
     if (isBusy) return;
@@ -648,7 +726,11 @@ export function App() {
     0,
     (cacheUsage?.metadataBytes ?? 0) - offlineBasemapBytes,
   );
-  const basemapStatus = isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
+  const trustedOnlineBasemap =
+    desktopMode && isTrustedOnlineBasemap(bootstrapInfo?.onlineBasemap);
+  const basemapStatus = trustedOnlineBasemap
+    ? "已接入天地图在线矢量、中文地名及卫星影像；网络不可用时自动回退 WGS84 网格。"
+    : isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
     ? "已接入区域离线真实底图及省市县乡镇地名（OpenStreetMap / Protomaps）；可切换联网卫星影像。"
     : isTrustedTiandituBasemap(bootstrapInfo?.basemap)
       ? "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。"
@@ -677,6 +759,17 @@ export function App() {
             <span>{bootstrapInfo?.modelName ?? "NTIA ITM Point-to-Point"}</span>
             <strong>200 km · 1 km/px</strong>
           </div>
+          {desktopMode && (
+            <button
+              className="header-button"
+              type="button"
+              disabled={!capabilities.canConfigureOnlineBasemap || isBusy}
+              onClick={openMapSettings}
+            >
+              <span className="button-icon">⌘</span>
+              在线地图
+            </button>
+          )}
           <button
             className="header-button"
             type="button"
@@ -734,7 +827,8 @@ export function App() {
             preview={preview}
             heatmapStale={resultStale}
             onPointSelect={handlePointSelect}
-            basemap={bootstrapInfo?.basemap ?? null}
+            basemap={desktopMode ? null : (bootstrapInfo?.basemap ?? null)}
+            onlineBasemap={desktopMode ? (bootstrapInfo?.onlineBasemap ?? null) : null}
           />
           <div className="legend-bar" aria-label="接收功率色标">
             <div className="legend-title">
@@ -855,6 +949,76 @@ export function App() {
         </aside>
       </main>
 
+      {mapSettingsOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeMapSettings}>
+          <section
+            className="online-map-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="online-map-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Windows 在线地图</span>
+                <h2 id="online-map-title">配置天地图</h2>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭在线地图设置"
+                disabled={mapSettingsBusy}
+                onClick={closeMapSettings}
+              >
+                ×
+              </button>
+            </div>
+            <div className="online-map-status">
+              <span>当前状态</span>
+              <strong>{trustedOnlineBasemap ? "已配置" : "未配置"}</strong>
+            </div>
+            <form
+              className="online-map-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleConfigureOnlineBasemap();
+              }}
+            >
+              <label htmlFor="online-map-token">天地图 tk</label>
+              <input
+                id="online-map-token"
+                type="password"
+                value={mapToken}
+                autoComplete="new-password"
+                spellCheck={false}
+                disabled={mapSettingsBusy}
+                placeholder={trustedOnlineBasemap ? "输入新的 tk 以替换现有配置" : "输入天地图控制台提供的 tk"}
+                onChange={(event) => setMapToken(event.target.value)}
+              />
+              <p>
+                已保存的 tk 不会回显，也不会写入浏览器存储。保存或关闭后，输入框会立即清空。
+              </p>
+              {mapSettingsMessage && <p className="online-map-message">{mapSettingsMessage}</p>}
+              {mapSettingsError && <p className="online-map-error">{mapSettingsError}</p>}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  disabled={mapSettingsBusy || bootstrapInfo?.onlineBasemap?.configured !== true}
+                  onClick={() => void handleClearOnlineBasemap()}
+                >
+                  清除配置
+                </button>
+                <button
+                  type="submit"
+                  className="confirm-download"
+                  disabled={mapSettingsBusy || !mapToken.trim()}
+                >
+                  {mapSettingsBusy ? "正在应用…" : "保存并启用"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
       {exportOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={closeExportModal}>
           <section

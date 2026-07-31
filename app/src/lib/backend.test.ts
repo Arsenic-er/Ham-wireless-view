@@ -9,6 +9,9 @@ import {
   calculate,
   cancelCalculation,
   cancelDownload,
+  clearOnlineBasemap,
+  configureOnlineBasemap,
+  getOnlineBasemap,
   downloadRegion,
   estimateDownload,
   exportReport,
@@ -47,6 +50,7 @@ describe("backend mode", () => {
       canDeleteCache: false,
       canCalculate: false,
       canExport: false,
+      canConfigureOnlineBasemap: false,
     });
   });
 
@@ -60,6 +64,7 @@ describe("backend mode", () => {
       canDeleteCache: true,
       canCalculate: true,
       canExport: true,
+      canConfigureOnlineBasemap: false,
     });
   });
 
@@ -72,6 +77,112 @@ describe("backend mode", () => {
 
     expect(backendMode()).toBe("tauri");
     expect(backendCapabilities().canExport).toBe(true);
+    expect(backendCapabilities().canConfigureOnlineBasemap).toBe(true);
+  });
+
+  it("merges desktop online metadata and uses dedicated configure and clear commands", async () => {
+    const onlineBasemap = {
+      configured: true,
+      provider: "Tianditu",
+      protocolScheme: "tianditu",
+      vectorTemplate: "tianditu://localhost/vec/{z}/{x}/{y}",
+      vectorLabelTemplate: "tianditu://localhost/cva/{z}/{x}/{y}",
+      imageryTemplate: "tianditu://localhost/img/{z}/{x}/{y}",
+      imageryLabelTemplate: "tianditu://localhost/cia/{z}/{x}/{y}",
+      attribution: "天地图",
+      minZoom: 1,
+      maxZoom: 18,
+    };
+    const desktopBootstrap = {
+      schemaVersion: 2,
+      modelName: "model",
+      modelVersion: "version",
+      coverageRadiusKm: 200,
+      gridSize: 401,
+      cacheUsage: {
+        totalBytes: 0,
+        demBytes: 0,
+        waterBytes: 0,
+        partialBytes: 0,
+        metadataBytes: 0,
+        remainingBytes: 2_500_000_000,
+        capBytes: 2_500_000_000,
+      },
+      internalBuildWarning: "internal",
+    };
+    const invokeMock = vi.fn((command: string) => {
+      if (command === "bootstrap") return Promise.resolve(desktopBootstrap);
+      if (command === "get_online_basemap") return Promise.resolve(onlineBasemap);
+      if (command === "configure_online_basemap") return Promise.resolve(onlineBasemap);
+      if (command === "clear_online_basemap") {
+        return Promise.resolve({ ...onlineBasemap, configured: false });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: { invoke: invokeMock },
+    });
+
+    await expect(bootstrap()).resolves.toEqual({
+      ...desktopBootstrap,
+      onlineBasemap,
+    });
+    await expect(getOnlineBasemap()).resolves.toEqual(onlineBasemap);
+    await expect(configureOnlineBasemap("  secret-token  ")).resolves.toEqual(
+      onlineBasemap,
+    );
+    await expect(clearOnlineBasemap()).resolves.toEqual({
+      ...onlineBasemap,
+      configured: false,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "configure_online_basemap",
+      { token: "secret-token" },
+      undefined,
+    );
+    expect(invokeMock.mock.calls.flatMap(([command]) => [command])).toEqual([
+      "bootstrap",
+      "get_online_basemap",
+      "get_online_basemap",
+      "configure_online_basemap",
+      "clear_online_basemap",
+    ]);
+  });
+
+  it("falls back to grid metadata when desktop online metadata loading fails", async () => {
+    const invokeMock = vi.fn((command: string) => {
+      if (command === "bootstrap") {
+        return Promise.resolve({
+          schemaVersion: 2,
+          modelName: "model",
+          modelVersion: "version",
+          coverageRadiusKm: 200,
+          gridSize: 401,
+          cacheUsage: {
+            totalBytes: 0,
+            demBytes: 0,
+            waterBytes: 0,
+            partialBytes: 0,
+            metadataBytes: 0,
+            remainingBytes: 2_500_000_000,
+            capBytes: 2_500_000_000,
+          },
+          internalBuildWarning: "internal",
+          basemap: { enabled: true },
+        });
+      }
+      return Promise.reject(new Error("metadata unavailable"));
+    });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: { invoke: invokeMock },
+    });
+
+    await expect(bootstrap()).resolves.toEqual(
+      expect.objectContaining({ basemap: undefined, onlineBasemap: undefined }),
+    );
   });
 });
 

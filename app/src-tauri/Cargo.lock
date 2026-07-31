@@ -1645,12 +1645,15 @@ name = "hamheatmap-desktop"
 version = "0.1.0"
 dependencies = [
  "hamheatmap-app-service",
+ "hamheatmap-cache",
  "hamheatmap-export",
  "serde",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
+ "ureq",
+ "zeroize",
 ]
 
 [[package]]

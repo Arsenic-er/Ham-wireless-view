@@ -29,6 +29,10 @@
 - Production basemap must have a valid source, review number, offline/export authorization, and required attribution.
 - Do not redraw or reinterpret national/provincial boundaries.
 - Development builds using placeholder maps must say they are internal and not for public distribution.
+- The Windows online basemap uses a user-owned Tianditu key through the fixed Tauri `tianditu://localhost/{layer}/{z}/{x}/{y}` protocol; never embed a shared key or expose it to the WebView, URL, log, bootstrap payload, or Git.
+- Permit only `vec/cva/img/cia`, a fixed HTTPS upstream, canonical tile coordinates, no redirects, bounded responses, image validation, and `no-store`.
+- Protect the key with Windows current-user DPAPI. Non-Windows builds must not persist it in plaintext.
+- Online basemap tiles are transient display data: never add them to the 2.5 GB cache, bulk-download them, or include them in diagnostic PNG/PDF exports.
 
 ## Engineering rules
 

@@ -4,7 +4,7 @@ import maplibregl, {
 } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 
-import type { BasemapInfo, ResolvedTheme } from "./types";
+import type { BasemapInfo, OnlineBasemapInfo, ResolvedTheme } from "./types";
 
 export const TIANDITU_TILE_PATH_TEMPLATE =
   "/api/basemap/tianditu/{layer}/{z}/{x}/{y}";
@@ -12,6 +12,20 @@ export const TIANDITU_VECTOR_SOURCE_ID = "basemap-tianditu-vector";
 export const TIANDITU_LABEL_SOURCE_ID = "basemap-tianditu-label";
 export const TIANDITU_VECTOR_LAYER_ID = "basemap-tianditu-vector-layer";
 export const TIANDITU_LABEL_LAYER_ID = "basemap-tianditu-label-layer";
+export const TIANDITU_IMAGERY_SOURCE_ID = "basemap-tianditu-imagery";
+export const TIANDITU_IMAGERY_LABEL_SOURCE_ID = "basemap-tianditu-imagery-label";
+export const TIANDITU_IMAGERY_LAYER_ID = "basemap-tianditu-imagery-layer";
+export const TIANDITU_IMAGERY_LABEL_LAYER_ID = "basemap-tianditu-imagery-label-layer";
+
+export const TAURI_TIANDITU_VECTOR_TEMPLATE =
+  "tianditu://localhost/vec/{z}/{x}/{y}";
+export const TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE =
+  "tianditu://localhost/cva/{z}/{x}/{y}";
+export const TAURI_TIANDITU_IMAGERY_TEMPLATE =
+  "tianditu://localhost/img/{z}/{x}/{y}";
+export const TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE =
+  "tianditu://localhost/cia/{z}/{x}/{y}";
+
 
 export const SATELLITE_TILE_PATH_TEMPLATE =
   "/api/basemap/satellite/{z}/{x}/{y}";
@@ -124,6 +138,24 @@ export function isTrustedTiandituBasemap(
   const layerIds = new Set(basemap.layers.map(({ id }) => id));
   return layerIds.has("vec") && layerIds.has("cva");
 }
+export function isTrustedOnlineBasemap(
+  basemap: OnlineBasemapInfo | null | undefined,
+): basemap is OnlineBasemapInfo {
+  return (
+    basemap?.configured === true &&
+    basemap.provider === "Tianditu" &&
+    basemap.protocolScheme === "tianditu" &&
+    basemap.vectorTemplate === TAURI_TIANDITU_VECTOR_TEMPLATE &&
+    basemap.vectorLabelTemplate === TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE &&
+    basemap.imageryTemplate === TAURI_TIANDITU_IMAGERY_TEMPLATE &&
+    basemap.imageryLabelTemplate === TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE &&
+    basemap.minZoom === 1 &&
+    basemap.maxZoom === 18 &&
+    typeof basemap.attribution === "string" &&
+    basemap.attribution.length > 0 &&
+    basemap.attribution.length <= 256
+  );
+}
 
 export function isTrustedSatelliteBasemap(
   basemap: BasemapInfo | null | undefined,
@@ -174,10 +206,33 @@ function tilePath(layer: "vec" | "cva"): string {
 }
 
 function removeTiandituBasemap(map: MapLibreMap): void {
-  for (const layerId of [TIANDITU_LABEL_LAYER_ID, TIANDITU_VECTOR_LAYER_ID]) {
+  for (const layerId of [
+    TIANDITU_IMAGERY_LABEL_LAYER_ID,
+    TIANDITU_IMAGERY_LAYER_ID,
+    TIANDITU_LABEL_LAYER_ID,
+    TIANDITU_VECTOR_LAYER_ID,
+  ]) {
     if (map.getLayer(layerId)) map.removeLayer(layerId);
   }
-  for (const sourceId of [TIANDITU_LABEL_SOURCE_ID, TIANDITU_VECTOR_SOURCE_ID]) {
+  for (const sourceId of [
+    TIANDITU_IMAGERY_LABEL_SOURCE_ID,
+    TIANDITU_IMAGERY_SOURCE_ID,
+    TIANDITU_LABEL_SOURCE_ID,
+    TIANDITU_VECTOR_SOURCE_ID,
+  ]) {
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+  }
+}
+
+function removeRasterPair(
+  map: MapLibreMap,
+  sourceIds: readonly [string, string],
+  layerIds: readonly [string, string],
+): void {
+  for (const layerId of [...layerIds].reverse()) {
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+  }
+  for (const sourceId of sourceIds) {
     if (map.getSource(sourceId)) map.removeSource(sourceId);
   }
 }
@@ -246,6 +301,11 @@ function addLayerBeforeGraticule(map: MapLibreMap, layer: LayerSpecification): v
   map.addLayer(layer, map.getLayer("graticule-lines") ? "graticule-lines" : undefined);
 }
 
+function firstTransmitterLayerId(map: MapLibreMap): string | undefined {
+  if (map.getLayer("completed-point-halo")) return "completed-point-halo";
+  return map.getLayer("selected-point-halo") ? "selected-point-halo" : undefined;
+}
+
 function synchronizeTiandituBasemap(map: MapLibreMap, basemap: BasemapInfo): void {
   if (!map.getSource(TIANDITU_VECTOR_SOURCE_ID)) {
     map.addSource(TIANDITU_VECTOR_SOURCE_ID, {
@@ -284,11 +344,89 @@ function synchronizeTiandituBasemap(map: MapLibreMap, basemap: BasemapInfo): voi
         source: TIANDITU_LABEL_SOURCE_ID,
         paint: { "raster-fade-duration": 0 },
       },
-      map.getLayer("selected-point-halo") ? "selected-point-halo" : undefined,
+      firstTransmitterLayerId(map),
     );
   }
 }
 
+function addOnlineRasterPair(
+  map: MapLibreMap,
+  basemap: OnlineBasemapInfo,
+  base: { sourceId: string; layerId: string; template: string },
+  labels: { sourceId: string; layerId: string; template: string },
+): void {
+  if (!map.getSource(base.sourceId)) {
+    map.addSource(base.sourceId, {
+      type: "raster",
+      tiles: [base.template],
+      tileSize: 256,
+      minzoom: basemap.minZoom,
+      maxzoom: basemap.maxZoom,
+      attribution: basemap.attribution,
+    });
+  }
+  if (!map.getLayer(base.layerId)) {
+    addLayerBeforeGraticule(map, {
+      id: base.layerId,
+      type: "raster",
+      source: base.sourceId,
+      paint: { "raster-fade-duration": 0 },
+    });
+  }
+  if (!map.getSource(labels.sourceId)) {
+    map.addSource(labels.sourceId, {
+      type: "raster",
+      tiles: [labels.template],
+      tileSize: 256,
+      minzoom: basemap.minZoom,
+      maxzoom: basemap.maxZoom,
+      attribution: basemap.attribution,
+    });
+  }
+  if (!map.getLayer(labels.layerId)) {
+    map.addLayer(
+      {
+        id: labels.layerId,
+        type: "raster",
+        source: labels.sourceId,
+        paint: { "raster-fade-duration": 0 },
+      },
+      firstTransmitterLayerId(map),
+    );
+  }
+}
+
+function synchronizeOnlineBasemap(
+  map: MapLibreMap,
+  basemap: OnlineBasemapInfo,
+  presentation: BasemapPresentation,
+): void {
+  if (presentation === "satellite") {
+    removeRasterPair(
+      map,
+      [TIANDITU_VECTOR_SOURCE_ID, TIANDITU_LABEL_SOURCE_ID],
+      [TIANDITU_VECTOR_LAYER_ID, TIANDITU_LABEL_LAYER_ID],
+    );
+    addOnlineRasterPair(
+      map,
+      basemap,
+      { sourceId: TIANDITU_IMAGERY_SOURCE_ID, layerId: TIANDITU_IMAGERY_LAYER_ID, template: basemap.imageryTemplate },
+      { sourceId: TIANDITU_IMAGERY_LABEL_SOURCE_ID, layerId: TIANDITU_IMAGERY_LABEL_LAYER_ID, template: basemap.imageryLabelTemplate },
+    );
+    return;
+  }
+  removeRasterPair(
+    map,
+    [TIANDITU_IMAGERY_SOURCE_ID, TIANDITU_IMAGERY_LABEL_SOURCE_ID],
+    [TIANDITU_IMAGERY_LAYER_ID, TIANDITU_IMAGERY_LABEL_LAYER_ID],
+  );
+  addOnlineRasterPair(
+    map,
+    basemap,
+    { sourceId: TIANDITU_VECTOR_SOURCE_ID, layerId: TIANDITU_VECTOR_LAYER_ID, template: basemap.vectorTemplate },
+    { sourceId: TIANDITU_LABEL_SOURCE_ID, layerId: TIANDITU_LABEL_LAYER_ID, template: basemap.vectorLabelTemplate },
+  );
+}
 function protomapsLayers(theme: ResolvedTheme): LayerSpecification[] {
   const palette = PROTOMAPS_THEME_PALETTES[theme];
   return [
@@ -520,7 +658,7 @@ function synchronizeProtomapsBasemap(
     if (PROTOMAPS_LABEL_LAYER_IDS.some((layerId) => layerId === layer.id)) {
       map.addLayer(
         layer,
-        map.getLayer("selected-point-halo") ? "selected-point-halo" : undefined,
+        firstTransmitterLayerId(map),
       );
     } else {
       addLayerBeforeGraticule(map, layer);
@@ -533,7 +671,10 @@ export function firstBasemapLabelLayerId(map: MapLibreMap): string | undefined {
   for (const layerId of PROTOMAPS_LABEL_LAYER_IDS) {
     if (map.getLayer(layerId)) return layerId;
   }
-  return map.getLayer(TIANDITU_LABEL_LAYER_ID) ? TIANDITU_LABEL_LAYER_ID : undefined;
+  for (const layerId of [TIANDITU_LABEL_LAYER_ID, TIANDITU_IMAGERY_LABEL_LAYER_ID]) {
+    if (map.getLayer(layerId)) return layerId;
+  }
+  return undefined;
 }
 
 export function synchronizeBasemap(
@@ -541,7 +682,15 @@ export function synchronizeBasemap(
   basemap: BasemapInfo | null | undefined,
   theme: ResolvedTheme,
   presentation: BasemapPresentation = "map",
+  onlineBasemap?: OnlineBasemapInfo | null,
 ): void {
+  if (isTrustedOnlineBasemap(onlineBasemap)) {
+    removeSatelliteBasemap(map);
+    removeProtomapsBasemap(map);
+    synchronizeOnlineBasemap(map, onlineBasemap, presentation);
+    return;
+  }
+
   if (isTrustedProtomapsBasemap(basemap)) {
     removeTiandituBasemap(map);
     synchronizeProtomapsBasemap(map, basemap, theme, presentation);

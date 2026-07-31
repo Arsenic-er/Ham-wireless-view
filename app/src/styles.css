@@ -377,7 +377,7 @@ select:focus-visible {
   background: color-mix(in srgb, var(--surface) 90%, transparent);
   box-shadow: 0 7px 20px rgba(34, 55, 64, 0.1);
   font-size: 10px;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .map-warning-dot {
@@ -386,6 +386,21 @@ select:focus-visible {
   border-radius: 50%;
   background: var(--orange);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 18%, transparent);
+}
+
+.map-retry {
+  margin-left: 3px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface);
+  font: inherit;
+  cursor: pointer;
+}
+
+.map-retry:hover {
+  border-color: var(--accent);
 }
 
 .map-style-switch {
@@ -1370,6 +1385,87 @@ fieldset {
   cursor: not-allowed;
 }
 
+.online-map-modal {
+  width: min(500px, 100%);
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.3);
+}
+
+.online-map-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 22px 0 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.online-map-status span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.online-map-status strong {
+  color: var(--accent-strong);
+  font-size: 11px;
+}
+
+.online-map-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.online-map-form label {
+  margin-bottom: 7px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.online-map-form input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  outline: 0;
+  color: var(--text);
+  background: var(--surface);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.online-map-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.online-map-form > p {
+  margin: 9px 0 0;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.online-map-form .online-map-message,
+.online-map-form .online-map-error {
+  padding: 9px 10px;
+  border-radius: 9px;
+}
+
+.online-map-form .online-map-message {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.online-map-form .online-map-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
+}
 @keyframes pulse {
   50% {
     box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 2%, transparent);
