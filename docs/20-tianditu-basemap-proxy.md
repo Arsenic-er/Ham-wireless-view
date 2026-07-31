@@ -2,7 +2,7 @@
 
 - 日期：2026-07-31
 - 范围：私有 validation server 在线底图、MapLibre 动态比例尺和覆盖层状态重放
-- 状态：代码级专项回归已通过；当前未配置天地图 token，未执行真实瓦片或浏览器视觉烟雾
+- 状态：代码级回归和无 token 受管部署已通过；当前未配置天地图 token，未执行真实瓦片或浏览器视觉烟雾
 - 发布结论：不构成中国大陆公开地图合规、审图号、离线授权或导出授权证明
 
 ## 1. 目的与边界
@@ -111,14 +111,27 @@ scripts/validation-platform.sh basemap-token clear
 
 Rust 专项覆盖严格路径和矩阵边界、固定上游 URL、token 缺失/有效/无效文件的 fail-closed 行为，以及响应 MIME 与图片签名一致性。路由与 bootstrap 测试代码还断言 disabled、非法路径、查询注入、错误 HTTP 方法，以及元数据不泄露 token 或上游 URL。
 
-## 8. 尚未验证与发布门槛
+全量门禁同时通过：
+
+- 前端 9 个文件、56 项测试，TypeScript 与 validation Vite production build；
+- Rust workspace all-targets locked test 与 Clippy `-D warnings`；
+- Windows x64 xwin workspace/all-targets check；
+- `bash -n`、validation platform self-test 和 `git diff --check`。
+
+## 8. 受管禁用态部署
+
+revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 于 2026-07-31 完成受管 `stop → build → start → status/health`。构建时间为 `2026-07-31T12:19:55Z`，server SHA-256 为 `d5f57bd71de4f64c62359591edbbee9b23461461d63265b68dd2a5f9dac640f9`；进程 PID `2306446` 只监听 `127.0.0.1:1421`，argv 包含固定 token 文件路径。
+
+`GET /api/bootstrap` 返回固定天地图元数据、`enabled=false`，且不包含 token 或上游主机。合法 `GET /api/basemap/tianditu/vec/3/6/3` 返回 HTTP 503、JSON 和 `Cache-Control: no-store`。这证明未配置 token 时服务不会伪造或回退到来源不明的瓦片；它不证明真实上游可用。
+
+## 9. 尚未验证与发布门槛
 
 当前 token 未配置，因此没有请求真实天地图瓦片，也没有记录上游 HTTP 200、瓦片哈希、浏览器截图、控制台结果、弱网表现或调用额度。代码级测试不能替代真实上游烟雾。
 
 仍需单独完成：
 
 - 取得并按服务条款管理可用于本项目验证的 token；
-- 通过受管 `stop → build → start` 部署新 revision，并在 SSH 隧道内验证 `vec/cva`、缩放、比例尺、署名、热力图层级和清空；
+- 配置 token 并通过受管重启激活底图，在 SSH 隧道内验证 `vec/cva`、缩放、比例尺、署名、热力图层级和清空；
 - 确认天地图服务条款、调用额度、必要署名和测试用途；
 - 为 Windows 离线版取得明确的离线缓存、再分发、应用分发和 PNG/PDF 导出授权；
 - 取得有效审图号，并确认缩放、裁切、热力图叠加、标记、浅/深样式和导出是否需要送审；

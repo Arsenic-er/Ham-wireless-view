@@ -8,7 +8,7 @@
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`
-- 状态：历史构建保留为分节证据；工作区已增加可选天地图在线同源代理、动态比例尺和地图 desired-state 重放，但当前未配置 token、未部署该切片或执行真实瓦片烟雾；Windows/Tauri 实机和地图合规仍待验
+- 状态：历史构建保留为分节证据；可选天地图在线同源代理、动态比例尺和地图 desired-state 重放已受管部署。当前未配置 token，禁用态 readiness/fail-closed 已验证，但真实瓦片和浏览器视觉烟雾尚未执行；Windows/Tauri 实机和地图合规仍待验
 
 ## 1. 目标与边界
 
@@ -237,9 +237,11 @@ full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2
 
 ### 8.6 在线底图与地图控件
 
-2026-07-31 的工作区新增天地图 `vec/cva` 同源代理、私密 token 文件、右下动态公制比例尺和 MapLibre desired-state 重放。专项证据为前端 2 个文件/4 项测试、Rust `basemap::tests` 4 项测试通过。清空回归覆盖 style 暂不可用时保留 pending，并在 idle 后删除 layer/source、撤销 Blob URL。
+2026-07-31 新增天地图 `vec/cva` 同源代理、私密 token 文件、右下动态公制比例尺和 MapLibre desired-state 重放。专项证据为前端 2 个文件/4 项测试、Rust `basemap::tests` 4 项测试通过；前端全量为 9 个文件/56 项。Rust workspace all-targets、Clippy、TypeScript、validation Vite build、Windows x64 xwin、`bash -n`、管理 self-test 与 diff check 均通过。清空回归覆盖 style 暂不可用时保留 pending，并在 idle 后删除 layer/source、撤销 Blob URL。
 
-当前 token 未配置，因此没有真实瓦片、上游 HTTP 200、浏览器截图或控制台证据；该工作区切片也尚未通过受管 stop/build/start 部署。完整方法和发布边界见 `20-tianditu-basemap-proxy.md`。
+功能 revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 已完成受管 `stop → build → start → status/health`，`built_at=2026-07-31T12:19:55Z`，server SHA-256 为 `d5f57bd71de4f64c62359591edbbee9b23461461d63265b68dd2a5f9dac640f9`。新 PID `2306446` 只监听 `127.0.0.1:1421`；bootstrap 明确 `enabled=false`，合法瓦片路径返回 HTTP 503 和 `Cache-Control: no-store`。
+
+当前 token 未配置，因此没有真实瓦片、上游 HTTP 200、浏览器截图或控制台证据。完整方法和发布边界见 `20-tianditu-basemap-proxy.md`。
 
 ## 9. 真实成都验证
 
@@ -391,7 +393,7 @@ revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管 stop/build/s
 ## 10. 尚未关闭
 
 - operation capability 与渐进覆盖预览的代码回归、新构建和受管 HTTP 烟雾已通过；SSH 隧道浏览器可见预览、取消/重试 UI 和控制台仍待验证；
-- 在线天地图当前未配置 token，工作区切片尚未受管部署，真实 `vec/cva`、缩放、比例尺、署名、热力图层级与清空浏览器烟雾待验证；
+- 在线天地图当前未配置 token；禁用态已受管部署并 fail closed，真实 `vec/cva`、缩放、比例尺、署名、热力图层级与清空浏览器烟雾待验证；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；
 - 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程强制崩溃注入；
 - GPU 主机整机重启后的手动恢复流程；

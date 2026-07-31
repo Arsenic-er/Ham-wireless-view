@@ -562,11 +562,13 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 清空时序验证已有覆盖层在 `isStyleLoaded=false` 时不误操作，并在后续 `idle` 恢复后删除 layer/source、只撤销一次 Blob URL。
 - [x] Rust `basemap::tests` 4 项通过，覆盖严格瓦片路径/矩阵边界、固定上游 URL、token 文件 fail closed 和 MIME/图片签名一致性。
 - [x] bootstrap 元数据与路由测试代码断言不返回 token、上游主机或 token 文件路径；缺 token 时底图保持 disabled。
+- [x] 前端全量 9 个文件/56 项、Rust workspace all-targets、Clippy `-D warnings`、TypeScript、validation Vite build、Windows x64 xwin、`bash -n`、管理 self-test 与 diff check 通过。
+- [x] revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 已完成受管 `stop → build → start`；PID `2306446` 健康且只监听 `127.0.0.1:1421`，server SHA-256 为 `d5f57bd71de4f64c62359591edbbee9b23461461d63265b68dd2a5f9dac640f9`。
+- [x] 无 token 的实跑 bootstrap 返回固定天地图元数据和 `enabled=false`；合法瓦片路径返回 503 与 `no-store`，证明禁用态 fail closed。
 
 ### 27.2 仍未关闭
 
 - [ ] 当前未配置天地图 token；尚未取得真实 `vec/cva` HTTP 200、瓦片解码、浏览器视觉、控制台、缩放和清空烟雾证据。
-- [ ] 尚未以受管 `stop → build → start` 部署本切片并确认新 revision、PID、回环监听和 readiness。
 - [ ] 尚未验证 token 服务条款、调用额度、必要署名和弱网/上游错误用户体验。
 - [ ] 尚未取得有效审图号及 Windows 桌面离线缓存、再分发、应用分发和 PNG/PDF 导出授权。
 - [ ] 在线天地图内部验证不能替代正式 `CompliantBasemapProvider`、中国大陆有效区、签名瓦片清单或 Windows 10/11 实机。
