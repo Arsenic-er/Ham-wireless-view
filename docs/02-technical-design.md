@@ -115,12 +115,12 @@ cancel_calculation → 原子取消令牌
 
 前端默认发送 `null`，DEM/手动模式切换只改变该字段。场景预设保留它；选择不同地图点重置为 `null`，清空热力图则保留当前点和字段。有效天线 AMSL 只用于界面说明，不成为新的传播输入。
 
-`CalculationResult` 独立升级为 schema 3，并冻结：
+`CalculationResult` 的 schema 3 首次冻结以下字段；当前 schema 4 继续保持相同语义：
 
 - `txGroundElevationM`：本次计算实际使用的有限 AMSL 数值；
 - `txGroundElevationSource`：严格为 `dem` 或 `manual`。
 
-`bootstrap` 和其他 AppService 契约仍保持 schema 2。内部报告只读取 schema 3 的冻结结果值与来源，不能用计算后的表单或再次读取的 DEM 重建该字段。决策依据见 ADR 0014。
+`bootstrap` 和其他 AppService 契约仍保持 schema 2。内部报告只读取当前 CalculationResult 的冻结结果值与来源，不能用计算后的表单或再次读取的 DEM 重建该字段。schema 4 仅新增显示筛选元数据，决策依据见 ADR 0014 与 ADR 0021。
 
 ### 4.2.2 私有 validation server 操作协议
 
@@ -193,7 +193,7 @@ POST /api/operation-preview
 
 只有相同 exact ID 的活动 calculation 且存在 `sequence > afterSequence` 的最新帧时返回 HTTP 200；未知但格式有效的 ID、尚无新帧、非计算操作、取消中或终态返回 204，无效 JSON、未知字段、错误媒体类型和无效 ID 格式按 API 错误处理。服务器每个活动任务只保存最新一帧，不把 PNG 放入 status/terminal；取消、完成、失败或 lease Drop 都清除它。浏览器在每次 status 轮询之后串行请求 preview，保持请求不重叠，并同时校验 ID、generation 和 sequence；preview sequence 与 status sequence 相互独立。
 
-React 分开保存当前临时 `preview`、当前可导出的权威 `result`，以及最多 8 项的 `sessionResults`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；选择新点或取消重算只撤销当前导出身份，不删除 `sessionResults` 中已完成的其他覆盖层。成功响应冻结本次 `RadioParameters`，按精确中心坐标替换同点旧项或追加新项，并把最新项放在最上层；超过 8 项时移除最早项。MapLibre 为每个结果使用由受控 ID 派生的独立 image source/layer 和 Blob URL lease，清空与卸载时逐项释放；历史站点使用独立 GeoJSON source。导出始终只读取当前最新的 `result` 及其冻结参数，不做多层合成。预览决策见 ADR 0016，会话层决策见 ADR 0019。
+React 分开保存当前临时 `preview`、当前可导出的权威 `result`，以及最多 8 项的 `sessionResults`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；选择新点或取消重算只撤销当前导出身份，不删除 `sessionResults` 中已完成的其他覆盖层。成功响应冻结本次 `RadioParameters`，按精确中心坐标替换同点旧项或追加新项，并把最新项放在最上层；超过 8 项时移除最早项。已完成结果使用独立 MapLibre CanvasSource/layer；预览仍使用既有 image source/Blob URL。清空与卸载时逐项释放画布、图像和 Blob URL；历史站点使用独立 GeoJSON source。导出始终只读取当前最新的 `result` 及其冻结参数，不做多层合成，也不读取显示阈值。预览决策见 ADR 0016，会话层决策见 ADR 0019，显示筛选决策见 ADR 0021。
 
 ### 4.2.4 天地图 fallback、历史验证与地图状态
 
@@ -242,6 +242,23 @@ EOxCloudless 只是视觉背景，不进入 DEM/WBM 采样、ITM、路径陆水�
 桌面 CSP 的 `img-src` 和 `connect-src` 都只放行 `tianditu:` 自定义协议及其 Windows 映射域 `http://tianditu.localhost`、`https://tianditu.localhost`；不开放任意公网 HTTPS。设置入口只在 Tauri 模式可见；普通 preview 和 validation-server 不获得桌面命令能力。地图/卫星切换不改变发射点、传播输入、热力图或相机。未配置 Key、断网、配额或上游错误都 fail closed，并保留可行动的设置提示。
 
 在线瓦片只作实时视觉背景，不进入 DEM/WBM/ITM、2.5 GB 持久配额或诊断 PNG/PDF。高德/腾讯不作为裸瓦片替代，因为其 GCJ-02 地图语义会与 WGS84 传播覆盖产生偏移。完整决策见 ADR 0020。
+
+### 4.2.8 已完成覆盖层的全局场强显示阈值
+
+显示阈值只作用于已完成结果。范围固定为 `-140..-60 dBm`、步长 1 dB、默认 `-140 dBm`；最多 8 个会话层共用一个值。拖动时只改变像素 alpha，保留可见像素原本的固定色标，不调用 calculate、不改变 ITM、统计、缓存、渐进预览或诊断导出。清空覆盖层不重置阈值，应用新启动时回到默认值。
+
+`CalculationResult` 升级到 schema 4，并在既有地图 PNG 之外增加：
+
+```text
+mapOverlayFilterEncoding = "u8-dbm-floor-v1"
+mapOverlayFilterBase64   = Base64(width × height bytes)
+```
+
+`u8-dbm-floor-v1` 与同一张 EPSG:3857 地图覆盖 PNG 逐像素对齐。值 0 表示非有限、圆外或低于固定 `-140 dBm` 可视下限；值 1..81 表示 `floor(dBm) + 141`，其中所有 `>= -60 dBm` 饱和为 81。整数阈值 `t` 的 cutoff 为 `t + 141`，仅当 bin `>= cutoff` 时保留 PNG 原 alpha。该编码只携带筛选顺序，不是可查询的 float 栅格，前端仍不得提供像素检查。
+
+前端对每个最终 PNG 只解码一次，保留原始 RGBA 与校验过长度的 `Uint8Array` bins，并创建 `animate:false` 的 MapLibre `CanvasSource`。游标 `input` 事件通过 `requestAnimationFrame` 合并，并以不短于 33 ms 的间隔限制为最多 30 帧/秒；每帧只线性扫描最多 `8 × 401 × 401` 个像素并更新 alpha，然后请求一次纹理上传。相同整数值不重复绘制，旧帧不能覆盖最新值。该路径避免在拖动中重新编码 PNG、重建 source/layer 或发出 IPC/HTTP 请求。
+
+渐进预览契约保持 schema 1 和 image source，不新增 bins；显示阈值不筛预览。统计继续来自完整 float32 权威栅格，PNG/PDF 继续使用未筛选的原始报告 PNG。设计取舍见 ADR 0021。
 
 ### 4.3 原生传播层
 
@@ -409,8 +426,8 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - 热力图图层设置为无交互；不向前端暴露按像素查询命令。
 - 结果元数据包含输入哈希、模型版本、数据版本、计算时间和 warning 统计。
 - 当前会话最多保留 8 个不同发射点的完整结果；同点重算替换，最新结果置顶，第 9 个不同点淘汰最早项，重启不恢复。
-- 计算结果 schema 3 冻结有效发射点地面海拔与 `dem/manual` 来源；bootstrap schema 仍为 2。
-- 同一结果包含两个固定 `401×401` 渲染产品：局部等距原始 PNG 用于内部报告；反向重采样、轴对齐 EPSG:3857 PNG 用于 MapLibre。
+- 计算结果 schema 4 冻结有效发射点地面海拔与 `dem/manual` 来源，并携带 `u8-dbm-floor-v1` 地图筛选 bins；bootstrap schema 仍为 2，preview schema 仍为 1。
+- 同一结果包含两个固定 `401×401` 渲染产品：局部等距原始 PNG 用于内部报告；反向重采样、轴对齐 EPSG:3857 PNG 与逐像素 u8 bins 用于 MapLibre 已完成层。
 - 地图覆盖层元数据显式记录 `EPSG:3857`、宽高和 WGS-84 四角；四角对应扩展半个像素后的图像外边缘。
 - 重采样只消费内存中的 dBm 栅格，不重新运行 ITM，也不把 Web Mercator 像素回写为计算结果。
 
@@ -428,6 +445,8 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 
 - 四省 PMTiles 固定归档为 33,044,072 bytes，占十进制 2.5 GB 的 1.32%；validation 启动前必须先做大小与 SHA-256 基线检查，不能只依赖目录或文件名。
 - Range 读取不改变配额口径，也不得用浏览器整包缓存复制出未登记副本。
+
+正式离线地图包属于后续能力，不在首个 Windows Alpha Release 中。接入时必须使用已取得桌面、离线、再分发和所需导出授权的资产；每个包具有不可变版本、覆盖范围、精确字节数、SHA-256 和签名/授权元数据。下载或导入采用 partial、完整性校验与原子 ready，实际文件和 partial 都计入十进制 2.5 GB；缓存管理可单独删除，不得静默淘汰。现有四省内部 PMTiles 因边界内容与授权链未关闭，不得复用为公开 EXE/安装包/Release 的离线包。
 
 ### 10.2 下载完整性
 
@@ -518,8 +537,10 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 前端轮询非重叠，临时失败可恢复；旧 generation/ID 不分发进度，取消在 ticket 返回前仍绑定原 handle，settle 后停止并 best-effort ack。
 - 发射点地面海拔字段缺失、`null` 和有限手动值的反序列化；`-500/9000` 边界与非有限/越界拒绝。
 - 手动模式仍读取中心 DEM，且只替换 PFL 首样点；DEM 自动基线、AGL、后续 DEM 与 WBM 语义保持不变。
-- schema 3 的 `txGroundElevationM` 与 `txGroundElevationSource` 序列化，以及 bootstrap schema 2 不变。
-- 场景预设保留覆盖、新点重置 DEM 自动但保留其他已完成覆盖层、清空全部会话层并保留当前点/覆盖、冻结导出读取结果快照而非表单。
+- schema 4 的 `txGroundElevationM`、`txGroundElevationSource`、`u8-dbm-floor-v1` 编码和 bins 序列化，以及 bootstrap schema 2、preview schema 1 不变。
+- u8 bins 的 0/1/81 边界、整数 cutoff 等价性、Base64 解码长度与 PNG 尺寸一致性。
+- 场景预设保留覆盖、新点重置 DEM 自动但保留其他已完成覆盖层、清空全部会话层并保留当前点/覆盖与显示阈值、冻结导出读取结果快照而非表单。
+- 阈值游标默认/范围/步长、30 fps 合帧、相同值不重绘、最多 8 个 CanvasSource 同步 alpha，以及拖动不调用计算/统计/预览/导出路径。
 - 下载 Agent 的 HTTPS-only、零重定向与有限超时配置；HEAD 只接受 200 元数据。
 - 取消、读取错误、early EOF 和部分写入错误都覆盖 partial/SQLite 一致性；写错误后的游标读取失败、游标越界或检查点失败均不掩盖原始错误，且不可信 partial 不能在同进程或重启后续传。
 
@@ -546,8 +567,10 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 计算中取消。
 - 达到和试图超过 2,500,000,000 字节硬上限。
 - 不同发射点连续计算保留独立覆盖层，同点重算替换，超过 8 项淘汰最早项。
-- 清空全部会话覆盖层但不删除缓存。
+- 清空全部会话覆盖层但不删除缓存，并保留全局显示阈值。
+- 拖动 `-140..-60 dBm` 游标时同步筛选最多 8 个已完成层，无网络/IPC/重算，渐进预览和导出保持未筛选语义。
 - Tauri 原生保存与 validation 浏览器本地 PNG/PDF 导出。
+- 正式离线地图包的授权清单、SHA-256、partial/原子导入、2.5 GB 计费和可删除行为；当前四省内部 PMTiles 必须被发行构建排除。
 
 ## 14. 数据与法律风险
 

@@ -343,6 +343,8 @@ require_terminal_status() {
     fail "$label terminal sequence $sequence did not advance beyond $minimum_sequence"
   require_absent "$response_file" '"heatmapPngDataUrl"' "$label status"
   require_absent "$response_file" '"mapOverlayPngDataUrl"' "$label status"
+  require_absent "$response_file" '"mapOverlayFilterEncoding"' "$label status"
+  require_absent "$response_file" '"mapOverlayFilterBase64"' "$label status"
   require_absent "$response_file" 'data:image/png' "$label status"
   terminal_sequence="$sequence"
 }
@@ -568,6 +570,8 @@ require_contains "$busy_b_body" 'another validation operation is already running
   "ticket B busy calculation"
 require_absent "$busy_b_body" '"heatmapPngDataUrl"' "ticket B busy calculation"
 require_absent "$busy_b_body" '"mapOverlayPngDataUrl"' "ticket B busy calculation"
+require_absent "$busy_b_body" '"mapOverlayFilterEncoding"' "ticket B busy calculation"
+require_absent "$busy_b_body" '"mapOverlayFilterBase64"' "ticket B busy calculation"
 require_reserved_status "$operation_b" "$reserved_b_body" "$reserved_b_status" \
   "ticket B status after busy rejection"
 
@@ -582,6 +586,8 @@ require_contains "$calculation_a_body" '[Cc]ancel' "cancelled calculation"
 require_absent "$calculation_a_body" '"heatmapPngDataUrl"' "cancelled calculation"
 require_absent "$calculation_a_body" '"mapOverlayPngDataUrl"' "cancelled calculation"
 
+require_absent "$calculation_a_body" '"mapOverlayFilterEncoding"' "cancelled calculation"
+require_absent "$calculation_a_body" '"mapOverlayFilterBase64"' "cancelled calculation"
 require_terminal_status "$operation_a" "cancelled" "$progress_a_sequence" \
   "$terminal_a_body" "$terminal_a_status" "ticket A"
 ack_operation "$operation_a" "true" "$ack_a_body" "$ack_a_status" "ticket A acknowledgement"
@@ -605,7 +611,7 @@ curl_job_is_owned_and_running ||
 
 wait_for_tracked_calculation "recovery calculation"
 require_status "$calculation_b_status" "200" "recovery calculation"
-require_contains "$calculation_b_body" '"schemaVersion"[[:space:]]*:[[:space:]]*3([,}])' "schema"
+require_contains "$calculation_b_body" '"schemaVersion"[[:space:]]*:[[:space:]]*4([,}])' "schema"
 require_contains "$calculation_b_body" '"txGroundElevationSource"[[:space:]]*:[[:space:]]*"dem"' "transmitter ground elevation source"
 require_contains "$calculation_b_body" '"txGroundElevationM"[[:space:]]*:[[:space:]]*-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?([,}])' "finite transmitter ground elevation"
 require_contains "$calculation_b_body" '"imageWidth"[[:space:]]*:[[:space:]]*401([,}])' "image width"
@@ -616,6 +622,8 @@ require_contains "$calculation_b_body" '"mapOverlayHeight"[[:space:]]*:[[:space:
   "overlay height"
 validate_png_field "$calculation_b_body" "heatmapPngDataUrl" "$heatmap_match" "$heatmap_png"
 validate_png_field "$calculation_b_body" "mapOverlayPngDataUrl" "$overlay_match" "$overlay_png"
+"$SCRIPT_DIR/validate-calculation-result.py" "$calculation_b_body" >/dev/null ||
+  fail "recovery calculation violated the schema-4 filter contract"
 
 require_terminal_status "$operation_b" "succeeded" "$progress_b_sequence" \
   "$terminal_b_body" "$terminal_b_status" "ticket B"

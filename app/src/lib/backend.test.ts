@@ -299,7 +299,7 @@ const CALCULATION_REQUEST: CalculationRequest = {
 };
 
 const CALCULATION_RESULT: CalculationResult = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   modelName: "model",
   modelVersion: "version",
   center: CALCULATION_REQUEST.center,
@@ -315,8 +315,8 @@ const CALCULATION_RESULT: CalculationResult = {
   ],
   heatmapPngDataUrl: "data:image/png;base64,AA==",
   mapOverlayProjection: "EPSG:3857",
-  mapOverlayWidth: 1,
-  mapOverlayHeight: 1,
+  mapOverlayWidth: 401,
+  mapOverlayHeight: 401,
   mapOverlayCorners: [
     [103, 31],
     [104, 31],
@@ -324,6 +324,8 @@ const CALCULATION_RESULT: CalculationResult = {
     [103, 30],
   ],
   mapOverlayPngDataUrl: "data:image/png;base64,AA==",
+  mapOverlayFilterEncoding: "u8-dbm-floor-v1",
+  mapOverlayFilterBase64: btoa("\x51".repeat(401 * 401)),
   statistics: {
     validPixelCount: 1,
     belowThresholdPixelCount: 0,
@@ -487,6 +489,51 @@ describe("validation operation protocol", () => {
     );
     expect(vi.getTimerCount()).toBe(0);
     unlisten();
+  });
+
+  it("rejects an incompatible validation-server result and still acknowledges cleanup", async () => {
+    removeTauriInternals();
+    vi.stubEnv("VITE_VALIDATION_SERVER", "1");
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === "/api/operation-ticket") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "reserved",
+          }),
+        );
+      }
+      if (path === "/api/calculate") {
+        return Promise.resolve(
+          jsonResponse({ ...CALCULATION_RESULT, schemaVersion: 3 }),
+        );
+      }
+      if (path === "/api/operation-status") {
+        return Promise.resolve(
+          jsonResponse({
+            schemaVersion: 1,
+            operationId: OPERATION_ID_1,
+            kind: "calculation",
+            state: "succeeded",
+            sequence: 1,
+            progress: null,
+          }),
+        );
+      }
+      if (path === "/api/operation-ack") {
+        return Promise.resolve(jsonResponse({ acknowledged: true }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calculate(CALCULATION_REQUEST)).rejects.toThrow("schemaVersion 4");
+    expect(callBody(fetchMock, "/api/operation-ack")).toEqual({
+      operationId: OPERATION_ID_1,
+    });
   });
 
   it("accepts reserved snapshots and ignores repeated, wrong-id, and out-of-order progress", async () => {
@@ -1497,6 +1544,51 @@ describe("Tauri calculation preview channel", () => {
     ],
     mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
   };
+
+  it.each([
+    [
+      "an old schema",
+      { ...CALCULATION_RESULT, schemaVersion: 3 },
+      "schemaVersion 4",
+    ],
+    [
+      "an unsupported filter encoding",
+      { ...CALCULATION_RESULT, mapOverlayFilterEncoding: "u8-other" },
+      "u8-dbm-floor-v1",
+    ],
+    [
+      "a non-401 overlay",
+      { ...CALCULATION_RESULT, mapOverlayWidth: 400 },
+      "401 x 401",
+    ],
+    [
+      "a missing map overlay PNG",
+      { ...CALCULATION_RESULT, mapOverlayPngDataUrl: "" },
+      "401 x 401",
+    ],
+    [
+      "a decoded filter with the wrong length",
+      { ...CALCULATION_RESULT, mapOverlayFilterBase64: "UQ==" },
+      "does not match",
+    ],
+    [
+      "a filter bin above 81",
+      {
+        ...CALCULATION_RESULT,
+        mapOverlayFilterBase64: btoa(
+          "\x52" + "\x51".repeat(401 * 401 - 1),
+        ),
+      },
+      "0..81",
+    ],
+  ])("rejects %s before returning success", async (_label, payload, message) => {
+    mockIPC((command) => {
+      expect(command).toBe("calculate");
+      return Promise.resolve(payload);
+    });
+
+    await expect(calculate(CALCULATION_REQUEST)).rejects.toThrow(message);
+  });
 
   it("passes a per-invocation Channel, validates messages, and suppresses late delivery", async () => {
     const completion = deferred<CalculationResult>();

@@ -1,3 +1,5 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -47,14 +49,45 @@ fn main() -> Result<(), String> {
         .heatmap_png_data_url
         .starts_with("data:image/png;base64,iVBOR")
     {
-        return Err("calculation result is not a PNG data URL".into());
+        return Err("calculation heatmap is not a PNG data URL".into());
+    }
+    if !result
+        .map_overlay_png_data_url
+        .starts_with("data:image/png;base64,iVBOR")
+    {
+        return Err("calculation map overlay is not a PNG data URL".into());
+    }
+    if result.map_overlay_filter_encoding != "u8-dbm-floor-v1" {
+        return Err("calculation map overlay filter encoding is unsupported".into());
+    }
+    let filter_bins = BASE64_STANDARD
+        .decode(&result.map_overlay_filter_base64)
+        .map_err(|error| format!("calculation map overlay filter is invalid base64: {error}"))?;
+    let expected_bins = result.map_overlay_width * result.map_overlay_height;
+    if filter_bins.len() != expected_bins {
+        return Err(format!(
+            "calculation map overlay filter has {} bins, expected {expected_bins}",
+            filter_bins.len()
+        ));
+    }
+    if let Some((index, value)) = filter_bins
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| *value > 81)
+    {
+        return Err(format!(
+            "calculation map overlay filter bin {index} is {value}, expected 0..81"
+        ));
     }
     println!(
-        "desktop service smoke passed: pixels={} mean_dbm={:.3} total_seconds={:.3} png_data_url_bytes={}",
+        "desktop service smoke passed: pixels={} mean_dbm={:.3} total_seconds={:.3} heatmap_url_bytes={} overlay_url_bytes={} filter_bytes={}",
         result.statistics.valid_pixel_count,
         result.statistics.mean_dbm,
         result.statistics.total_seconds,
-        result.heatmap_png_data_url.len()
+        result.heatmap_png_data_url.len(),
+        result.map_overlay_png_data_url.len(),
+        filter_bins.len()
     );
     Ok(())
 }

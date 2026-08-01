@@ -26,7 +26,7 @@ use hamheatmap_terrain::{DemTileId, DemTileSet, WaterTileSet};
 use serde::{Deserialize, Serialize};
 
 pub const APP_SERVICE_SCHEMA_VERSION: u32 = 2;
-pub const CALCULATION_RESULT_SCHEMA_VERSION: u32 = 3;
+pub const CALCULATION_RESULT_SCHEMA_VERSION: u32 = 4;
 pub const CALCULATION_PREVIEW_SCHEMA_VERSION: u32 = 1;
 
 const CALCULATION_PREVIEW_INTERVAL: Duration = Duration::from_millis(800);
@@ -318,6 +318,8 @@ pub struct CalculationResult {
     pub map_overlay_height: usize,
     pub map_overlay_corners: [[f64; 2]; 4],
     pub map_overlay_png_data_url: String,
+    pub map_overlay_filter_encoding: &'static str,
+    pub map_overlay_filter_base64: String,
     pub statistics: CalculationStatisticsView,
 }
 
@@ -712,8 +714,10 @@ impl AppService {
             calculation_cancellation_checkpoint(cancelled)?;
             let map_overlay_png_data_url = format!(
                 "data:image/png;base64,{}",
-                BASE64_STANDARD.encode(map_overlay.png)
+                BASE64_STANDARD.encode(&map_overlay.png)
             );
+            calculation_cancellation_checkpoint(cancelled)?;
+            let map_overlay_filter_base64 = BASE64_STANDARD.encode(&map_overlay.filter_bins);
             calculation_cancellation_checkpoint(cancelled)?;
             let statistics = CalculationStatisticsView {
                 valid_pixel_count: grid.statistics.valid_pixel_count,
@@ -748,6 +752,8 @@ impl AppService {
                 map_overlay_height: map_overlay.height,
                 map_overlay_corners: map_overlay.corners,
                 map_overlay_png_data_url,
+                map_overlay_filter_encoding: map_overlay.filter_encoding,
+                map_overlay_filter_base64,
                 statistics,
             };
             calculation_cancellation_checkpoint(cancelled)?;
@@ -1218,7 +1224,7 @@ mod tests {
     #[test]
     fn calculation_contract_schema_includes_map_overlay() {
         assert_eq!(APP_SERVICE_SCHEMA_VERSION, 2);
-        assert_eq!(CALCULATION_RESULT_SCHEMA_VERSION, 3);
+        assert_eq!(CALCULATION_RESULT_SCHEMA_VERSION, 4);
     }
 
     #[test]
@@ -1242,6 +1248,8 @@ mod tests {
             map_overlay_height: GRID_SIZE,
             map_overlay_corners: [[101.1, 32.1], [105.9, 32.1], [105.9, 27.9], [101.1, 27.9]],
             map_overlay_png_data_url: "data:image/png;base64,overlay".into(),
+            map_overlay_filter_encoding: "u8-dbm-floor-v1",
+            map_overlay_filter_base64: "AAEVUQ==".into(),
             statistics: CalculationStatisticsView {
                 valid_pixel_count: 125_628,
                 below_threshold_pixel_count: 400,
@@ -1273,13 +1281,15 @@ mod tests {
             "mapOverlayHeight",
             "mapOverlayCorners",
             "mapOverlayPngDataUrl",
+            "mapOverlayFilterEncoding",
+            "mapOverlayFilterBase64",
             "statistics",
         ];
         assert_eq!(object.len(), expected_keys.len());
         for key in expected_keys {
             assert!(object.contains_key(key), "missing serialized field {key}");
         }
-        assert_eq!(object["schemaVersion"].as_u64(), Some(3));
+        assert_eq!(object["schemaVersion"].as_u64(), Some(4));
         assert_eq!(object["txGroundElevationM"].as_f64(), Some(526.25));
         assert_eq!(object["txGroundElevationSource"].as_str(), Some("dem"));
         assert_eq!(object["mapOverlayProjection"].as_str(), Some("EPSG:3857"));
@@ -1288,8 +1298,19 @@ mod tests {
             object["mapOverlayPngDataUrl"].as_str(),
             Some("data:image/png;base64,overlay")
         );
+        assert_eq!(
+            object["mapOverlayFilterEncoding"].as_str(),
+            Some("u8-dbm-floor-v1")
+        );
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(object["mapOverlayFilterBase64"].as_str().unwrap())
+                .unwrap(),
+            [0, 1, 21, 81]
+        );
         assert!(!object.contains_key("map_overlay_projection"));
         assert!(!object.contains_key("map_overlay_png_data_url"));
+        assert!(!object.contains_key("map_overlay_filter_base64"));
     }
 
     #[test]

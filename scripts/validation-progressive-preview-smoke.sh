@@ -164,7 +164,7 @@ if mode == "preview":
     corners(value); print(sequence, completed, total, png_hash(value,"mapOverlayPngDataUrl"), sep="\t")
 elif mode == "final":
     unique("schemaVersion")
-    if value.get("schemaVersion") != 3: stop("final authoritative schema was not 3")
+    if value.get("schemaVersion") != 4: stop("final authoritative schema was not 4")
     if any(k in value for k in ("sequence","completedPixelCount","totalPixelCount")): stop("final result contained preview fields")
     if value.get("imageWidth") != 401 or value.get("imageHeight") != 401: stop("final heatmap metadata was invalid")
     if value.get("mapOverlayProjection") != "EPSG:3857" or value.get("mapOverlayWidth") != 401 or value.get("mapOverlayHeight") != 401: stop("final overlay metadata was invalid")
@@ -188,6 +188,8 @@ PY
 png_free_status() {
   require_absent "$1" '"heatmapPngDataUrl"' "$2"
   require_absent "$1" '"mapOverlayPngDataUrl"' "$2"
+  require_absent "$1" '"mapOverlayFilterEncoding"' "$2"
+  require_absent "$1" '"mapOverlayFilterBase64"' "$2"
   require_absent "$1" 'data:image/png' "$2"
 }
 
@@ -335,7 +337,9 @@ unique_hashes="$(sort -u "$preview_hashes" | wc -l | tr -d ' ')"
 (( unique_hashes >= 2 )) || fail "two preview PNG hashes were not different"
 (( first_preview_ms > 0 && min_preview_interval_ms > 0 && max_preview_interval_ms >= min_preview_interval_ms && max_preview_json_bytes > 0 )) ||
   fail "progressive preview runtime metrics were incomplete"
-validate_json final "$calculation_body" >"$work_dir/final.tsv" || fail "schema-3 authoritative result validation failed"
+validate_json final "$calculation_body" >"$work_dir/final.tsv" || fail "schema-4 authoritative result validation failed"
+"$SCRIPT_DIR/validate-calculation-result.py" "$calculation_body" >"$work_dir/filter-contract.txt" ||
+  fail "authoritative result violated the schema-4 filter contract"
 
 post_preview "$active_operation_id" "$last_sequence" "$terminal_preview_body" "$terminal_preview_status"
 require_status "$terminal_preview_status" 204 "terminal preview"; [[ ! -s "$terminal_preview_body" ]] || fail "terminal preview retained a body"

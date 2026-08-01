@@ -273,7 +273,7 @@ export interface CalculationStatistics {
 export type TxGroundElevationSource = "dem" | "manual";
 
 export interface CalculationResult {
-  schemaVersion: 3;
+  schemaVersion: 4;
   modelName: string;
   modelVersion: string;
   center: MapPoint;
@@ -288,6 +288,8 @@ export interface CalculationResult {
   mapOverlayHeight: number;
   mapOverlayCorners: [number, number][];
   mapOverlayPngDataUrl: string;
+  mapOverlayFilterEncoding: "u8-dbm-floor-v1";
+  mapOverlayFilterBase64: string;
   statistics: CalculationStatistics;
 }
 

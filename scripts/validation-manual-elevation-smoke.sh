@@ -233,10 +233,12 @@ run_calculation() {
     --data-binary "@$request" --output "$result" --write-out '%{http_code}' \
     "$BASE_URL/api/calculate" >"$status"
   require_status "$status" "200" "$label calculation"
-  require_contains "$result" '"schemaVersion"[[:space:]]*:[[:space:]]*3([,}])' "$label result schema"
+  require_contains "$result" '"schemaVersion"[[:space:]]*:[[:space:]]*4([,}])' "$label result schema"
   for dimension in imageWidth imageHeight mapOverlayWidth mapOverlayHeight; do
     require_contains "$result" "\"$dimension\"[[:space:]]*:[[:space:]]*401([,}])" "$label $dimension"
   done
+  "$SCRIPT_DIR/validate-calculation-result.py" "$result" >/dev/null ||
+    fail "$label result violated the schema-4 filter contract"
 
   source="$(extract_string "$result" "txGroundElevationSource")" ||
     fail "$label result omitted txGroundElevationSource"

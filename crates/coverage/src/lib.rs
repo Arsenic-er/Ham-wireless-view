@@ -25,6 +25,7 @@ pub const PROFILE_SAMPLE_SPACING_M: f64 = 90.0;
 pub const ITM_WARNING_BIT_COUNT: usize = 15;
 pub const MODEL_DEFAULTS_VERSION: &str = ModelDefaults::LAND_WATER_V1.version;
 pub const MAP_OVERLAY_PROJECTION: &str = "EPSG:3857";
+pub const MAP_OVERLAY_FILTER_ENCODING: &str = "u8-dbm-floor-v1";
 pub const COVERAGE_PIXEL_BATCH_SIZE: usize = 64;
 
 const WEB_MERCATOR_RADIUS_M: f64 = 6_378_137.0;
@@ -191,6 +192,8 @@ pub struct MapOverlay {
     pub height: usize,
     pub corners: [[f64; 2]; 4],
     pub png: Vec<u8>,
+    pub filter_encoding: &'static str,
+    pub filter_bins: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -418,7 +421,7 @@ fn encode_map_overlay_values(
 ) -> Result<MapOverlay, CoverageError> {
     debug_assert_eq!(values_dbm.len(), GRID_PIXEL_COUNT);
     let layout = MapOverlayLayout::new(center);
-    let rgba = render_map_overlay(values_dbm, layout);
+    let (rgba, filter_bins) = render_map_overlay_with_filter(values_dbm, layout);
     let mut png = Vec::new();
     write_rgba_png(&mut png, GRID_SIZE, GRID_SIZE, &rgba)?;
     Ok(MapOverlay {
@@ -427,20 +430,47 @@ fn encode_map_overlay_values(
         height: GRID_SIZE,
         corners: layout.corners,
         png,
+        filter_encoding: MAP_OVERLAY_FILTER_ENCODING,
+        filter_bins,
     })
 }
 
+#[cfg(test)]
 fn render_map_overlay(values_dbm: &[f32], layout: MapOverlayLayout) -> Vec<u8> {
+    render_map_overlay_with_filter(values_dbm, layout).0
+}
+
+fn render_map_overlay_with_filter(
+    values_dbm: &[f32],
+    layout: MapOverlayLayout,
+) -> (Vec<u8>, Vec<u8>) {
     let geodesic = Geodesic::wgs84();
     let mut rgba = Vec::with_capacity(GRID_PIXEL_COUNT * 4);
+    let mut filter_bins = Vec::with_capacity(GRID_PIXEL_COUNT);
     for row in 0..GRID_SIZE {
         for column in 0..GRID_SIZE {
-            rgba.extend_from_slice(&color_for_dbm(map_overlay_sample_dbm(
-                values_dbm, layout, &geodesic, row, column,
-            )));
+            let value = map_overlay_sample_dbm(values_dbm, layout, &geodesic, row, column);
+            rgba.extend_from_slice(&color_for_dbm(value));
+            filter_bins.push(filter_bin_for_dbm(value));
         }
     }
-    rgba
+    (rgba, filter_bins)
+}
+
+/// Encodes only the ordering needed by the integer-dBm display threshold.
+///
+/// Zero is reserved for pixels which are already transparent at the fixed
+/// -140 dBm floor. Bins 1 through 81 correspond to integer thresholds -140
+/// through -60 dBm. Flooring preserves `value >= threshold` exactly for every
+/// supported integer threshold without transporting float values.
+fn filter_bin_for_dbm(value: f32) -> u8 {
+    if !value.is_finite() || value < -140.0 {
+        return 0;
+    }
+    if value >= -60.0 {
+        return 81;
+    }
+    (value.floor() as i16 + 141) as u8
 }
 
 fn map_overlay_sample_dbm(
@@ -1234,6 +1264,35 @@ mod tests {
     }
 
     #[test]
+    fn filter_bins_preserve_supported_integer_threshold_semantics() {
+        assert_eq!(filter_bin_for_dbm(f32::NAN), 0);
+        assert_eq!(filter_bin_for_dbm(-140.001), 0);
+        assert_eq!(filter_bin_for_dbm(-140.0), 1);
+        assert_eq!(filter_bin_for_dbm(-139.999), 1);
+        assert_eq!(filter_bin_for_dbm(-120.001), 20);
+        assert_eq!(filter_bin_for_dbm(-120.0), 21);
+        assert_eq!(filter_bin_for_dbm(-119.999), 21);
+        assert_eq!(filter_bin_for_dbm(-60.001), 80);
+        assert_eq!(filter_bin_for_dbm(-60.0), 81);
+        assert_eq!(filter_bin_for_dbm(10.0), 81);
+
+        for threshold in -140_i16..=-60 {
+            let cutoff = (threshold + 141) as u8;
+            for value in [
+                threshold as f32 - 0.001,
+                threshold as f32,
+                threshold as f32 + 0.001,
+            ] {
+                assert_eq!(
+                    filter_bin_for_dbm(value) >= cutoff,
+                    value >= threshold as f32,
+                    "value {value} at threshold {threshold}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn spherical_profile_stays_within_one_dem_pixel_of_wgs84_geodesic() {
         let geodesic = Geodesic::wgs84();
         let center = GeoPoint {
@@ -1694,6 +1753,10 @@ mod tests {
         assert_eq!(first.projection, MAP_OVERLAY_PROJECTION);
         assert_eq!((first.width, first.height), (GRID_SIZE, GRID_SIZE));
         assert_eq!(first.png, second.png);
+        assert_eq!(first.filter_encoding, MAP_OVERLAY_FILTER_ENCODING);
+        assert_eq!(first.filter_bins, second.filter_bins);
+        assert_eq!(first.filter_bins.len(), GRID_PIXEL_COUNT);
+        assert_eq!(first.filter_bins[200 * GRID_SIZE + 200], 36);
         assert_eq!(&first.png[16..20], &(GRID_SIZE as u32).to_be_bytes());
         assert_eq!(&first.png[20..24], &(GRID_SIZE as u32).to_be_bytes());
     }

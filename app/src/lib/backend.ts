@@ -2,6 +2,10 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { exportReportInBrowser } from "./browserExport";
+import {
+  decodeMapOverlayFilter,
+  MAP_OVERLAY_FILTER_ENCODING,
+} from "./coverageVisibility";
 import type {
   BootstrapInfo,
   CacheDeleteResult,
@@ -186,6 +190,51 @@ function isCurrentOperation(handle: ValidationOperationHandle): boolean {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function validateCalculationResult(value: unknown): CalculationResult {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      "\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u65e0\u6548\uff1a\u540e\u7aef\u672a\u8fd4\u56de\u6709\u6548\u5bf9\u8c61\u3002",
+    );
+  }
+  const result = value as Partial<CalculationResult>;
+  if (result.schemaVersion !== 4) {
+    throw new Error(
+      "\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u4e0d\u517c\u5bb9\uff1a\u9700\u8981 schemaVersion 4\uff0c\u8bf7\u66f4\u65b0\u540e\u7aef\u6216\u5e94\u7528\u540e\u91cd\u8bd5\u3002",
+    );
+  }
+  if (result.mapOverlayFilterEncoding !== MAP_OVERLAY_FILTER_ENCODING) {
+    throw new Error(
+      `\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u4e0d\u517c\u5bb9\uff1a\u573a\u5f3a\u7b5b\u9009\u7f16\u7801\u5fc5\u987b\u4e3a ${MAP_OVERLAY_FILTER_ENCODING}\u3002`,
+    );
+  }
+  const width = result.mapOverlayWidth;
+  const height = result.mapOverlayHeight;
+  const filterBase64 = result.mapOverlayFilterBase64;
+  if (
+    width !== 401 ||
+    height !== 401 ||
+    typeof filterBase64 !== "string" ||
+    typeof result.mapOverlayPngDataUrl !== "string" ||
+    result.mapOverlayPngDataUrl.length === 0
+  ) {
+    throw new Error(
+      "\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u65e0\u6548\uff1a\u9700\u8981 401 x 401 \u7684\u573a\u5f3a\u7b5b\u9009\u6570\u636e\u548c\u5730\u56fe\u56fe\u50cf\u3002",
+    );
+  }
+  try {
+    decodeMapOverlayFilter({
+      mapOverlayWidth: width as number,
+      mapOverlayHeight: height as number,
+      mapOverlayFilterEncoding: result.mapOverlayFilterEncoding,
+      mapOverlayFilterBase64: filterBase64,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`\u8ba1\u7b97\u7ed3\u679c\u573a\u5f3a\u7b5b\u9009\u6570\u636e\u65e0\u6548\uff1a${detail}`);
+  }
+  return result as CalculationResult;
 }
 
 function beginValidationOperation(kind: OperationKind): ValidationOperationHandle {
@@ -846,21 +895,23 @@ export async function calculate(
       notifyCalculationPreview(value);
     };
     try {
-      return await invoke<CalculationResult>("calculate", {
+      const result = await invoke<unknown>("calculate", {
         request,
         previewChannel,
       });
+      return validateCalculationResult(result);
     } finally {
       acceptingPreviews = false;
       previewChannel.onmessage = () => undefined;
     }
   }
   if (backendMode() === "validation-server") {
-    return runValidationOperation<CalculationResult>(
+    const result = await runValidationOperation<unknown>(
       "calculation",
       "/api/calculate",
       { request },
     );
+    return validateCalculationResult(result);
   }
   throw new Error("浏览器仅用于界面检查；真实传播计算必须在 Tauri 桌面后端中运行。");
 }

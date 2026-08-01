@@ -9,7 +9,7 @@ import type { CalculationResult, SessionCoverageResult } from "./types";
 
 function coverage(id: string, lat: number, lon: number): SessionCoverageResult {
   const result: CalculationResult = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     modelName: "model",
     modelVersion: "version",
     center: { lat, lon },
@@ -24,6 +24,8 @@ function coverage(id: string, lat: number, lon: number): SessionCoverageResult {
     mapOverlayHeight: 1,
     mapOverlayCorners: [[lon, lat]],
     mapOverlayPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+    mapOverlayFilterEncoding: "u8-dbm-floor-v1",
+    mapOverlayFilterBase64: "AQ==",
     statistics: {
       validPixelCount: 1,
       belowThresholdPixelCount: 0,

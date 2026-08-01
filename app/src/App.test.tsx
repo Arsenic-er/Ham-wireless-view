@@ -175,7 +175,7 @@ const onlineBasemap: OnlineBasemapInfo = {
 };
 
 const result: CalculationResult = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   modelName: "NTIA ITM Point-to-Point",
   modelVersion: "land-water-v1",
   center: { lat: 30.5, lon: 103.5 },
@@ -190,6 +190,8 @@ const result: CalculationResult = {
   mapOverlayHeight: 401,
   mapOverlayCorners: [[0, 0], [1, 0], [1, 1], [0, 1]],
   mapOverlayPngDataUrl: "data:image/png;base64,AA==",
+  mapOverlayFilterEncoding: "u8-dbm-floor-v1",
+  mapOverlayFilterBase64: btoa("\x01".repeat(401 * 401)),
   statistics: {
     validPixelCount: 125_628,
     belowThresholdPixelCount: 1,
@@ -332,6 +334,23 @@ describe("validation server UI", () => {
     });
   });
 
+  it("shows an incompatible calculation-result error without entering success", async () => {
+    backendMocks.calculate.mockRejectedValueOnce(
+      new Error("\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u4e0d\u517c\u5bb9\uff1a\u9700\u8981 schemaVersion 4\u3002"),
+    );
+    render(<App />);
+
+    await screen.findByText("\u7b49\u5f85\u9009\u62e9\u53d1\u5c04\u70b9");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("\u6570\u636e\u5df2\u5c31\u7eea");
+    fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
+
+    expect(await screen.findByText("\u64cd\u4f5c\u672a\u5b8c\u6210")).toBeTruthy();
+    expect(screen.getByText(/schemaVersion 4/)).toBeTruthy();
+    expect(screen.getByTestId("heatmap").textContent).toBe("none");
+    expect(screen.queryByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210")).toBeNull();
+  });
+
   it("clears only the heatmap and keeps the selected ready point reusable", async () => {
     render(<App />);
 
@@ -346,10 +365,16 @@ describe("validation server UI", () => {
     fireEvent.click(screen.getByRole("button", { name: /\u5f00\u59cb\u8ba1\u7b97/ }));
     await screen.findByText("\u8986\u76d6\u8ba1\u7b97\u5b8c\u6210");
     expect(screen.getByTestId("heatmap").textContent).toBe("present");
+    const visibilitySlider = screen.getByRole("slider", { name: "最弱可见场强" });
+    expect((visibilitySlider as HTMLInputElement).disabled).toBe(false);
+    fireEvent.change(visibilitySlider, { target: { value: "-120" } });
+    expect(screen.getByText("显示 ≥ -120 dBm")).toBeTruthy();
+
 
     fireEvent.click(screen.getByRole("button", { name: "\u6e05\u7a7a" }));
 
     expect(screen.getByTestId("heatmap").textContent).toBe("none");
+    expect(screen.getByText("显示 ≥ -120 dBm")).toBeTruthy();
     expect(screen.getByTestId("selected-point").textContent).toBe("30.5,103.5");
     expect(screen.getByTestId("ground-elevation-override").textContent).toBe("800");
     expect(screen.getByText("\u6570\u636e\u5df2\u5c31\u7eea")).toBeTruthy();

@@ -4,32 +4,30 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 ## 当前状态
 
-需求基线已经确认，Phase 0、计算核心最小可行性验证、Phase 1 DEM/WBM 缓存闭环和陆地/统一水体传播建模已经通过。Phase 2 已完成 React/MapLibre 主界面、地图点选、参数与主题、Tauri→Rust 真实计算、区域准备与安全缓存删除、服务器 Windows 构建，以及带强制内部水印的离线 PNG/PDF 诊断报告。地图显示已改为独立的 401×401、轴对齐 EPSG:3857 反向重采样覆盖层；中国代表性纬度的最大定位误差为 739.625 m，低于 1 km 门槛，自动化验收已经通过。合规底图、正式地图导出、代码签名和 Windows 10/11 完整实机验收仍未完成。
+### 在线验证版
 
-为便于在不向 Windows 本机同步开发资源的前提下验证真实缓存和传播流程，项目新增了只监听服务器回环地址的私有浏览器验证平台。它通过 SSH 隧道访问，具有醒目的内部验证与远程处理提示，不开放公网端口，也不提供文件导出。该平台不替代 Windows/WebView2、原生保存对话框或公开地图合规验收。
+- 私有 validation 服务已在服务器运行，只监听 `127.0.0.1:1421`，需通过 SSH 隧道访问。
+- 已可使用四省区域地图、中文地名、联网卫星图、真实 DEM/WBM + ITM 计算、最多 8 个会话覆盖层、动态比例尺，以及浏览器本地诊断 PNG/PDF 导出。
+- 已实现 -140..-60 dBm、1 dB 步长的全局显示阈值游标；它动态隐藏较弱像素，不重新计算传播结果，也不改变统计与本轮导出内容。门禁通过前端 98 项、Rust workspace 114 项（另 5 项环境型测试忽略）和三组真实缓存 HTTP 烟测；8 层服务器 CPU 微基准 P95 为 5.982 ms。受管浏览器拖动因 Codex Windows ACL 故障尚未完成，Windows WebView2 实机仍待验。
+- 四省 PMTiles 和 EOxCloudless 仅供内部验证，不属于公开 Windows 发行资产。
 
-2026-07-27 的恢复与取消切片补强了缓存重启整理、精确配额边界、操作取消线性化，以及私有平台管理锁和 runner 生命周期声明。基于提交和构建 revision `6d7bbc54fd477f0f4167d1044d4c9ec31eed969d`，加固版已完成真实 `stop → build → start`、重复启动、readiness 和 HTTP 取消后重算验收；十进制 2.5 GB 实体压力、整机重启、Windows 实机和地图合规仍是独立门槛。
+### Windows Alpha
 
-后续私有平台协议切片为计算与下载引入服务端生成的 operation capability、精确 ID 取消、有限期状态快照和约 250 ms 的非重叠 HTTP 进度轮询，用来隔离多标签页操作并复用现有进度界面。同步长请求仍是结果的唯一权威来源，状态端点不保存 PNG 或错误详情。该协议已在 full build revision `867c25aeb2091055b56d1259f6ad7293d21f7495` 上完成代码回归、受管 `stop → build → start`、readiness 与两次真实回环烟雾；通过 SSH 隧道确认浏览器可见进度和控制台状态仍待执行，不能从受管 HTTP 结果外推。
+- Windows/Tauri 已支持在线天地图普通地图与卫星图；用户自行配置 `tk`，Windows 使用当前用户 DPAPI 加密保存，在线瓦片不进入 2.5 GB 缓存或诊断导出。
+- 服务器已经成功交叉构建独立 EXE 与内嵌离线 WebView2 的 NSIS 安装包，但旧构建产物此前没有上传到 GitHub Release，所以仓库页面目前看不到可下载的 EXE。
+- 下一次 GitHub Alpha Release 将同时上传独立 EXE 和安装包，并附 SHA-256；Release 真正创建前，README 不提供不存在的下载链接。
+- 产物当前未签名，Windows 10/11 实机、SmartScreen、安装/卸载和中国大陆真实网络仍待验证。
+- 本轮 Windows Release **不含离线地图**。后续离线地图包必须使用正式授权资产，带版本、大小与校验和，可由用户删除，并与 DEM/WBM 等全部持久数据共同计入不可修改的十进制 2.5 GB 上限；现有四省内部 PMTiles 不得打入公开 EXE。
 
-本次切片实现了发射点地面海拔的“DEM 自动/手动覆盖”：可空请求兼容旧调用，手动范围为 `-500..9000 m AMSL`，中心 DEM 在两种模式下都必须验证，且只替换 ITM PFL 的发射端首样点；天线 AGL、其余 DEM 与 WBM 不变。计算结果独立升级为 schema 3 并冻结有效海拔及 `dem/manual` 来源，bootstrap 保持 schema 2，内部报告使用冻结结果。
+## Windows 下载
 
-同一切片把 GLO-90 下载 Agent 收紧为 HTTPS-only、零重定向和有限分阶段/总超时，并让取消、读取错误与 early EOF 都可靠同步/登记 partial 后再返回；没有后台自动重试，下一次用户操作只在强 ETag/Range 条件匹配时续传。自动化门禁已通过 Rust workspace 95 项、前端 46 项、真实 HTTPS 3/3、Clippy、类型检查、前端构建和 xwin 检查。revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管部署；成都 DEM 自动 `526.3442993164062 m` 与手动 `1500.0 m` 的原始/覆盖层 PNG 哈希均发生变化，schema 3 恢复烟测也通过。SSH 隧道浏览器视觉和 Windows 实机仍待验证。
+GitHub Release 发布后，请在 [GitHub Releases](https://github.com/Arsenic-er/Ham-wireless-view/releases) 中选择最新的 Alpha：
 
-首轮结果见 `docs/05-phase0-validation-report.md`，真实地形最小可行性结果见 `docs/06-minimum-viability-validation.md`，缓存闭环见 `docs/07-phase1-cache-validation.md`，陆地/水体结果见 `docs/08-land-water-validation.md`，桌面首切片见 `docs/09-phase2-desktop-slice.md`，下载与缓存交互见 `docs/10-phase2-download-cache-slice.md`。通过桌面服务契约运行成都真实缓存时，125,628 个像素约 9.75 秒完成；下载状态烟雾测试确认 50 个 DEM/WBM 资产无需重复下载并正确进入 ready。上述数字仍不是 Windows 整机验收。
+- `HamHeatmap.exe`：独立程序；目标电脑需要已有 WebView2 Runtime。
+- `HamHeatmap_*_x64-setup.exe`：当前用户安装包；内嵌 WebView2 离线安装组件，体积更大。
+- `SHA256SUMS.txt`：下载后校验文件完整性。
 
-2026-07-28 新增真实参数敏感性门禁：同一成都 DEM/WBM 上逐像素验证 10 倍功率约 +10 dB、收发增益精确平移，并确认 145/435 MHz、收发天线高度和水平/垂直极化都会产生非统一的空间变化。相同输入的原始栅格、报告 PNG 和 EPSG:3857 地图覆盖 PNG 哈希一致；每个参数场景的两种 PNG 均与基线不同。测试使用一致缓存快照，真实缓存的 SQLite、DEM/WBM、总字节和完整清单保持不变；这证明模型参数接线和响应，不替代外场校准。
-
-2026-07-31 新增私有 validation 平台天地图在线同源代理、右下动态公制比例尺和 MapLibre desired-state 重放，并以 revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 完成受管构建、启动和回环 readiness。浏览器不接触 `tk` 或上游 URL；token 由项目运行目录中的 `0600` 私密文件管理。当前未配置 token，bootstrap 正确返回 `enabled=false`，瓦片端点返回 503；尚未取得真实瓦片或完成浏览器视觉烟雾。该在线验证路径也不提供离线底图或正式地图导出，审图号、服务/离线/导出授权仍是公开发布门槛。
-
-同日，私有 validation 平台决定以四省区域 Protomaps PMTiles 作为内部验证主底图，天地图改作联网 fallback 与历史验证。固定归档为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes（2.5 GB 的 1.32%），SHA-256 为 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0；只允许同源 HTTP Range 读取。可信样式显示 earth、landcover、landuse、water、roads、places，并持续显示 © OpenStreetMap contributors；places 按缩放级别提供省、市、县区和乡镇中文地名，不承诺村级完整性。原始归档仍含 boundaries 和 Natural Earth/OSM 内容，因此只能私有内部验证，不是中国大陆公开地图合规底图，也不得纳入正式 EXE。
-
-2026-08-01 又加入“地图 / 卫星”切换：联网卫星背景采用 EOxCloudless Sentinel-2 Cloudless 2025，同源代理固定 HTTPS 上游并返回 no-store；本地 places 地名、传播热力图和发射点继续叠加，卫星影像不参与 DEM/WBM 或 ITM 计算。浏览器断网或卫星 source 出错会自动退回离线地图。本轮通过 frontend check、9 files/65 tests、Rust workspace 113 passed/5 ignored、validation server 28/28、Clippy、前端构建和管理 self-test；live 四省卫星瓦片返回 JPEG 与 Cache-Control: no-store。真实浏览器视觉和 Windows 实机字体可读性仍待用户验收，详情见 docs/21-protomaps-four-province-basemap.md。
-
-Windows 桌面版现已接入天地图在线普通地图（`vec+cva`）和卫星图（`img+cia`）。用户在应用内输入自己的 `tk`；前端只取得固定的 `tianditu:` 瓦片模板和“是否已配置”状态，`tk` 由 Rust 保存到应用本地数据目录，并在 Windows 下使用当前用户 DPAPI 加密。在线瓦片响应强制 `no-store`，不会持久缓存、不会计入 2.5 GB DEM/WBM 数据配额，也不会进入诊断 PNG/PDF 导出。
-
-基于源提交 `59ae5b188f48db52618846246de27eb0cfe6bbba` 的 2026-08-01 Tauri Windows 交叉构建已在第二次执行时退出 0，生成 16,104,960 bytes 的 standalone EXE 和 217,258,090 bytes 的当前用户 NSIS 安装包；NSIS 内嵌离线 WebView2，两个产物均未签名。自动化和交叉构建已通过，但 Windows 10/11 实机、有效个人 `tk` 以及中国大陆真实家庭/移动网络的瓦片可达性仍未验收。
-
+如果 Releases 页面仍为空，表示构建尚未上传，不应从源码目录或第三方地址寻找旧产物。
 
 > [!WARNING]
 > 当前版本是未签名的内部 Alpha。传播结果是模型估算，尚未经过外场测量校准，不得作为生命安全、应急指挥或法规合规决策的唯一依据。仓库公开的是源代码；这不代表当前占位地图或导出报告已经满足中国大陆公开地图发行要求。

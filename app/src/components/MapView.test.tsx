@@ -7,15 +7,29 @@ const objectUrlMocks = vi.hoisted(() => ({
   create: vi.fn(() => "blob:coverage-heatmap"),
   revoke: vi.fn(),
 }));
+const canvasLeaseMocks = vi.hoisted(() => ({
+  instances: [] as Array<{
+    dirty: boolean;
+    applyThreshold: ReturnType<typeof vi.fn>;
+    markUploaded: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }>,
+}));
+
 
 const maplibreMocks = vi.hoisted(() => {
   type Handler = (...args: unknown[]) => void;
   const handlers = new Map<string, Set<Handler>>();
+  let viewport = { west: 90, south: 20, east: 120, north: 40 };
   const sources = new Map<
     string,
     {
+      tiles?: Record<string, unknown>;
       setData?: ReturnType<typeof vi.fn>;
       updateImage?: ReturnType<typeof vi.fn>;
+      play?: ReturnType<typeof vi.fn>;
+      pause?: ReturnType<typeof vi.fn>;
+      setCoordinates?: ReturnType<typeof vi.fn>;
     }
   >();
   const layers = new Set<string>();
@@ -27,11 +41,26 @@ const maplibreMocks = vi.hoisted(() => {
     addSource: vi.fn((id: string, source: { type?: string }) => {
       sources.set(
         id,
-        source.type === "image" ? { updateImage: vi.fn() } : { setData: vi.fn() },
+        source.type === "image"
+          ? { updateImage: vi.fn() }
+          : source.type === "canvas"
+            ? {
+                tiles: { visible: {} },
+                play: vi.fn(),
+                pause: vi.fn(),
+                setCoordinates: vi.fn(),
+              }
+            : { setData: vi.fn() },
       );
     }),
     getLayer: vi.fn((id: string) => (layers.has(id) ? { id } : undefined)),
     fitBounds: vi.fn(),
+    getBounds: vi.fn(() => ({
+      getWest: () => viewport.west,
+      getSouth: () => viewport.south,
+      getEast: () => viewport.east,
+      getNorth: () => viewport.north,
+    })),
     getSource: vi.fn((id: string) => sources.get(id)),
     isStyleLoaded: vi.fn(() => false),
     on: vi.fn((event: string, handler: Handler) => {
@@ -59,6 +88,9 @@ const maplibreMocks = vi.hoisted(() => {
     emit(event: string, ...args: unknown[]) {
       for (const handler of handlers.get(event) ?? []) handler(...args);
     },
+    setViewport(next: typeof viewport) {
+      viewport = next;
+    },
     resetState() {
       handlers.clear();
       sources.clear();
@@ -85,6 +117,33 @@ vi.mock("maplibre-gl", () => ({
     Map: maplibreMocks.Map,
     NavigationControl: maplibreMocks.NavigationControl,
     ScaleControl: maplibreMocks.ScaleControl,
+  },
+}));
+
+vi.mock("../lib/mapOverlayCanvas", () => ({
+  MapOverlayCanvasLease: class MapOverlayCanvasLease {
+    readonly canvas = document.createElement("canvas");
+    readonly ready = true;
+    readonly coordinates = [
+      [101, 31],
+      [105, 31],
+      [105, 29],
+      [101, 29],
+    ];
+    dirty = false;
+    readonly update = vi.fn(() => true);
+    readonly applyThreshold = vi.fn(() => {
+      this.dirty = true;
+      return true;
+    });
+    readonly markUploaded = vi.fn(() => {
+      this.dirty = false;
+    });
+    readonly dispose = vi.fn();
+
+    constructor() {
+      canvasLeaseMocks.instances.push(this);
+    }
   },
 }));
 
@@ -162,6 +221,7 @@ const configuredOnlineBasemap: OnlineBasemapInfo = {
 describe("MapView controls and desired-state replay", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    canvasLeaseMocks.instances.length = 0;
     maplibreMocks.resetState();
     maplibreMocks.map.isStyleLoaded.mockReturnValue(false);
     Object.defineProperty(URL, "createObjectURL", {
@@ -446,10 +506,10 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.removeLayer).not.toHaveBeenCalledWith(
       "coverage-heatmap-layer-coverage-1",
     );
-    expect(objectUrlMocks.create).toHaveBeenCalledTimes(2);
+    expect(canvasLeaseMocks.instances).toHaveLength(2);
 
     unmount();
-    expect(objectUrlMocks.revoke).toHaveBeenCalledTimes(2);
+    expect(canvasLeaseMocks.instances.every((lease) => lease.dispose.mock.calls.length === 1)).toBe(true);
   });
 
   it("replays a deferred clear after the style becomes ready", () => {
@@ -465,20 +525,98 @@ describe("MapView controls and desired-state replay", () => {
     maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
     maplibreMocks.emit("load");
     expect(maplibreMocks.map.getLayer("coverage-heatmap-layer-coverage-1")).toBeDefined();
-    expect(objectUrlMocks.create).toHaveBeenCalledOnce();
+    expect(canvasLeaseMocks.instances).toHaveLength(1);
 
     maplibreMocks.map.isStyleLoaded.mockReturnValue(false);
     rerender(<MapView {...sharedProps} heatmaps={[]} activeHeatmapId={null} />);
     expect(maplibreMocks.map.removeLayer).not.toHaveBeenCalled();
-    expect(objectUrlMocks.revoke).not.toHaveBeenCalled();
+    expect(canvasLeaseMocks.instances[0].dispose).not.toHaveBeenCalled();
 
     maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
     maplibreMocks.emit("idle");
     expect(maplibreMocks.map.removeLayer).toHaveBeenCalledWith("coverage-heatmap-layer-coverage-1");
     expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith("coverage-heatmap-coverage-1");
-    expect(objectUrlMocks.revoke).toHaveBeenCalledWith("blob:coverage-heatmap");
+    expect(canvasLeaseMocks.instances[0].dispose).toHaveBeenCalledOnce();
 
     unmount();
-    expect(objectUrlMocks.revoke).toHaveBeenCalledOnce();
+    expect(canvasLeaseMocks.instances[0].dispose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an offscreen canvas dirty and uploads it once after it returns to the viewport", () => {
+    vi.useFakeTimers();
+    const props = {
+      theme: "dark" as const,
+      point: { lat: 30, lon: 103 },
+      heatmaps: [sampleCoverage],
+      activeHeatmapId: sampleCoverage.id,
+      preview: null,
+      heatmapStale: false,
+      onPointSelect: vi.fn(),
+    };
+    const { rerender, unmount } = render(
+      <MapView {...props} visibleSignalThresholdDbm={-140} />,
+    );
+
+    try {
+      maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+      maplibreMocks.emit("load");
+      const source = maplibreMocks.map.getSource(
+        "coverage-heatmap-coverage-1",
+      ) as {
+        play: ReturnType<typeof vi.fn>;
+        pause: ReturnType<typeof vi.fn>;
+        tiles: Record<string, unknown>;
+      };
+      source.play.mockClear();
+      source.pause.mockClear();
+      const lease = canvasLeaseMocks.instances[0];
+      lease.markUploaded.mockClear();
+
+      maplibreMocks.setViewport({
+        west: 10,
+        south: 0,
+        east: 20,
+        north: 10,
+      });
+      rerender(<MapView {...props} visibleSignalThresholdDbm={-120} />);
+      act(() => {
+        vi.advanceTimersByTime(40);
+      });
+
+      expect(lease.applyThreshold).toHaveBeenCalledWith(-120);
+      expect(lease.dirty).toBe(true);
+      expect(source.play).not.toHaveBeenCalled();
+      expect(source.pause).not.toHaveBeenCalled();
+
+      maplibreMocks.setViewport({
+        west: 100,
+        south: 20,
+        east: 110,
+        north: 40,
+      });
+      source.tiles = {};
+      act(() => {
+        maplibreMocks.emit("moveend");
+      });
+      expect(source.play).not.toHaveBeenCalled();
+      expect(lease.dirty).toBe(true);
+
+      source.tiles = { visible: {} };
+      act(() => {
+        maplibreMocks.emit("idle");
+      });
+      expect(source.play).toHaveBeenCalledOnce();
+      expect(source.pause).toHaveBeenCalledOnce();
+      expect(lease.markUploaded).toHaveBeenCalledOnce();
+      expect(lease.dirty).toBe(false);
+
+      act(() => {
+        maplibreMocks.emit("idle");
+      });
+      expect(source.play).toHaveBeenCalledOnce();
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
   });
 });

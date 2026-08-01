@@ -36,7 +36,7 @@
 - 接收点海拔逐像素从 DEM 取得。
 - 发射点手动地面海拔范围为 `-500..=9000 m AMSL`；字段缺失/`null` 与 DEM 自动兼容。
 - 手动模式仍读取并验证中心 DEM，只替换每条 PFL 首样点；AGL、其余 DEM 和 WBM 采样不变。
-- 计算结果 schema 3 冻结有效地面海拔与 `dem/manual` 来源；bootstrap schema 保持 2。
+- 当前计算结果 schema 4 冻结有效地面海拔与 `dem/manual` 来源并携带显示筛选 bins；bootstrap schema 保持 2，preview schema 保持 1。
 - 原始报告栅格保持 `401×401` 局部等距样本；地图另生成 `401×401`、轴对齐 EPSG:3857 覆盖层。
 - 地图图像边界相对首末输出像素中心各扩展半个像素；精确 200 km 连续边界点必须位于图像域内，199 km 内侧 alpha 可见。若最近像素中心透明，`3×3` 邻域内最近可见中心误差不得超过该处 WGS-84 实算一个输出像素对角线。
 - 纬度 18°、30.5°、40°、54° 的代表性覆盖层定位误差均小于 1 km。
@@ -56,8 +56,9 @@
 - Rust worker 在接收点之间和长剖面采样期间响应取消；取消后不编码或保留半成品。
 - 场景预设保留手动地面海拔；选择新点重置 DEM 自动、清除当前预览/导出身份，但保留其他已完成会话覆盖层。
 - 不同发射点完成后累积独立覆盖层；完全同点重算替换旧层；最多 8 项，第 9 项淘汰最早项。
-- 清空删除全部会话覆盖层，保留当前发射点、参数、地面海拔模式/值和缓存，同一点可立即重算。
-- 每个结果使用独立 MapLibre source/layer/Blob lease；最新层置顶，历史站点可见，重叠不解释为联合场强。
+- 清空删除全部会话覆盖层，保留当前发射点、参数、地面海拔模式/值、全局显示阈值和缓存，同一点可立即重算。
+- 全局阈值游标范围 `-140..-60 dBm`、1 dB 步长、默认 `-140 dBm`；最多 8 个已完成层同步筛选，低于阈值的像素透明。
+- 每个已完成结果使用独立 MapLibre CanvasSource/layer；最新层置顶，历史站点可见，重叠不解释为联合场强。渐进预览仍保持 image source/Blob lease。
 - 样式暂时未就绪时的清空不得丢失；style 恢复后必须删除全部旧 heatmap layer/source 并逐项释放 Blob URL。
 - 地图右下显示随缩放和平移变化的公制比例尺，左下发射点坐标不被遮挡。
 - DEM 自动/手动界面显示 DEM 参考值与有效天线 AMSL，且不把 AMSL 误当新的传播输入。
@@ -86,7 +87,8 @@
 - validation 模式的 PNG/PDF 必须由浏览器本地生成并通过 Blob 下载；不得请求服务器导出路由、上传报告正文或提交目标文件路径。
 - 浏览器 PDF 必须具有 `%PDF-1.4` 头、单页 Pages tree、JPEG XObject、有效 xref/startxref 与 EOF；非法 JPEG 或尺寸必须拒绝。
 - 多层会话只导出当前最新且未过期的单个已完成结果及其冻结参数，不导出视觉叠层合成图。
-- 地面海拔及来源必须来自计算结果 schema 3，不得在导出时用当前表单或重新读取 DEM 替换。
+- 地面海拔及来源必须来自计算结果 schema 4，不得在导出时用当前表单或重新读取 DEM 替换。
+- 调整地图显示阈值不得改变诊断 PNG/PDF 字节、统计摘要或可导出结果身份；导出继续使用未筛选权威结果。
 - 内部诊断 PDF 为 A4 横向单页，嵌入同一报告 PNG，解析后页数和页面尺寸正确。
 - 非 PNG MIME、非法 Base64、非 `1600×1100` 图像和超限负载均被 Rust 拒绝。
 - 保存取消不创建文件；写入失败不覆盖已有目标且不留下临时文件。
@@ -104,6 +106,7 @@
 - 进度至少每秒更新一次。
 - 计算峰值内存目标小于 2 GB，最终以基准结果确定。
 - 1、2、4、8、16 线程记录剖面提取、ITM、渲染和总耗时。
+- 阈值连续拖动采用 30 fps 上限；记录 1 层与 8 层 `401×401` alpha 更新耗时、掉帧和主线程长任务。每帧目标不超过 33 ms，且拖动不得产生 calculate IPC/HTTP、PNG 重编码或 source/layer 重建。
 
 性能目标未达成时优先优化缓存、分块、剖面复用和 FFI，不改变 1 km 输出要求。
 
@@ -727,3 +730,33 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] 在 Windows 实机检查 DevTools、日志、崩溃信息、bootstrap 和导出文件均不含 `tk`，并确认诊断 PNG/PDF 不包含在线底图。
 
 详细架构和发行边界见 ADR 0020。
+
+## 32. 全局 dBm 显示阈值与离线地图包边界（2026-08-01，执行证据待回填）
+
+本节定义本轮验收口径，不以设计或编译成功冒充浏览器性能、Windows 实机或 Release 完成。结果契约见 ADR 0021。
+
+### 32.1 结果契约与显示语义
+
+- [ ] CalculationResult schema 4 同时携带 `mapOverlayPngDataUrl`、固定 `mapOverlayFilterEncoding="u8-dbm-floor-v1"` 和 Base64 bins；bootstrap schema 2、preview schema 1 保持不变。
+- [ ] bins 解码后长度严格等于 `mapOverlayWidth × mapOverlayHeight`；0 表示原本透明，1..81 与整数 `-140..-60 dBm` cutoff 在边界上下均满足 `value >= threshold`。
+- [ ] 缺字段、未知 encoding、非法 Base64、错误长度或尺寸不匹配时 fail closed，不显示可被误筛选的最终层，也不退化为像素查询接口。
+- [ ] 色标游标默认 `-140 dBm`，范围和键盘步长正确，显示负号与 dBm；无已完成结果时禁用或不执行渲染。
+- [ ] `-140` 保留原 PNG 可见 alpha；拖到 `-120` 时只保留 `>= -120 dBm`；`-60` 只保留最强区。透明像素始终透明，可见像素 RGB 不改变。
+- [ ] 同一阈值同步作用于最多 8 个已完成层；选择新点、参数变化、新计算和地图/卫星切换保留阈值，清空删除层但保留阈值。
+- [ ] 阈值不作用于渐进 preview，不改变计算请求/次数、统计、缓存键、结果 PNG、当前导出身份或 PNG/PDF 字节。
+
+### 32.2 MapLibre 生命周期与性能
+
+- [ ] 最终层以 `animate:false` CanvasSource 复用；首次 PNG 解码后拖动只更新 alpha 和一次纹理上传，不重新编码 PNG、不删除/增加 source/layer、不移动相机。
+- [ ] `requestAnimationFrame` 与至少 33 ms 间隔把连续 input 合并到最多 30 fps；相同整数值不重绘，迟到帧不能覆盖最新阈值。
+- [ ] 纯函数/DOM 测试覆盖 1 层和 8 层、clear/unmount 释放、style 未就绪后 desired-state 重放，以及 preview image source 与 final canvas source 不混用。
+- [ ] 服务器上的自动化或微基准记录 8×401×401 最坏 alpha 扫描耗时；只有实际浏览器拖动、控制台、WebGL 和长任务证据完成后才能说明“无明显卡顿”。
+- [ ] 经 SSH 隧道在受管 validation 浏览器中连续拖动 `-140 → -60 → -120`，视觉确认弱像素动态剔除、地名/发射点层级不变、无控制台错误；该证据不外推为 Windows WebView2。
+- [ ] Windows 10/11 实机对独立 EXE/NSIS 分别复测 8 层拖动、DPI/缩放、浅/深主题、GPU/软件渲染和内存。
+
+### 32.3 Windows Release 与离线地图
+
+- [ ] GitHub Alpha Release 实际创建后上传独立 EXE、NSIS 安装包与 `SHA256SUMS.txt`；README 只链接 Releases 页面，不提前写不存在的 tag/资产 URL。
+- [ ] 下载后的 SHA-256 与服务器受验产物一致；发布说明明确未签名、SmartScreen、Windows 实机和真实网络待验边界。
+- [ ] 本轮 Release 内容审计确认不含四省内部 PMTiles、EOxCloudless 离线副本、DEM/WBM、密钥、源码依赖或构建缓存。
+- [ ] 后续正式离线地图包只有在授权、审图/边界、不可变 manifest、SHA-256、partial/原子 ready、缓存页可删除及十进制 2.5 GB 全量计费均通过后才能发布。

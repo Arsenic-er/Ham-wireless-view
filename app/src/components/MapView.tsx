@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FeatureCollection } from "geojson";
 import maplibregl, {
+  type CanvasSource,
   type GeoJSONSource,
   type ImageSource,
   type Map as MapLibreMap,
@@ -28,6 +29,7 @@ import {
   type BasemapPresentation,
   synchronizeBasemap,
 } from "../lib/basemap";
+import { MapOverlayCanvasLease } from "../lib/mapOverlayCanvas";
 import { MapOverlayBlobUrlLease, buildMapOverlayImageSpec } from "../lib/mapOverlay";
 import type {
   BasemapInfo,
@@ -45,6 +47,7 @@ interface MapViewProps {
   activeHeatmapId: string | null;
   preview: CalculationPreview | null;
   heatmapStale: boolean;
+  visibleSignalThresholdDbm?: number;
   onPointSelect: (point: MapPoint) => void;
   basemap?: BasemapInfo | null;
   onlineBasemap?: OnlineBasemapInfo | null;
@@ -131,18 +134,12 @@ function overlayIds(id: string): { sourceId: string; layerId: string } {
   };
 }
 
-function removeOverlay(
-  map: MapLibreMap,
-  sourceId: string,
-  layerId: string,
-  blobUrls: MapOverlayBlobUrlLease,
-): void {
+function removeMapOverlay(map: MapLibreMap, sourceId: string, layerId: string): void {
   if (map.getLayer(layerId)) map.removeLayer(layerId);
   if (map.getSource(sourceId)) map.removeSource(sourceId);
-  blobUrls.clear();
 }
 
-function updateOverlay(
+function updateImageOverlay(
   map: MapLibreMap,
   sourceId: string,
   layerId: string,
@@ -170,47 +167,141 @@ function updateOverlay(
   );
 }
 
+function refreshCanvasSource(map: MapLibreMap, sourceId: string): boolean {
+  const source = map.getSource(sourceId) as CanvasSource | undefined;
+  if (!source || Object.keys(source.tiles).length === 0) {
+    return false;
+  }
+  source.play();
+  source.pause();
+  return true;
+}
+
+function canvasOverlayIntersectsViewport(
+  map: MapLibreMap,
+  coordinates: readonly (readonly [number, number])[],
+): boolean {
+  const bounds = map.getBounds();
+  const west = Math.min(...coordinates.map(([lon]) => lon));
+  const east = Math.max(...coordinates.map(([lon]) => lon));
+  const south = Math.min(...coordinates.map(([, lat]) => lat));
+  const north = Math.max(...coordinates.map(([, lat]) => lat));
+  return (
+    east >= bounds.getWest() &&
+    west <= bounds.getEast() &&
+    north >= bounds.getSouth() &&
+    south <= bounds.getNorth()
+  );
+}
+
+function refreshDirtyCanvasOverlay(
+  map: MapLibreMap,
+  sourceId: string,
+  lease: MapOverlayCanvasLease,
+): boolean {
+  const coordinates = lease.coordinates;
+  if (
+    !lease.ready ||
+    !lease.dirty ||
+    !coordinates ||
+    !canvasOverlayIntersectsViewport(map, coordinates) ||
+    !refreshCanvasSource(map, sourceId)
+  ) {
+    return false;
+  }
+  lease.markUploaded();
+  return true;
+}
+
+function refreshDirtyCanvasOverlays(
+  map: MapLibreMap,
+  canvasLeases: ReadonlyMap<string, MapOverlayCanvasLease>,
+): void {
+  for (const [id, lease] of canvasLeases) {
+    refreshDirtyCanvasOverlay(map, overlayIds(id).sourceId, lease);
+  }
+}
+
+function ensureCanvasOverlay(
+  map: MapLibreMap,
+  sourceId: string,
+  layerId: string,
+  lease: MapOverlayCanvasLease,
+  opacity: number,
+): void {
+  const coordinates = lease.coordinates;
+  if (!lease.ready || !coordinates) {
+    removeMapOverlay(map, sourceId, layerId);
+    return;
+  }
+  const source = map.getSource(sourceId) as CanvasSource | undefined;
+  if (source) {
+    source.setCoordinates(coordinates);
+    map.setPaintProperty(layerId, "raster-opacity", opacity);
+    refreshDirtyCanvasOverlay(map, sourceId, lease);
+    return;
+  }
+  map.addSource(sourceId, {
+    type: "canvas",
+    canvas: lease.canvas,
+    animate: false,
+    coordinates,
+  });
+  map.addLayer(
+    {
+      id: layerId,
+      type: "raster",
+      source: sourceId,
+      paint: { "raster-opacity": opacity, "raster-resampling": "linear" },
+    },
+    firstBasemapLabelLayerId(map) ?? "coverage-circle-fill",
+  );
+  refreshDirtyCanvasOverlay(map, sourceId, lease);
+}
+
 function updateHeatmaps(
   map: MapLibreMap,
   heatmaps: readonly SessionCoverageResult[],
   activeHeatmapId: string | null,
   preview: CalculationPreview | null,
   stale: boolean,
-  blobUrls: Map<string, MapOverlayBlobUrlLease>,
+  visibleSignalThresholdDbm: number,
+  canvasLeases: Map<string, MapOverlayCanvasLease>,
   renderedIds: Set<string>,
   previewBlobUrls: MapOverlayBlobUrlLease,
+  onCanvasReady: () => void,
 ): void {
   const desiredIds = new Set(heatmaps.map(({ id }) => id));
   for (const id of [...renderedIds]) {
     if (desiredIds.has(id)) continue;
     const { sourceId, layerId } = overlayIds(id);
-    const lease = blobUrls.get(id);
-    if (lease) removeOverlay(map, sourceId, layerId, lease);
-    blobUrls.delete(id);
+    removeMapOverlay(map, sourceId, layerId);
+    canvasLeases.get(id)?.dispose();
+    canvasLeases.delete(id);
     renderedIds.delete(id);
   }
 
   for (const entry of heatmaps) {
     const ids = overlayIds(entry.id);
-    let lease = blobUrls.get(entry.id);
+    let lease = canvasLeases.get(entry.id);
     if (!lease) {
-      lease = new MapOverlayBlobUrlLease();
-      blobUrls.set(entry.id, lease);
+      lease = new MapOverlayCanvasLease();
+      canvasLeases.set(entry.id, lease);
     }
-    updateOverlay(
+    lease.update(entry.result, visibleSignalThresholdDbm, onCanvasReady);
+    ensureCanvasOverlay(
       map,
       ids.sourceId,
       ids.layerId,
-      entry.result,
-      stale && entry.id === activeHeatmapId ? 0.28 : 0.84,
       lease,
+      stale && entry.id === activeHeatmapId ? 0.28 : 0.84,
     );
     renderedIds.add(entry.id);
   }
 
   const previewIds = overlayIds("preview");
   if (preview) {
-    updateOverlay(
+    updateImageOverlay(
       map,
       previewIds.sourceId,
       previewIds.layerId,
@@ -219,12 +310,8 @@ function updateHeatmaps(
       previewBlobUrls,
     );
   } else {
-    removeOverlay(
-      map,
-      previewIds.sourceId,
-      previewIds.layerId,
-      previewBlobUrls,
-    );
+    removeMapOverlay(map, previewIds.sourceId, previewIds.layerId);
+    previewBlobUrls.clear();
   }
 }
 
@@ -235,6 +322,7 @@ export function MapView({
   activeHeatmapId,
   preview,
   heatmapStale,
+  visibleSignalThresholdDbm = -140,
   onPointSelect,
   basemap,
   onlineBasemap,
@@ -247,11 +335,14 @@ export function MapView({
   const mapRef = useRef<MapLibreMap | null>(null);
   const synchronizeMapStateRef = useRef<(() => void) | null>(null);
   const protomapsViewFittedRef = useRef(false);
-  const heatmapBlobUrlsRef = useRef<Map<string, MapOverlayBlobUrlLease> | null>(null);
+  const heatmapCanvasLeasesRef = useRef<Map<string, MapOverlayCanvasLease> | null>(null);
   const previewBlobUrlsRef = useRef<MapOverlayBlobUrlLease | null>(null);
   const renderedHeatmapIdsRef = useRef<Set<string>>(new Set());
-  if (!heatmapBlobUrlsRef.current) {
-    heatmapBlobUrlsRef.current = new Map();
+  const thresholdAnimationFrameRef = useRef<number | null>(null);
+  const thresholdTimerRef = useRef<number | null>(null);
+  const lastThresholdPaintRef = useRef(Number.NEGATIVE_INFINITY);
+  if (!heatmapCanvasLeasesRef.current) {
+    heatmapCanvasLeasesRef.current = new Map();
   }
   if (!previewBlobUrlsRef.current) {
     previewBlobUrlsRef.current = new MapOverlayBlobUrlLease();
@@ -262,6 +353,7 @@ export function MapView({
   const activeHeatmapIdRef = useRef(activeHeatmapId);
   const previewRef = useRef(preview);
   const heatmapStaleRef = useRef(heatmapStale);
+  const visibleSignalThresholdDbmRef = useRef(visibleSignalThresholdDbm);
   const onPointSelectRef = useRef(onPointSelect);
   const basemapRef = useRef(basemap);
   const onlineBasemapRef = useRef(onlineBasemap);
@@ -273,6 +365,7 @@ export function MapView({
   activeHeatmapIdRef.current = activeHeatmapId;
   previewRef.current = preview;
   heatmapStaleRef.current = heatmapStale;
+  visibleSignalThresholdDbmRef.current = visibleSignalThresholdDbm;
   onPointSelectRef.current = onPointSelect;
   basemapRef.current = basemap;
   basemapPresentationRef.current = basemapPresentation;
@@ -280,8 +373,8 @@ export function MapView({
   onlineBasemapFailedRef.current = onlineBasemapFailed;
 
   useEffect(() => {
-    if (!containerRef.current || !heatmapBlobUrlsRef.current || !previewBlobUrlsRef.current) return;
-    const heatmapBlobUrls = heatmapBlobUrlsRef.current;
+    if (!containerRef.current || !heatmapCanvasLeasesRef.current || !previewBlobUrlsRef.current) return;
+    const heatmapCanvasLeases = heatmapCanvasLeasesRef.current;
     const previewBlobUrls = previewBlobUrlsRef.current;
     const renderedHeatmapIds = renderedHeatmapIdsRef.current;
     const releasePmtilesProtocol = acquirePmtilesProtocol();
@@ -363,17 +456,23 @@ export function MapView({
         activeHeatmapIdRef.current,
         previewRef.current,
         heatmapStaleRef.current,
-        heatmapBlobUrls,
+        visibleSignalThresholdDbmRef.current,
+        heatmapCanvasLeases,
         renderedHeatmapIds,
         previewBlobUrls,
+        () => synchronizeMapStateRef.current?.(),
       );
     };
     const replayPendingMapState = () => {
       if (synchronizationPending) synchronizeDesiredMapState();
+      refreshDirtyCanvasOverlays(map, heatmapCanvasLeases);
     };
+    const refreshSettledCanvasOverlays = () =>
+      refreshDirtyCanvasOverlays(map, heatmapCanvasLeases);
     synchronizeMapStateRef.current = synchronizeDesiredMapState;
     map.on("styledata", replayPendingMapState);
     map.on("idle", replayPendingMapState);
+    map.on("moveend", refreshSettledCanvasOverlays);
     map.on("load", () => {
       map.addSource("graticule", { type: "geojson", data: graticuleGeoJson() });
       map.addLayer({
@@ -489,8 +588,8 @@ export function MapView({
         synchronizeMapStateRef.current = null;
       }
       mapRef.current = null;
-      for (const lease of heatmapBlobUrls.values()) lease.clear();
-      heatmapBlobUrls.clear();
+      for (const lease of heatmapCanvasLeases.values()) lease.dispose();
+      heatmapCanvasLeases.clear();
       renderedHeatmapIds.clear();
       previewBlobUrls.clear();
       map.remove();
@@ -544,6 +643,45 @@ export function MapView({
   useEffect(() => {
     synchronizeMapStateRef.current?.();
   }, [heatmaps, activeHeatmapId, preview, heatmapStale]);
+
+  useEffect(() => {
+    const requestFrame =
+      window.requestAnimationFrame?.bind(window) ??
+      ((callback: FrameRequestCallback) =>
+        window.setTimeout(() => callback(performance.now()), 16));
+    const cancelFrame =
+      window.cancelAnimationFrame?.bind(window) ?? window.clearTimeout.bind(window);
+    const paintThreshold = (timestamp: number) => {
+      thresholdAnimationFrameRef.current = null;
+      const waitMs = 1000 / 30 - (timestamp - lastThresholdPaintRef.current);
+      if (waitMs > 1) {
+        thresholdTimerRef.current = window.setTimeout(() => {
+          thresholdTimerRef.current = null;
+          thresholdAnimationFrameRef.current = requestFrame(paintThreshold);
+        }, waitMs);
+        return;
+      }
+      lastThresholdPaintRef.current = timestamp;
+      const map = mapRef.current;
+      const leases = heatmapCanvasLeasesRef.current;
+      if (!map?.isStyleLoaded() || !leases) return;
+      for (const [id, lease] of leases) {
+        lease.applyThreshold(visibleSignalThresholdDbmRef.current);
+        refreshDirtyCanvasOverlay(map, overlayIds(id).sourceId, lease);
+      }
+    };
+    thresholdAnimationFrameRef.current = requestFrame(paintThreshold);
+    return () => {
+      if (thresholdAnimationFrameRef.current !== null) {
+        cancelFrame(thresholdAnimationFrameRef.current);
+        thresholdAnimationFrameRef.current = null;
+      }
+      if (thresholdTimerRef.current !== null) {
+        window.clearTimeout(thresholdTimerRef.current);
+        thresholdTimerRef.current = null;
+      }
+    };
+  }, [visibleSignalThresholdDbm]);
 
   const retryOnlineBasemap = () => {
     if (!isTrustedOnlineBasemap(onlineBasemapRef.current)) return;

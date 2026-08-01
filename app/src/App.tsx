@@ -25,6 +25,7 @@ import {
   isTrustedOnlineBasemap,
   isTrustedTiandituBasemap,
 } from "./lib/basemap";
+import { MAX_VISIBLE_DBM, MIN_VISIBLE_DBM } from "./lib/coverageVisibility";
 import {
   createExportReportPngDataUrl,
   suggestedExportFileName,
@@ -128,6 +129,7 @@ export function App() {
   const [sessionResults, setSessionResults] = useState<SessionCoverageResult[]>([]);
   const [activeResultId, setActiveResultId] = useState<string | null>(null);
   const [resultStale, setResultStale] = useState(false);
+  const [visibleSignalThresholdDbm, setVisibleSignalThresholdDbm] = useState(MIN_VISIBLE_DBM);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [cancellationPending, setCancellationPending] = useState(false);
   const [cacheOpen, setCacheOpen] = useState(false);
@@ -826,6 +828,7 @@ export function App() {
             activeHeatmapId={activeResultId}
             preview={preview}
             heatmapStale={resultStale}
+            visibleSignalThresholdDbm={visibleSignalThresholdDbm}
             onPointSelect={handlePointSelect}
             basemap={desktopMode ? null : (bootstrapInfo?.basemap ?? null)}
             onlineBasemap={desktopMode ? (bootstrapInfo?.onlineBasemap ?? null) : null}
@@ -836,7 +839,24 @@ export function App() {
               <strong>dBm</strong>
             </div>
             <div className="legend-scale">
-              <div className="legend-gradient" />
+              <div className="legend-track">
+                <div className="legend-gradient" />
+                <input
+                  className="legend-threshold-slider"
+                  type="range"
+                  dir="rtl"
+                  min={MIN_VISIBLE_DBM}
+                  max={MAX_VISIBLE_DBM}
+                  step={1}
+                  value={visibleSignalThresholdDbm}
+                  disabled={sessionResults.length === 0}
+                  aria-label="最弱可见场强"
+                  aria-valuetext={`${visibleSignalThresholdDbm} dBm 及以上`}
+                  onChange={(event) =>
+                    setVisibleSignalThresholdDbm(Number(event.currentTarget.value))
+                  }
+                />
+              </div>
               <div className="legend-labels">
                 <span>≥ -60</span>
                 <span>-75</span>
@@ -846,14 +866,21 @@ export function App() {
                 <span>-140</span>
               </div>
             </div>
-            <div className="legend-transparent">
-              <i />
-              &lt; -140 透明
+            <div className="legend-filter-status" aria-live="polite">
+              <strong>显示 ≥ {visibleSignalThresholdDbm} dBm</strong>
+              <span>
+                {sessionResults.length === 0 ? "生成热力图后可调" : "拖动时动态隐藏较弱信号"}
+              </span>
             </div>
-            <div className="legend-note">颜色仅表示预测值，不保证实际通联</div>
-            {sessionResults.length > 0 && (
-              <div className="legend-note">会话结果 {sessionResults.length} / {MAX_SESSION_COVERAGES}</div>
-            )}
+            <div className="legend-note-stack">
+              <div className="legend-note">仅筛选地图显示，不改变计算与导出</div>
+              <div className="legend-note">
+                {sessionResults.length > 0
+                  ? `会话结果 ${sessionResults.length} / ${MAX_SESSION_COVERAGES}`
+                  : "< -140 dBm 透明"}
+              </div>
+              <div className="legend-note">颜色仅表示预测值，不保证实际通联</div>
+            </div>
           </div>
         </div>
 
