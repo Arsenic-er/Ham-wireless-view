@@ -22,7 +22,6 @@ import {
   probeOnlineBasemap,
 } from "./lib/backend";
 import {
-  isTrustedProtomapsBasemap,
   isTrustedOnlineBasemap,
   isTrustedTiandituBasemap,
 } from "./lib/basemap";
@@ -809,13 +808,7 @@ export function App() {
   }
 
   const cacheUsage = inspection?.cacheUsage ?? bootstrapInfo?.cacheUsage;
-  const offlineBasemapBytes = isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
-    ? bootstrapInfo.basemap.archiveBytes
-    : 0;
-  const displayedMetadataBytes = Math.max(
-    0,
-    (cacheUsage?.metadataBytes ?? 0) - offlineBasemapBytes,
-  );
+  const displayedMetadataBytes = cacheUsage?.metadataBytes ?? 0;
   const trustedOnlineBasemap =
     desktopMode && isTrustedOnlineBasemap(bootstrapInfo?.onlineBasemap);
   const savedOnlineBasemap = bootstrapInfo?.onlineBasemap?.configured === true;
@@ -824,10 +817,8 @@ export function App() {
     : null;
   const basemapStatus = trustedOnlineBasemap
     ? "已接入天地图在线矢量、中文地名及卫星影像；网络不可用时自动回退 WGS84 网格。"
-    : isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
-    ? "已接入区域离线真实底图及省市县乡镇地名（OpenStreetMap / Protomaps）；可切换联网卫星影像。"
     : isTrustedTiandituBasemap(bootstrapInfo?.basemap)
-      ? "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。"
+      ? "已接入天地图在线矢量、中文地名及卫星影像；网络不可用时自动回退 WGS84 网格。"
       : "未配置受信任的真实底图；当前只显示 WGS84 坐标网格。";
   const cachePercent = cacheUsage
     ? Math.min(100, (cacheUsage.totalBytes / cacheUsage.capBytes) * 100)
@@ -1271,13 +1262,6 @@ export function App() {
               <div><span>高程 DEM</span><strong>{formatBytes(cacheUsage?.demBytes ?? 0)}</strong></div>
               <div><span>水体 WBM</span><strong>{formatBytes(cacheUsage?.waterBytes ?? 0)}</strong></div>
               <div><span>临时下载</span><strong>{formatBytes(cacheUsage?.partialBytes ?? 0)}</strong></div>
-              {offlineBasemapBytes > 0 && (
-                <div>
-                  <span>离线底图</span>
-                  <strong>{formatBytes(offlineBasemapBytes)}</strong>
-                  <small>固定区域 · 服务器管理</small>
-                </div>
-              )}
               <div><span>索引与元数据</span><strong>{formatBytes(displayedMetadataBytes)}</strong></div>
             </div>
             <div className="cache-region-heading">

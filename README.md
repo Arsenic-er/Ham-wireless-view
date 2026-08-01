@@ -7,16 +7,16 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 ### 在线验证版
 
 - 私有 validation 服务已在服务器运行，只监听 `127.0.0.1:1421`，需通过 SSH 隧道访问。
-- 已可使用四省区域地图、中文地名、联网卫星图、真实 DEM/WBM + ITM 计算、最多 8 个会话覆盖层、动态比例尺，以及浏览器本地诊断 PNG/PDF 导出。
-- 已实现 -140..-60 dBm、1 dB 步长的全局显示阈值游标；它动态隐藏较弱像素，不重新计算传播结果，也不改变统计与本轮导出内容。当前门禁通过前端 111 项、Rust workspace 114 项（另 5 项环境型测试忽略）和三组真实缓存 HTTP 烟测；8 层服务器 CPU 微基准 P95 为 5.982 ms。受管浏览器拖动因 Codex Windows ACL 故障尚未完成，Windows WebView2 实机仍待验。
-- 四省 PMTiles 和 EOxCloudless 仅供内部验证，不属于公开 Windows 发行资产。
+- 当前目标改为纯在线视觉底图：validation 通过同源代理使用天地图普通地图与 EOxCloudless 卫星图；底图不可用时回退 WGS84 坐标网格。真实 DEM/WBM + ITM 计算、最多 8 个会话覆盖层、动态比例尺及浏览器本地诊断 PNG/PDF 导出保持不变。
+- 已实现 -140..-60 dBm、1 dB 步长的全局显示阈值游标；它动态隐藏较弱像素，不重新计算传播结果，也不改变统计与本轮导出内容。当前门禁通过前端 107 项、Rust workspace 110 项（另 5 项环境型测试忽略）和三组真实缓存 HTTP 烟测；8 层服务器 CPU 微基准 P95 为 5.982 ms。受管浏览器拖动因 Codex Windows ACL 故障尚未完成，Windows WebView2 实机仍待验。
+- 四省 PMTiles 已退出当前产品目标，只保留历史工程证据；EOxCloudless 仍是 validation 在线卫星视觉层，不进入公开 Windows 发行资产。
 
 ### Windows Alpha
 
 - Windows/Tauri 已支持在线天地图普通地图与卫星图；用户自行配置 `tk`，Windows 使用当前用户 DPAPI 加密保存，在线瓦片不进入 2.5 GB 缓存或诊断导出。Alpha 2 增加显式连接自检，清楚区分“配置已保存”与“在线地图可达”，且探测不写瓦片缓存。
 - v0.1.0-alpha.2 已从提交 9b0fb79 重新交叉构建并上传 GitHub Release：独立 EXE 16,174,080 bytes，内嵌离线 WebView2 的 NSIS 安装包 217,265,419 bytes。
 - Release 同时提供 SHA256SUMS.txt；两个 Windows 产物均未签名，Windows 10/11 实机、SmartScreen、安装/卸载和中国大陆真实网络仍待验证。
-- 本轮 Windows Release **不含离线地图**。后续离线地图包必须使用正式授权资产，带版本、大小与校验和，可由用户删除，并与 DEM/WBM 等全部持久数据共同计入不可修改的十进制 2.5 GB 上限；现有四省内部 PMTiles 不得打入公开 EXE。
+- Windows 产品只使用在线视觉底图，不规划或发行离线地图包；任何在线瓦片均不持久缓存。DEM/WBM、partial、索引与计算缓存仍受不可修改的十进制 2.5 GB 上限约束，已缓存区域可在无网络时继续计算并在 WGS84 坐标网格上显示结果。
 
 ## Windows 下载
 
@@ -69,7 +69,7 @@ SHA-256：HamHeatmap.exe 为 a1968a48bca419d58680adca31759284f7971d36c5905034512
 - `docs/19-parameter-sensitivity-validation.md`：真实成都逐像素参数矩阵、双 PNG 确定性和缓存快照不变性证据。
 - `docs/20-tianditu-basemap-proxy.md`：天地图在线同源代理、token 边界、动态比例尺、清空重放与未验证门槛。
 - `docs/decisions/`：带证据的工程决策记录。
-- docs/21-protomaps-four-province-basemap.md：四省 PMTiles 资产、Range、图层白名单、许可边界与待验证矩阵。
+- docs/21-protomaps-four-province-basemap.md：已退出当前产品目标的四省 PMTiles 历史验证证据。
 
 ## 开发与构建
 
@@ -214,7 +214,7 @@ scripts/tauri-windows-cross.sh
 
 桌面端使用 Tauri 2.11.5、React 19.2.7、TypeScript 7.0.2、Vite 8.1.4 和 MapLibre GL JS 5.24.0。后端使用 Rust、内嵌 SQLite、NTIA 官方 ITM C++ v1.4、纯 Rust `tiff` 和 rustls HTTPS。
 
-区域底图验证客户端新增 PMTiles JavaScript 4.4.1（BSD-3-Clause）及其传递依赖 fflate 0.8.3（MIT）。
+当前视觉底图全部在线；PMTiles JavaScript 4.4.1 与 fflate 0.8.3 已从当前源码及下一次构建目标移除，四省归档也不会发行。现有公开 Alpha 2 仍含这两个历史 JavaScript 依赖，但不含离线地图归档。
 
 ## 许可证
 

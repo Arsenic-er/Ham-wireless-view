@@ -18,12 +18,9 @@ import {
   TIANDITU_IMAGERY_SOURCE_ID,
   TIANDITU_LABEL_SOURCE_ID,
   TIANDITU_VECTOR_SOURCE_ID,
-  acquirePmtilesProtocol,
-  applyProtomapsTheme,
   firstBasemapLabelLayerId,
   isTrustedBasemap,
   isTrustedOnlineBasemap,
-  isTrustedProtomapsBasemap,
   isTrustedSatelliteBasemap,
   isTrustedTiandituBasemap,
   type BasemapPresentation,
@@ -334,7 +331,6 @@ export function MapView({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const synchronizeMapStateRef = useRef<(() => void) | null>(null);
-  const protomapsViewFittedRef = useRef(false);
   const heatmapCanvasLeasesRef = useRef<Map<string, MapOverlayCanvasLease> | null>(null);
   const previewBlobUrlsRef = useRef<MapOverlayBlobUrlLease | null>(null);
   const renderedHeatmapIdsRef = useRef<Set<string>>(new Set());
@@ -377,14 +373,13 @@ export function MapView({
     const heatmapCanvasLeases = heatmapCanvasLeasesRef.current;
     const previewBlobUrls = previewBlobUrlsRef.current;
     const renderedHeatmapIds = renderedHeatmapIdsRef.current;
-    const releasePmtilesProtocol = acquirePmtilesProtocol();
     const dark = theme === "dark";
     const map = new maplibregl.Map({
       container: containerRef.current,
       center: [104, 35],
       zoom: 3.25,
       minZoom: 2.3,
-      maxZoom: 12,
+      maxZoom: 18,
       localIdeographFontFamily:
         "Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif",
       maxBounds: [
@@ -418,37 +413,15 @@ export function MapView({
         return;
       }
       synchronizationPending = false;
-      map.setMaxZoom(
-        !onlineBasemapFailedRef.current &&
-          isTrustedOnlineBasemap(onlineBasemapRef.current)
-          ? 18
-          : 12,
-      );
+      map.setMaxZoom(18);
+      const failed = onlineBasemapFailedRef.current;
       synchronizeBasemap(
         map,
-        basemapRef.current,
+        failed ? null : basemapRef.current,
         themeRef.current,
         basemapPresentationRef.current,
-        onlineBasemapFailedRef.current ? null : onlineBasemapRef.current,
+        failed ? null : onlineBasemapRef.current,
       );
-      if (
-        !protomapsViewFittedRef.current &&
-        (onlineBasemapFailedRef.current ||
-          !isTrustedOnlineBasemap(onlineBasemapRef.current)) &&
-        isTrustedProtomapsBasemap(basemapRef.current)
-      ) {
-        protomapsViewFittedRef.current = true;
-        if (!pointRef.current) {
-          const [west, south, east, north] = basemapRef.current.bounds;
-          map.fitBounds(
-            [
-              [west, south],
-              [east, north],
-            ],
-            { padding: 48, duration: 0, maxZoom: 4.5 },
-          );
-        }
-      }
       updateSelection(map, pointRef.current, heatmapsRef.current);
       updateHeatmaps(
         map,
@@ -567,20 +540,35 @@ export function MapView({
     });
     map.on("error", (event) => {
       const sourceId = (event as { sourceId?: string }).sourceId;
+      const trustedCustom = isTrustedOnlineBasemap(onlineBasemapRef.current);
+      const trustedSameOrigin = isTrustedTiandituBasemap(basemapRef.current);
+      const trustedSatellite = isTrustedSatelliteBasemap(basemapRef.current);
+      if (!sourceId || !map.getSource(sourceId)) return;
+
+      const customImageryFailed =
+        trustedCustom &&
+        (sourceId === TIANDITU_IMAGERY_SOURCE_ID ||
+          sourceId === TIANDITU_IMAGERY_LABEL_SOURCE_ID);
+      const validationSatelliteFailed =
+        sourceId === SATELLITE_SOURCE_ID && trustedSatellite;
       if (
-        sourceId &&
-        ONLINE_BASEMAP_SOURCE_IDS.has(sourceId) &&
-        map.getSource(sourceId) &&
-        isTrustedOnlineBasemap(onlineBasemapRef.current)
+        customImageryFailed ||
+        (validationSatelliteFailed && trustedSameOrigin)
       ) {
+        setSatelliteFallback(true);
+        setBasemapPresentation("map");
+        return;
+      }
+
+      if (
+        (ONLINE_BASEMAP_SOURCE_IDS.has(sourceId) &&
+          (trustedCustom || trustedSameOrigin)) ||
+        validationSatelliteFailed
+      ) {
+        setSatelliteFallback(false);
         onlineBasemapFailedRef.current = true;
         setOnlineBasemapFailed(true);
         synchronizeDesiredMapState();
-        return;
-      }
-      if (sourceId === SATELLITE_SOURCE_ID) {
-        setSatelliteFallback(true);
-        setBasemapPresentation("map");
       }
     });
     return () => {
@@ -593,7 +581,6 @@ export function MapView({
       renderedHeatmapIds.clear();
       previewBlobUrls.clear();
       map.remove();
-      releasePmtilesProtocol();
     };
   }, []);
 
@@ -615,8 +602,7 @@ export function MapView({
         theme === "dark" ? "#35505f" : "#bfd0d7",
       );
     }
-    applyProtomapsTheme(map, theme, basemapPresentation);
-  }, [theme, basemapPresentation]);
+  }, [theme]);
 
   useEffect(() => {
     synchronizeMapStateRef.current?.();
@@ -625,8 +611,9 @@ export function MapView({
   useEffect(() => {
     if (
       basemapPresentation === "satellite" &&
+      !onlineBasemapFailed &&
       !isTrustedSatelliteBasemap(basemap) &&
-      (!isTrustedOnlineBasemap(onlineBasemap) || onlineBasemapFailed)
+      !isTrustedOnlineBasemap(onlineBasemap)
     ) {
       setBasemapPresentation("map");
       return;
@@ -639,7 +626,7 @@ export function MapView({
     setOnlineBasemapFailed(false);
     setSatelliteFallback(false);
     synchronizeMapStateRef.current?.();
-  }, [onlineBasemap]);
+  }, [basemap, onlineBasemap]);
   useEffect(() => {
     synchronizeMapStateRef.current?.();
   }, [heatmaps, activeHeatmapId, preview, heatmapStale]);
@@ -684,7 +671,13 @@ export function MapView({
   }, [visibleSignalThresholdDbm]);
 
   const retryOnlineBasemap = () => {
-    if (!isTrustedOnlineBasemap(onlineBasemapRef.current)) return;
+    if (
+      !isTrustedOnlineBasemap(onlineBasemapRef.current) &&
+      !isTrustedTiandituBasemap(basemapRef.current) &&
+      !isTrustedSatelliteBasemap(basemapRef.current)
+    ) {
+      return;
+    }
     onlineBasemapFailedRef.current = false;
     setOnlineBasemapFailed(false);
     setSatelliteFallback(false);
@@ -692,36 +685,41 @@ export function MapView({
   };
 
   useEffect(() => {
-    const returnToOfflineMap = () => {
-      if (isTrustedOnlineBasemap(onlineBasemapRef.current)) {
+    const returnToGrid = () => {
+      if (
+        isTrustedOnlineBasemap(onlineBasemapRef.current) ||
+        isTrustedTiandituBasemap(basemapRef.current) ||
+        isTrustedSatelliteBasemap(basemapRef.current)
+      ) {
+        setSatelliteFallback(false);
         onlineBasemapFailedRef.current = true;
         setOnlineBasemapFailed(true);
         synchronizeMapStateRef.current?.();
-        return;
-      }
-      if (basemapPresentationRef.current === "satellite") {
-        setSatelliteFallback(true);
-        setBasemapPresentation("map");
       }
     };
-    window.addEventListener("offline", returnToOfflineMap);
+    window.addEventListener("offline", returnToGrid);
     window.addEventListener("online", retryOnlineBasemap);
     return () => {
-      window.removeEventListener("offline", returnToOfflineMap);
+      window.removeEventListener("offline", returnToGrid);
       window.removeEventListener("online", retryOnlineBasemap);
     };
   }, []);
 
-  const trustedProtomaps = isTrustedProtomapsBasemap(basemap);
-  const trustedTianditu = isTrustedTiandituBasemap(basemap);
-  const trustedLegacyBasemap = isTrustedBasemap(basemap) ? basemap : null;
+  const trustedTianditu =
+    !onlineBasemapFailed && isTrustedTiandituBasemap(basemap);
+  const trustedLegacyBasemap =
+    !onlineBasemapFailed && isTrustedBasemap(basemap) ? basemap : null;
   const trustedOnlineBasemap =
     !onlineBasemapFailed && isTrustedOnlineBasemap(onlineBasemap);
-  const satelliteAvailable =
-    trustedOnlineBasemap || isTrustedSatelliteBasemap(basemap);
+  const trustedSatelliteBasemap =
+    !onlineBasemapFailed && isTrustedSatelliteBasemap(basemap);
+  const satelliteAvailable = trustedOnlineBasemap || trustedSatelliteBasemap;
   const usingSatellite = satelliteAvailable && basemapPresentation === "satellite";
   const onlineMapUnavailable =
-    onlineBasemapFailed && isTrustedOnlineBasemap(onlineBasemap);
+    onlineBasemapFailed &&
+    (isTrustedOnlineBasemap(onlineBasemap) ||
+      isTrustedTiandituBasemap(basemap) ||
+      isTrustedSatelliteBasemap(basemap));
   return (
     <section className="map-shell" aria-label="发射点选择地图">
       <div ref={containerRef} className="map-canvas" />
@@ -732,13 +730,13 @@ export function MapView({
           : usingSatellite
           ? trustedOnlineBasemap
             ? "天地图卫星影像（联网）· 中文地名"
-            : "Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证"
+            : trustedTianditu
+            ? "Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证"
+            : "Sentinel-2 卫星影像（联网）· 内部验证"
           : satelliteFallback
-          ? "卫星影像不可用，已切回区域离线地图"
+          ? "卫星影像不可用，已切回在线地图"
           : trustedOnlineBasemap
           ? "天地图在线矢量底图 · 中文地名"
-          : trustedProtomaps
-          ? "区域离线底图 · 内部验证"
           : trustedTianditu
           ? "天地图在线真实底图 · 内部验证"
           : "WGS84 内部测试画布 · 未配置真实底图"}
@@ -778,13 +776,15 @@ export function MapView({
           </button>
         </div>
       )}
-      {(trustedOnlineBasemap || trustedLegacyBasemap) && (
+      {(trustedOnlineBasemap || trustedLegacyBasemap || usingSatellite) && (
         <div className="map-attribution">
           {trustedOnlineBasemap
             ? `${onlineBasemap.attribution} · 在线底图`
             : usingSatellite
-            ? `${trustedLegacyBasemap?.satellite?.attribution} · ${trustedLegacyBasemap?.attribution} 地名`
-            : `${trustedLegacyBasemap?.attribution} · ${trustedProtomaps ? "本地区域底图" : "在线底图"}`}
+            ? trustedLegacyBasemap
+              ? `${basemap?.satellite?.attribution} · ${trustedLegacyBasemap.attribution} 地名`
+              : `${basemap?.satellite?.attribution} · 在线卫星影像`
+            : `${trustedLegacyBasemap?.attribution} · 在线底图`}
         </div>
       )}
       {!point && (

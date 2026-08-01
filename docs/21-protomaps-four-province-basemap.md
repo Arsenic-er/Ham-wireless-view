@@ -1,13 +1,13 @@
-# 四省 Protomaps PMTiles 内部验证记录
+# 历史：四省 Protomaps PMTiles 内部验证记录
 
 - 日期：2026-07-31；地名与卫星视图需求更新：2026-08-01
 - 范围：私有 validation 平台
-- 状态：2026-07-31 的五层无地名底图基线已验证；2026-08-01 的 places 地名显示与地图/卫星切换实现、测试和部署尚未完成
-- 决策：docs/decisions/0017-private-regional-pmtiles-basemap.md、docs/decisions/0018-local-place-labels-and-satellite-view.md
+- 状态：本文件只保留 2026-07-31 至 2026-08-01 已发生的验证证据；2026-08-02 起 PMTiles 当前路径由 ADR-0022 取代
+- 决策：docs/decisions/0017-private-regional-pmtiles-basemap.md、docs/decisions/0018-local-place-labels-and-satellite-view.md；现行目标为 docs/decisions/0022-online-only-visual-basemap.md
 
 ## 1. 结论边界
 
-本记录为四省区域 PMTiles 接入提供可复查的工程基线；当前开发保留 OpenStreetMap 署名和上游许可记录，不以中国大陆公开发行合规作为功能验收阻塞。
+本记录为四省区域 PMTiles 接入提供可复查的历史工程基线，不再描述当前产品能力。OpenStreetMap 署名和上游许可记录继续保留；服务器约 33 MB runtime 资产尚未删除，运行服务也尚未按 ADR-0022 重启。
 
 ## 2. 固定资产事实
 

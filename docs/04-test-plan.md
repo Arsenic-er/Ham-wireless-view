@@ -98,7 +98,7 @@
 - 浅色/深色主题均可导出；热力图颜色不变。
 - 参数过期、计算取消或数据错误时禁止导出。
 - 导出图没有像素查询信息或交互残留。
-- 正式地图 PNG/PDF 只有在底图供应者清单同时具备审图号、署名、离线授权和导出授权时才能启用。
+- 正式地图 PNG/PDF 只有在在线底图供应者清单同时具备审图号、署名、热力图叠加授权和所需导出授权时才能启用。
 
 ## 7. 性能测试
 
@@ -206,7 +206,7 @@
 - 前端 11 个测试、导出核心 6 个测试、Rust 工作区 47 个默认测试、TypeScript 检查和 Windows MSVC 目标检查均通过。
 - Windows production EXE/NSIS 重建和静态 CRT 导入表检查已通过；WebView2 原生保存流程和另一台 Windows 电脑打开产物仍待验证。
 
-完整记录见 `12-phase2-export-slice.md`。正式地图导出继续受底图、审图号、署名、离线授权和导出授权硬门槛约束。
+完整记录见 `12-phase2-export-slice.md`。正式地图导出继续受在线底图、审图号、署名、热力图叠加授权和所需导出授权硬门槛约束。
 
 ## 17. Web Mercator 地图覆盖层检查点（2026-07-24）
 
@@ -539,7 +539,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 - [ ] 注入的零可用空间证明错误映射与无索引副作用，不等同于真实文件系统 ENOSPC、EIO、断电或存储设备掉线。
 - [ ] Linux 子进程强制退出不替代 Windows 10/11 上 NTFS、休眠、杀进程、安装/卸载与用户提示实机验收。
-- [ ] 本门禁不改变或证明中国大陆合规底图、审图号、离线授权和导出授权。
+- [ ] 本门禁不改变或证明中国大陆合规在线底图、审图号、热力图叠加授权和导出授权。
 
 ## 26. 真实传播参数敏感性门禁（2026-07-28）
 
@@ -586,7 +586,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 完整边界见 `20-tianditu-basemap-proxy.md`。
 
-## 28. 四省 Protomaps PMTiles 内部底图（2026-07-31，部分已验证）
+## 28. 历史：四省 Protomaps PMTiles 内部底图（2026-07-31，部分已验证；已退出当前目标）
 
 本检查点固定的资产事实为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes、SHA-256 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0、gzip MVT、939 个 region tiles 与 837 个 archive entries；该归档占 2.5 GB 的 1.32%。已执行项按真实日志回填，浏览器视觉没有证据的项目继续保持未勾选。
 
@@ -634,7 +634,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 完整资产与逐项证据见 docs/21-protomaps-four-province-basemap.md。
 
-## 29. 中文地名与地图/卫星切换（2026-08-01，自动化与 live HTTP 已通过）
+## 29. 历史切片：PMTiles 中文地名与 EOx 地图/卫星切换（2026-08-01，自动化与 live HTTP 已通过）
 
 本节区分已经执行的自动化/live HTTP 与仍需用户完成的真实浏览器视觉。不得把单元测试外推为字体、碰撞、WebGL 或实际瓦片视觉通过。
 
@@ -734,7 +734,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 详细架构和发行边界见 ADR 0020。
 
-## 32. 全局 dBm 显示阈值与离线地图包边界（2026-08-01，服务器证据已回填；浏览器与 Windows 待验）
+## 32. 全局 dBm 显示阈值与在线底图发行边界（2026-08-01，服务器证据已回填；浏览器与 Windows 待验）
 
 本节定义本轮验收口径，不以设计或编译成功冒充浏览器性能、Windows 实机或 Release 完成。结果契约见 ADR 0021。
 
@@ -757,12 +757,12 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] 经 SSH 隧道在受管 validation 浏览器中连续拖动 `-140 → -60 → -120`，视觉确认弱像素动态剔除、地名/发射点层级不变、无控制台错误；该证据不外推为 Windows WebView2。
 - [ ] Windows 10/11 实机对独立 EXE/NSIS 分别复测 8 层拖动、DPI/缩放、浅/深主题、GPU/软件渲染和内存。
 
-### 32.3 Windows Release 与离线地图
+### 32.3 Windows Release 与在线底图边界
 
 - [x] GitHub Alpha Release 实际创建后上传独立 EXE、NSIS 安装包与 `SHA256SUMS.txt`；README 只链接 Releases 页面，不提前写不存在的 tag/资产 URL。
 - [ ] 下载后的 SHA-256 与服务器受验产物一致；发布说明明确未签名、SmartScreen、Windows 实机和真实网络待验边界。
 - [x] 本轮 Release 内容审计确认不含四省内部 PMTiles、EOxCloudless 离线副本、DEM/WBM、密钥、源码依赖或构建缓存。
-- [ ] 后续正式离线地图包只有在授权、审图/边界、不可变 manifest、SHA-256、partial/原子 ready、缓存页可删除及十进制 2.5 GB 全量计费均通过后才能发布。
+- [ ] 当前及后续发行物只使用在线视觉底图，不包含离线地图包、四省 PMTiles 或在线瓦片副本；DEM/WBM 与计算缓存继续受十进制 2.5 GB 配额约束。
 
 ## 33. Windows 天地图显式连接自检（2026-08-01，自动化与交叉编译已通过）
 
@@ -784,3 +784,19 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] Windows xwin all-target check、测试程序 `--no-run` 与严格 Clippy 通过；只有既有缺失 MSVC PDB 的 LNK4099 非阻断警告。
 - [ ] 服务器缺少 Tauri Linux 主机测试所需的 pkg-config/libdbus，因此本轮只执行 Windows 测试程序交叉编译，没有把该限制写成运行通过。
 - [ ] 有效个人 `tk`、中国大陆真实网络、Windows 10/11 DPAPI/WebView2、弱网、额度与上游故障仍需实机验收。
+## 34. 纯在线视觉底图迁移（2026-08-02，代码完成；受管运行待切换）
+
+本节执行 ADR-0022。第 28、29 节中的 PMTiles、离线 places 和 PMTiles 故障回退只保留历史证据，不再是当前验收目标。
+
+- [x] Windows/Tauri 保持天地图 `vec+cva` 普通地图、`img+cia` 卫星图、用户个人 `tk`、DPAPI、严格原生代理与 `no-store`。
+- [x] validation 普通地图切换为同源天地图 `vec/cva` 主路径，卫星图保持同源 EOxCloudless；前端不再注册或请求 PMTiles。
+- [x] 普通/卫星图使用在线中文注记，不再依赖 PMTiles `places`、本地地名文件或离线字体包。
+- [x] 缺少 token/tk、断网、额度或上游失败时回退 WGS84 网格，并保留 camera、发射点、历史站点、200 km 圆、比例尺与热力图。
+- [x] 已缓存完整 DEM/WBM 的区域在无网络、仅 WGS84 网格时仍能计算和导出无底图诊断报告；缺失或损坏计算资产继续阻断。
+- [x] 天地图与 EOxCloudless 瓦片不进入 Rust/浏览器持久缓存、2.5 GB 配额、EXE、安装包、Release 或诊断导出。
+- [x] 移除当前源码、依赖锁、新前端构建和测试构建中的 PMTiles/fflate/Range 路由；当前受管 release 二进制仍待重建，历史许可证据继续可查。
+- [x] TypeScript、13 个前端测试文件/107 项测试、production build、Rust workspace `110 passed / 5 ignored`、rustfmt、严格 Clippy 及 Windows xwin all-target 检查通过。
+- [ ] 通过受管流程删除服务器约 33 MB PMTiles runtime 资产，记录删除前后路径、字节数和缓存不变性。
+- [ ] 完成受管 stop/build/start、bootstrap/HTTP、真实在线瓦片、浏览器和 Windows 10/11 实机验证。
+
+当前事实：validation 天地图 token 尚未配置，受管运行服务尚未按本节目标重启，约 33 MB PMTiles runtime 资产尚未删除。当前运行中的旧进程因此不能作为纯在线实现的受管验收证据。

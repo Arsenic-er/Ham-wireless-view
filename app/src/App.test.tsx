@@ -128,26 +128,6 @@ const cacheUsage = {
   capBytes: 2_500_000_000,
 };
 
-const protomapsBasemap: BasemapInfo = {
-  enabled: true,
-  providerId: "protomaps",
-  displayName: "区域离线底图",
-  attribution: "© OpenStreetMap contributors",
-  mode: "same-origin-pmtiles",
-  maxZoom: 9,
-  layers: [
-    { id: "earth", displayName: "陆地" },
-    { id: "landcover", displayName: "地表覆盖" },
-    { id: "landuse", displayName: "土地利用" },
-    { id: "water", displayName: "水体" },
-    { id: "roads", displayName: "道路" },
-    { id: "places", displayName: "地名" },
-  ],
-  resourcePath: "/api/basemap/pmtiles/four-provinces.pmtiles",
-  bounds: [107.5, 18, 125.5, 33.5],
-  archiveBytes: 33_044_072,
-};
-
 const tiandituBasemap: BasemapInfo = {
   enabled: true,
   providerId: "tianditu",
@@ -690,7 +670,7 @@ describe("validation server UI", () => {
     await waitFor(() => expect(backendMocks.calculate).toHaveBeenCalledTimes(2));
   });
 
-  it("identifies a trusted TianDiTu basemap without confusing it with Protomaps", async () => {
+  it("identifies the trusted same-origin TianDiTu basemap", async () => {
     backendMocks.bootstrap.mockResolvedValueOnce({
       schemaVersion: 2,
       modelName: "NTIA ITM Point-to-Point",
@@ -706,88 +686,37 @@ describe("validation server UI", () => {
 
     expect(
       await screen.findByText(
-        "已接入天地图在线真实底图；离线授权、正式审图确认和带底图导出仍待完成。",
+        "已接入天地图在线矢量、中文地名及卫星影像；网络不可用时自动回退 WGS84 网格。",
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(
-        "已接入区域离线真实底图及省市县乡镇地名（OpenStreetMap / Protomaps）；可切换联网卫星影像。",
-      ),
-    ).toBeNull();
   });
 
-  it("shows the fixed offline basemap separately without changing the backend total", async () => {
-    const usageWithBasemap = {
-      ...cacheUsage,
-      totalBytes: 153_044_072,
-      metadataBytes: 34_044_072,
-      remainingBytes: 2_346_955_928,
-    };
+  it("keeps DEM and WBM cache accounting without an offline basemap row", async () => {
     backendMocks.bootstrap.mockResolvedValueOnce({
       schemaVersion: 2,
       modelName: "NTIA ITM Point-to-Point",
       modelVersion: "land-water-v1",
       coverageRadiusKm: 200,
       gridSize: 401,
-      cacheUsage: usageWithBasemap,
+      cacheUsage,
       internalBuildWarning: "internal",
-      basemap: protomapsBasemap,
+      basemap: tiandituBasemap,
     });
     backendMocks.cacheOverview.mockResolvedValueOnce({
-      usage: usageWithBasemap,
+      usage: cacheUsage,
       regions: [],
     });
 
     render(<App />);
     await screen.findByText("等待选择发射点");
     fireEvent.click(screen.getByRole("button", { name: /缓存/ }));
-    expect(
-      screen.getByText(
-        "已接入区域离线真实底图及省市县乡镇地名（OpenStreetMap / Protomaps）；可切换联网卫星影像。",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText(/已接入天地图在线真实底图/)).toBeNull();
     await screen.findByText("缓存概览");
 
-    const basemapRow = screen.getByText("离线底图").parentElement;
-    expect(basemapRow?.querySelector("strong")?.textContent).toBe("33.0 MB");
-    expect(basemapRow?.querySelector("small")?.textContent).toBe(
-      "固定区域 · 服务器管理",
-    );
-    expect(basemapRow?.querySelector("button")).toBeNull();
-
+    expect(screen.queryByText("离线底图")).toBeNull();
+    expect(screen.getByText("高程 DEM")).toBeTruthy();
+    expect(screen.getByText("水体 WBM")).toBeTruthy();
     const metadataRow = screen.getByText("索引与元数据").parentElement;
     expect(metadataRow?.querySelector("strong")?.textContent).toBe("1.0 MB");
-    expect(screen.getByText("153.0 MB")).toBeTruthy();
-  });
-
-  it("saturates displayed metadata at zero when it is smaller than the basemap archive", async () => {
-    const usageWithSmallMetadata = {
-      ...cacheUsage,
-      metadataBytes: 1_000_000,
-    };
-    backendMocks.bootstrap.mockResolvedValueOnce({
-      schemaVersion: 2,
-      modelName: "NTIA ITM Point-to-Point",
-      modelVersion: "land-water-v1",
-      coverageRadiusKm: 200,
-      gridSize: 401,
-      cacheUsage: usageWithSmallMetadata,
-      internalBuildWarning: "internal",
-      basemap: protomapsBasemap,
-    });
-    backendMocks.cacheOverview.mockResolvedValueOnce({
-      usage: usageWithSmallMetadata,
-      regions: [],
-    });
-
-    render(<App />);
-    await screen.findByText("等待选择发射点");
-    fireEvent.click(screen.getByRole("button", { name: /缓存/ }));
-    await screen.findByText("缓存概览");
-
-    const metadataRow = screen.getByText("索引与元数据").parentElement;
-    expect(metadataRow?.querySelector("strong")?.textContent).toBe("0.0 KB");
     expect(screen.getByText("120.0 MB")).toBeTruthy();
   });
 

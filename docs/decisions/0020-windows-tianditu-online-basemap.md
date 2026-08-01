@@ -3,7 +3,7 @@
 - 状态：已接受
 - 日期：2026-08-01
 - 范围：Windows/Tauri 桌面发行版
-- 不改变：私有 validation PMTiles、EOxCloudless 和同源代理路径
+- 2026-08-02 修订：Windows 天地图安全设计继续有效；私有 validation PMTiles 路径由 ADR-0022 取代为纯在线底图与 WGS84 网格降级
 
 ## 背景
 

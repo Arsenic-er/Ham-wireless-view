@@ -86,4 +86,4 @@ mapOverlayFilterBase64   = Base64(width × height bytes)
 - CalculationResult 从 schema 3 升级到 4，所有 Rust/TypeScript/HTTP/Tauri 契约测试和真实烟雾必须更新。
 - 每个最终层保留 RGBA、bins、canvas 和 GPU 纹理；8 层内存与 30 fps 最坏路径必须实测。
 - 渐进预览在计算中不跟随阈值，界面须避免暗示它已经筛选。
-- 本 ADR 不实现或授权离线地图包。首个 Windows Alpha Release 仍不含离线地图；后续只能引入具有正式授权、不可变 manifest/校验和、可删除且完整计入十进制 2.5 GB 的资产，当前四省内部 PMTiles 必须排除。
+- 本 ADR 的场强筛选决策继续有效；其原“后续离线地图包”预留自 2026-08-02 起由 ADR-0022 取代。当前产品不规划离线视觉底图，2.5 GB 配额继续用于 DEM/WBM 与计算持久数据。

@@ -5,14 +5,14 @@
 - operation 协议切片更新：2026-07-27
 - 渐进覆盖预览更新：2026-07-27
 - 在线底图与地图控件更新：2026-07-31
-- 四省 PMTiles 内部底图更新：2026-07-31（自动化、Range、SSH 与受管运行已通过；浏览器视觉待人工确认）
+- 四省 PMTiles 历史底图切片：2026-07-31（既有自动化、Range、SSH 与受管运行证据保留；2026-08-02 起退出当前目标）
 - 会话覆盖层与浏览器诊断导出更新：2026-08-01（自动化、推送、受管部署与隧道健康已通过；浏览器交互待用户验收）
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`、`decisions/0019-session-coverage-layers-and-browser-export.md`
-- 状态：历史构建保留为分节证据；可选天地图在线同源代理、动态比例尺和地图 desired-state 重放已受管部署。当前未配置 token，禁用态 readiness/fail-closed 已验证，但真实瓦片和浏览器视觉烟雾尚未执行；Windows/Tauri 实机和地图合规仍待验
+- 状态：历史构建保留为分节证据；现行目标是同源天地图普通地图 + EOxCloudless 卫星图，失败回退 WGS84 网格。当前未配置天地图 token，受管服务尚未按 ADR-0022 重启，真实瓦片与浏览器视觉尚未执行。
 
-四省 PMTiles 现作为私有验证主底图，天地图保留为联网 fallback 与历史验证。新路径在实际测试证据回填前不改变既有已验证状态。
+四省 PMTiles 已退出当前产品目标，但约 33 MB runtime 资产尚未删除；PMTiles 相关内容只作历史证据。目标改变不代表代码切换、受管部署或磁盘清理已经完成。
 
 ## 1. 目标与边界
 
@@ -47,9 +47,9 @@ gpu-273312 127.0.0.1:1421
 
 HTTP 层只做协议适配。频段、单位换算、坐标校验、固定数据源、缓存完整性、配额、DEM/WBM 读取、ITM 和覆盖层仍由共享 Rust 服务执行。
 
-可选在线底图走另一条只读路径：浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`，validation server 从私密文件读取 token 并访问固定天地图 HTTPS WMTS。token、上游 URL 和文件路径不进入 bootstrap 或浏览器。该路径不写底图缓存，也不进入诊断报告。
+现行普通地图目标走只读在线路径：浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`，validation server 从私密文件读取 token 并访问固定天地图 HTTPS WMTS。token、上游 URL 和文件路径不进入 bootstrap 或浏览器。该路径不写底图缓存，也不进入诊断报告。
 
-主验证底图走固定同源 /api/basemap/pmtiles/four-provinces.pmtiles。validation server 启动时校验普通非符号链接文件、33,044,072 bytes、固定 SHA-256 与 PMTiles v3 header。浏览器只使用 HTTP Range，不接触服务器路径；仅在 PMTiles 文件启动时缺失时回退天地图，不提供运行时自动切换。
+EOxCloudless 继续作为同源在线卫星路径；普通/卫星都失败时 MapView 使用 WGS84 坐标网格。PMTiles Range 路径、固定归档校验和本地 places 属于待移除实现，完成前不得描述为已经删除。
 
 ## 3. 三态前端
 
@@ -121,7 +121,7 @@ validation 浏览器在长请求前领取 ticket，以约 250 ms 的递归定时
 - operation ID 作为 bearer capability，只放在同源 POST JSON body；不写 URL，不提供 current/list，不增加 CORS，也不把 ID 视为跨用户认证机制；
 - CSPRNG UUIDv4、60 秒 reserved TTL、5 分钟 terminal TTL、双 32 项上限和 exact-ID ack 共同限制 capability 暴露窗口与内存占用；
 - status 输出按字段白名单构造，不序列化工作结果、PNG、URL、服务器路径或详细错误；HTTP 日志也不应记录请求 body 中的 capability。
-- PMTiles 端点只允许 GET/HEAD 与单段 bytes Range；响应为 application/vnd.pmtiles，拒绝多段/无效/越界请求，且不把浏览器请求退化为整包文件传输。
+- 历史 PMTiles 端点曾只允许 GET/HEAD 与单段 bytes Range；该安全证据保留，但端点现为待移除能力，不属于 ADR-0022 当前目标。
 
 validation 模式是一项明确的内部隐私例外：浏览器中的测试坐标、参数和计算请求会离开 Windows 本机并进入用户控制的服务器。不要使用敏感真实位置。服务没有遥测、账号、第三方计算 API 或服务器文件导出；浏览器下载的报告不回传服务器。DEM/WBM 下载仍只访问既有固定 Copernicus HTTPS 来源。配置 token 后，在线底图代理还会从服务器访问固定天地图 HTTPS 主机，但不把浏览器坐标或无线电参数作为上游参数。
 
@@ -252,7 +252,7 @@ full build revision 为 `867c25aeb2091055b56d1259f6ad7293d21f7495`，`built_at=2
 
 当前 token 未配置，因此没有真实瓦片、上游 HTTP 200、浏览器截图或控制台证据。完整方法和发布边界见 `20-tianditu-basemap-proxy.md`。
 
-### 8.7 四省 PMTiles 接入
+### 8.7 历史：四省 PMTiles 接入（已退出当前目标）
 
 固定资产为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes、SHA-256 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0、gzip MVT、939 个 region tiles / 837 个 archive entries，占 2.5 GB 的 1.32%。
 
@@ -417,13 +417,14 @@ revision `2e4411de809d1f78b6dd1407d51a2351d58b02ed` 已完成受管 stop/build/s
 
 ## 10. 尚未关闭
 
-- 四省 PMTiles 的自动化、Range、SSH 隧道、固定资产校验和受管运行已回填；真实浏览器视觉仍待人工确认；
+- 四省 PMTiles 的历史自动化、Range、SSH 隧道、固定资产校验和受管运行证据已回填；当前代码、依赖与路由移除已完成，约 33 MB runtime 资产受管清理尚未完成；
 - operation capability 与渐进覆盖预览的代码回归、新构建和受管 HTTP 烟雾已通过；SSH 隧道浏览器可见预览、取消/重试 UI 和控制台仍待验证；
-- 在线天地图当前未配置 token；禁用态已受管部署并 fail closed，真实 `vec/cva`、缩放、比例尺、署名、热力图层级与清空浏览器烟雾待验证；
+- 在线天地图当前未配置 token；既有禁用态已受管部署并 fail closed，但纯在线主路径尚未完成受管重启，真实 `vec/cva`、缩放、比例尺、署名、热力图层级与清空浏览器烟雾待验证；
+- EOxCloudless 卫星失败→在线普通地图→WGS84 网格的分级回退尚未按 ADR-0022 验证；
 - Windows 10/11 WebView2、原生保存、安装/卸载和真实文件系统；
 - 十进制 2.5 GB 实体边界压力、磁盘不足、弱网中断和进程强制崩溃注入；
 - GPU 主机整机重启后的手动恢复流程；
-- 合规中国大陆底图、有效审图号、服务/离线/再分发/应用分发/导出授权；
+- 合规中国大陆在线底图、有效审图号、在线服务/叠加/应用分发/导出授权；
 - 传播结果的外场测量校准。
 
 此前私有浏览器验收只关闭旧协议下服务器回环验证路径中的真实计算与热力图显示问题，不包含本轮 operation progress UI。任何服务器 HTTP 或历史浏览器证据都不能据此关闭 Windows/Tauri 实机或中国大陆地图合规门槛。

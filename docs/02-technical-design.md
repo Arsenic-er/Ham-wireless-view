@@ -6,7 +6,7 @@
 
 ## 1. 技术目标
 
-构建一个 Windows 10/11 64 位离线优先桌面应用。前端负责地图、参数表单、进度和导出预览；Rust 后端负责数据缓存、DEM 读取、坐标计算、ITM 调用、并行调度、结果栅格化和文件导出。
+构建一个 Windows 10/11 64 位桌面应用：视觉底图仅在线，传播数据计算离线优先。前端负责地图、参数表单、进度和导出预览；Rust 后端负责 DEM/WBM 与计算缓存、坐标计算、ITM 调用、并行调度、结果栅格化和文件导出。
 
 优先保证：计算可复现、地形确实影响结果、UI 不冻结、离线数据行为明确、数据和模型版本可追踪。
 
@@ -14,9 +14,9 @@
 
 - 桌面框架：Tauri 2.11.5。
 - 前端：React 19.2.7 + TypeScript 7.0.2 + Vite 8.1.4。
-- 地图：MapLibre GL JS 5.24.0；Windows/Tauri 通过原生 `tianditu:` 协议显示天地图 `vec/cva` 或 `img/cia`，普通 preview 使用 WGS84 空白坐标画布，私有 validation 继续使用 PMTiles/同源代理能力矩阵。桌面与 validation 的密钥和网络路径彼此隔离。
-- 私有 validation 区域底图：MapLibre GL JS 5.24.0 + PMTiles JavaScript 4.4.1；fflate 0.8.3 为传递解压依赖。该接入以 HTTP Range 读取固定 gzip MVT 归档，天地图保留为 fallback/历史路径。
-- 私有 validation 卫星视图：已接 EOxCloudless Sentinel-2 2025 EPSG:3857 WMTS z0-14；浏览器只见固定同源路径，Rust 代理固定 HTTPS 上游、零重定向并返回 `no-store`。
+- 地图：MapLibre GL JS 5.24.0；Windows/Tauri 通过原生 `tianditu:` 协议显示天地图 `vec/cva` 或 `img/cia`；私有 validation 普通地图使用同源天地图代理，卫星图使用同源 EOxCloudless 代理。桌面与 validation 的密钥和网络路径彼此隔离。
+- WGS84 坐标网格是所有在线底图不可用时的唯一视觉降级，不属于离线底图资产，并继续承载发射点、范围、比例尺和热力图。
+- PMTiles JavaScript、fflate 与四省归档只保留为历史 validation 证据，不再属于当前产品架构。
 - 前端工具链：项目内固定 Node.js 24.18.0，不依赖 JAIST 主机全局 Node。
 - 后端：Rust stable。
 - 传播核心：NTIA ITM C++ 源码，以本地静态库或 DLL 方式绑定。
@@ -195,17 +195,19 @@ POST /api/operation-preview
 
 React 分开保存当前临时 `preview`、当前可导出的权威 `result`，以及最多 8 项的 `sessionResults`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；选择新点或取消重算只撤销当前导出身份，不删除 `sessionResults` 中已完成的其他覆盖层。成功响应冻结本次 `RadioParameters`，按精确中心坐标替换同点旧项或追加新项，并把最新项放在最上层；超过 8 项时移除最早项。已完成结果使用独立 MapLibre CanvasSource/layer；预览仍使用既有 image source/Blob URL。清空与卸载时逐项释放画布、图像和 Blob URL；历史站点使用独立 GeoJSON source。导出始终只读取当前最新的 `result` 及其冻结参数，不做多层合成，也不读取显示阈值。预览决策见 ADR 0016，会话层决策见 ADR 0019，显示筛选决策见 ADR 0021。
 
-### 4.2.4 天地图 fallback、历史验证与地图状态
+### 4.2.4 validation 在线天地图主路径与地图状态
 
-validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu.token` 读取可选天地图 token。token 只保留在服务器进程；bootstrap 返回不含凭据和上游主机的 `BasemapInfo`，浏览器只请求固定同源模板 `/api/basemap/tianditu/{layer}/{z}/{x}/{y}`。代理只允许 `vec/cva`、规范十进制 `z/x/y` 和 `z<=18`，固定访问 `https://t0.tianditu.gov.cn`，禁止重定向，并对超时、2 MiB 上限、MIME 和图片签名 fail closed。响应为 `no-store`，不进入 2.5 GB 离线缓存。
+validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu.token` 读取可选天地图 token。token 只保留在服务器进程；bootstrap 返回不含凭据和上游主机的 `BasemapInfo`，浏览器只请求固定同源模板 `/api/basemap/tianditu/{layer}/{z}/{x}/{y}`。代理只允许 `vec/cva`、规范十进制 `z/x/y` 和 `z<=18`，固定访问 `https://t0.tianditu.gov.cn`，禁止重定向，并对超时、2 MiB 上限、MIME 和图片签名 fail closed。响应为 `no-store`，不进入 2.5 GB DEM/WBM 与计算缓存。
 
-前端只有在 provider、模式、模板、缩放和 `vec/cva` 元数据全部匹配固定契约时才增加 raster source。底图矢量层在经纬网下方，中文注记位于热力图上方，发射点标记保持最上层。token 缺失时 `enabled=false`，MapView 继续显示 WGS84 内部测试画布。
+前端只有在 provider、模式、模板、缩放和 `vec/cva` 元数据全部匹配固定契约时才增加 raster source。普通地图位于经纬网和分析层下方，在线中文注记位于热力图上方，发射点标记保持最上层。token 缺失或在线请求失败时 `enabled=false`，MapView 继续显示 WGS84 内部测试画布。
 
 MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最大宽度，随 move 事件自动更新。MapView 以 refs 保存最新 basemap、point、`sessionResults`、active ID、preview 和 stale 状态；若 style 暂不可操作，同步标记为 pending，并在 load 后或 `styledata/idle` 恢复时重放。这样清空 props 不会因一次 `isStyleLoaded=false` 而丢失，恢复时会删除全部不再需要的 heatmap layer/source 并逐项释放 Blob URL。验证记录见 `20-tianditu-basemap-proxy.md`。
 
-该代理只用于回环 validation 在线验证。正式 Windows 离线底图仍需要完整 `CompliantBasemapProvider`、有效审图号、离线/再分发/导出授权和签名清单。
+该代理用于回环 validation 在线验证。Windows 使用 ADR-0020 的原生天地图协议；两者都不授权离线缓存、再分发或把在线瓦片嵌入诊断导出。
 
-### 4.2.5 私有区域 PMTiles 主验证底图
+### 4.2.5 历史：私有区域 PMTiles 主验证底图
+
+本节记录已发生的 PMTiles 工程验证，自 2026-08-02 起不再定义当前产品路径；现行架构见 ADR-0022。
 
 四省验证归档固定为 source build 20260731、bbox 107.5,18,125.5,33.5、z0-9、33,044,072 bytes；SHA-256 为 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0。归档包含 939 个 region tiles、837 个 archive entries，占 2.5 GB 上限的 1.32%，payload 为 gzip 压缩 MVT。
 
@@ -223,11 +225,11 @@ MapLibre 注册 PMTiles protocol 后构建六类可信可见 source layer：eart
 
 ### 4.2.6 地图/卫星切换与 EOxCloudless 代理
 
-地图模式以固定四省 PMTiles 为离线权威视觉底图；卫星模式使用 EOxCloudless Sentinel-2 2025 的 `s2cloudless-2025_3857` WMTS，矩阵集为 EPSG:3857，支持 z0-14。前端只接受固定 bootstrap 契约并请求同源模板 `/api/basemap/satellite/{z}/{x}/{y}`；服务器把它映射到固定 `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg`。2026-08-01 的 live 四省请求已确认响应为 JPEG，代理返回 `Cache-Control: no-store`。
+地图模式使用在线天地图普通地图；validation 卫星模式使用 EOxCloudless Sentinel-2 2025 的 `s2cloudless-2025_3857` WMTS，矩阵集为 EPSG:3857，支持 z0-14。前端只接受固定 bootstrap 契约并请求同源模板 `/api/basemap/satellite/{z}/{x}/{y}`；服务器把它映射到固定 `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg`。2026-08-01 的 live 四省请求已确认响应为 JPEG，代理返回 `Cache-Control: no-store`。
 
 代理沿用最小网络面：只允许规范十进制 z/x/y 和 z0-14，固定 HTTPS 主机与路径，不接受查询字符串、用户 URL、凭据或重定向；设置有界连接/读取/总超时、响应体上限、JPEG MIME 与签名校验，并对客户端返回 `Cache-Control: no-store`。浏览器 CSP 仍只需 `connect-src 'self'`。卫星请求不写入 Rust 缓存、SQLite、浏览器持久存储或 Service Worker，不出现在缓存管理中，因此十进制 2.5 GB 配额和现有预算保持不变。
 
-卫星 raster 位于本地 `places` 注记和传播热力图之下；切换时保留 camera、发射点、200 km 圆、预览/最终热力图和参数状态。浏览器断网或卫星 source 请求失败时切回 PMTiles 地图模式并给出非阻塞提示，不能留下空白画布；此回退不把失败瓦片写入缓存。EOx 署名在卫星模式持续可见：`EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。
+卫星 raster 位于在线注记和传播热力图之下；切换时保留 camera、发射点、200 km 圆、预览/最终热力图和参数状态。卫星请求失败时先切回在线普通地图，普通地图也不可用时显示 WGS84 网格并给出非阻塞提示；失败瓦片不写入缓存。EOx 署名在卫星模式持续可见：`EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。
 
 EOxCloudless 只是视觉背景，不进入 DEM/WBM 采样、ITM、路径陆水比例或结果统计。Google Maps / Google Satellite 不采用，因为其 API key、计费、调用策略以及离线缓存/再分发限制会引入凭据和不可控持久化边界。详细取舍见 ADR 0018。
 
@@ -316,7 +318,7 @@ WaterMaskProvider
 
 GLO-90 只发布覆盖陆地的对象，纯海洋 1° 地理单元可能同时没有 DEM 和 WBM 对象。下载器只有在同一固定版本、同一地理单元的 DEM 与 WBM 均明确返回 `404` 时，才生成确定性的本地全零 DEM 和全水体 WBM；只缺少其中一个对象、网络错误或其他状态都阻断准备流程。生成资产使用 SHA-256、同目录原子写入并计入 2.5 GB 硬配额，不能把一般性的“缺数据”解释为海洋。
 
-WBM 只参与传播计算，不作为可见底图。正式底图仍通过 `CompliantBasemapProvider` 接入，要求具有有效审图信息和明确的桌面离线授权；不使用 OSM 标准瓦片做离线下载。
+WBM 只参与传播计算，不作为可见底图。正式在线底图仍通过受限 provider 接入，要求具有有效审图信息和明确的桌面在线服务、叠加与署名授权；不持久缓存在线瓦片。
 
 ### 6.3 地形采样
 
@@ -438,17 +440,16 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 ### 10.1 配额
 
 - 全部持久数据硬上限：2,500,000,000 字节（十进制 2.5 GB），不可配置。
-- 分类：基础地图、DEM、水体、下载临时文件、计算缓存。
+- 分类：DEM、水体、下载临时文件、SQLite/索引和计算缓存；视觉底图不持久化、不计入配额。
 - SQLite 保存瓦片 ID、范围、版本、大小、校验和、最后使用时间和状态。
 - 写入前执行配额预检；没有足够空间时不开始下载。
 - 用户删除正在使用区域时必须先取消相关计算。
 - Phase 1 实现以整个应用数据根目录的实际文件长度为准，而不是只相信 SQLite 记账；索引、锁文件、未登记文件和 `.partial` 都计入 2.5 GB。下载另保留最多 16 MB 的索引/事务安全余量，用户不可配置。
 - 配额不足与文件系统可用空间不足分别返回错误；不自动淘汰旧区域。
 
-- 四省 PMTiles 固定归档为 33,044,072 bytes，占十进制 2.5 GB 的 1.32%；validation 启动前必须先做大小与 SHA-256 基线检查，不能只依赖目录或文件名。
-- Range 读取不改变配额口径，也不得用浏览器整包缓存复制出未登记副本。
-
-正式离线地图包属于后续能力，不在首个 Windows Alpha Release 中。接入时必须使用已取得桌面、离线、再分发和所需导出授权的资产；每个包具有不可变版本、覆盖范围、精确字节数、SHA-256 和签名/授权元数据。下载或导入采用 partial、完整性校验与原子 ready，实际文件和 partial 都计入十进制 2.5 GB；缓存管理可单独删除，不得静默淘汰。现有四省内部 PMTiles 因边界内容与授权链未关闭，不得复用为公开 EXE/安装包/Release 的离线包。
+- 不为视觉底图预留配额；天地图与 EOxCloudless 瓦片统一 `no-store`，不得产生浏览器或 Rust 持久副本。
+- 已缓存完整 DEM/WBM 的区域可在无网状态下继续计算；地图视觉降级为 WGS84 网格，不用在线或卫星像素替代计算资产。
+- 服务器当前约 33 MB 的四省 PMTiles 是尚未删除的历史 runtime 资产，不是现行缓存类别；删除必须作为独立受管清理任务执行并记录。
 
 ### 10.2 下载完整性
 
@@ -564,7 +565,7 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 ### 13.4 端到端
 
 - 首次选择点并下载。
-- 离线打开已缓存区域。
+- 无网络时在 WGS84 网格上打开已缓存 DEM/WBM 区域并完成计算。
 - 离线选择未缓存区域。
 - 计算中取消。
 - 达到和试图超过 2,500,000,000 字节硬上限。
@@ -572,7 +573,7 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 清空全部会话覆盖层但不删除缓存，并保留全局显示阈值。
 - 拖动 `-140..-60 dBm` 游标时同步筛选最多 8 个已完成层，无网络/IPC/重算，渐进预览和导出保持未筛选语义。
 - Tauri 原生保存与 validation 浏览器本地 PNG/PDF 导出。
-- 正式离线地图包的授权清单、SHA-256、partial/原子导入、2.5 GB 计费和可删除行为；当前四省内部 PMTiles 必须被发行构建排除。
+- 在线普通/卫星底图失败时 WGS84 网格降级，且已缓存 DEM/WBM 计算不受视觉底图状态影响。
 
 ## 14. 数据与法律风险
 

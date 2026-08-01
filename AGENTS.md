@@ -43,6 +43,8 @@
 - Treat missing/corrupt DEM as a blocking error; never silently substitute zero on land.
 - Keep frontend map code unable to access raw DEM tiles.
 - Preserve user privacy: coordinates and calculation results stay local.
+- Visible basemaps are online-only. Do not add PMTiles, MBTiles, offline visual map packages, persistent basemap tile caches, or a future offline-basemap download path.
+- Offline operation refers only to already cached DEM, WBM, indexes, and calculation data. Without an online basemap, keep the WGS84 grid, transmitter markers, range overlays, heatmaps, and cached-area calculations usable.
 - Add or update tests for every change to propagation math, cache quota, coordinate transforms, and color thresholds.
 - Restore the pinned project-local Windows cross toolchain with `scripts/install-windows-cross-tools.sh`; do not install it system-wide or download it to the Windows desktop.
 

@@ -76,6 +76,7 @@ const maplibreMocks = vi.hoisted(() => {
       sources.delete(id);
     }),
     setMaxZoom: vi.fn(),
+    setZoom: vi.fn(),
     setLayoutProperty: vi.fn(),
     setPaintProperty: vi.fn(),
   };
@@ -175,24 +176,18 @@ const sampleCoverage2 = {
   },
 } as SessionCoverageResult;
 
-const configuredProtomaps: BasemapInfo = {
+const configuredTianditu: BasemapInfo = {
   enabled: true,
-  providerId: "protomaps",
-  displayName: "四省区域底图",
-  attribution: "© OpenStreetMap contributors",
-  mode: "same-origin-pmtiles",
-  maxZoom: 9,
+  providerId: "tianditu",
+  displayName: "天地图",
+  attribution: "天地图",
+  mode: "same-origin-proxy",
+  maxZoom: 18,
   layers: [
-    { id: "earth", displayName: "陆地" },
-    { id: "landcover", displayName: "地表覆盖" },
-    { id: "landuse", displayName: "土地利用" },
-    { id: "water", displayName: "水体" },
-    { id: "roads", displayName: "道路" },
-    { id: "places", displayName: "地名" },
+    { id: "vec", displayName: "矢量底图" },
+    { id: "cva", displayName: "中文注记" },
   ],
-  resourcePath: "/api/basemap/pmtiles/four-provinces.pmtiles",
-  bounds: [107.5, 18, 125.5, 33.5],
-  archiveBytes: 33_044_072,
+  tilePathTemplate: "/api/basemap/tianditu/{layer}/{z}/{x}/{y}",
   satellite: {
     enabled: true,
     providerId: "eoxcloudless",
@@ -203,6 +198,11 @@ const configuredProtomaps: BasemapInfo = {
     maxZoom: 14,
     tilePathTemplate: "/api/basemap/satellite/{z}/{x}/{y}",
   },
+};
+
+const configuredSatelliteOnly: BasemapInfo = {
+  ...configuredTianditu,
+  enabled: false,
 };
 
 const configuredOnlineBasemap: OnlineBasemapInfo = {
@@ -247,13 +247,9 @@ describe("MapView controls and desired-state replay", () => {
       />,
     );
 
-    expect(maplibreMocks.addProtocol).toHaveBeenCalledWith(
-      "pmtiles",
-      expect.any(Function),
-    );
     expect(maplibreMocks.Map).toHaveBeenCalledWith(
       expect.objectContaining({
-        maxZoom: 12,
+        maxZoom: 18,
         localIdeographFontFamily: expect.stringContaining("Microsoft YaHei"),
       }),
     );
@@ -275,126 +271,107 @@ describe("MapView controls and desired-state replay", () => {
 
     unmount();
     expect(maplibreMocks.map.remove).toHaveBeenCalledOnce();
-    expect(maplibreMocks.removeProtocol).toHaveBeenCalledWith("pmtiles");
-  });
-
-  it("fits the trusted regional archive once without resetting later state replays", () => {
-    const props = {
-      theme: "dark" as const,
-      point: null,
-      heatmaps: [sampleCoverage],
-      activeHeatmapId: sampleCoverage.id,
-      preview: null,
-      heatmapStale: false,
-      onPointSelect: vi.fn(),
-    };
-    const { getByText, rerender, unmount } = render(
-      <MapView {...props} basemap={configuredProtomaps} />,
-    );
-
-    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
-    maplibreMocks.emit("load");
-    expect(maplibreMocks.map.fitBounds).toHaveBeenCalledWith(
-      [
-        [107.5, 18],
-        [125.5, 33.5],
-      ],
-      { padding: 48, duration: 0, maxZoom: 4.5 },
-    );
-    expect(getByText("区域离线底图 · 内部验证")).toBeDefined();
-    expect(getByText("© OpenStreetMap contributors · 本地区域底图")).toBeDefined();
-    expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "coverage-heatmap-layer-coverage-1" }),
-      "basemap-protomaps-place-province",
-    );
-    expect(maplibreMocks.map.setPaintProperty).toHaveBeenCalledWith(
-      "basemap-protomaps-earth",
-      "fill-color",
-      "#17242b",
-    );
-
-    maplibreMocks.map.setPaintProperty.mockClear();
-    rerender(
-      <MapView
-        {...{ ...props, theme: "light" as const }}
-        basemap={{ ...configuredProtomaps }}
-      />,
-    );
-    expect(maplibreMocks.map.fitBounds).toHaveBeenCalledOnce();
-    expect(
-      maplibreMocks.map.addSource.mock.calls.filter(
-        ([id]) => id === "basemap-protomaps",
-      ),
-    ).toHaveLength(1);
-    expect(maplibreMocks.addProtocol).toHaveBeenCalledOnce();
+    expect(maplibreMocks.addProtocol).not.toHaveBeenCalled();
     expect(maplibreMocks.removeProtocol).not.toHaveBeenCalled();
-    expect(maplibreMocks.map.setPaintProperty).toHaveBeenCalledWith(
-      "basemap-protomaps-earth",
-      "fill-color",
-      "#d9ddd7",
-    );
-    expect(maplibreMocks.map.setPaintProperty).toHaveBeenCalledWith(
-      "basemap-protomaps-roads",
-      "line-color",
-      "#8b8174",
-    );
-
-    unmount();
   });
 
-  it("switches between the offline map and online satellite imagery", () => {
+
+  it("uses same-origin online map and satellite and falls back to WGS84", () => {
     const { getByRole, getByText, unmount } = render(
       <MapView
         theme="dark"
         point={null}
-        heatmaps={[]}
-        activeHeatmapId={null}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
         preview={null}
         heatmapStale={false}
         onPointSelect={vi.fn()}
-        basemap={configuredProtomaps}
+        basemap={configuredTianditu}
       />,
     );
 
     maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
     maplibreMocks.emit("load");
-    fireEvent.click(getByRole("button", { name: /卫星/ }));
-
-    expect(getByText("Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证")).toBeDefined();
-    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
-      "basemap-satellite",
-      expect.objectContaining({
-        type: "raster",
-        tiles: ["/api/basemap/satellite/{z}/{x}/{y}"],
-        maxzoom: 14,
-      }),
-    );
+    expect(getByText("天地图在线真实底图 · 内部验证")).toBeDefined();
     expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "basemap-satellite-layer" }),
-      "graticule-lines",
-    );
-    expect(maplibreMocks.map.setLayoutProperty).toHaveBeenCalledWith(
-      "basemap-protomaps-earth",
-      "visibility",
-      "none",
+      expect.objectContaining({ id: "coverage-heatmap-layer-coverage-1" }),
+      "basemap-tianditu-label-layer",
     );
 
-    fireEvent.click(getByRole("button", { name: "地图" }));
-    expect(maplibreMocks.map.removeLayer).toHaveBeenCalledWith(
-      "basemap-satellite-layer",
+    act(() => window.dispatchEvent(new Event("offline")));
+    expect(getByText("在线地图不可用，已回退 WGS84 坐标网格")).toBeDefined();
+    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith(
+      "basemap-tianditu-vector",
     );
-    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith("basemap-satellite");
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
 
+    fireEvent.click(getByRole("button", { name: "重试" }));
     fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(getByText("Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证")).toBeDefined();
     act(() => {
       maplibreMocks.emit("error", { sourceId: "basemap-satellite" });
     });
-    expect(getByText("卫星影像不可用，已切回区域离线地图")).toBeDefined();
+    expect(getByText("卫星影像不可用，已切回在线地图")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-tianditu-vector")).toBeDefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+    expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith(
+      "basemap-satellite",
+    );
+
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(getByText("Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证")).toBeDefined();
+    fireEvent.click(getByRole("button", { name: "地图" }));
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-tianditu-label" });
+    });
+    expect(getByText("在线地图不可用，已回退 WGS84 坐标网格")).toBeDefined();
+    expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(18);
+    expect(maplibreMocks.map.setZoom).not.toHaveBeenCalled();
 
     unmount();
   });
 
-  it("uses desktop TianDiTu pairs and falls back to WGS84 on a custom source error", () => {
+
+  it("uses a trusted satellite when the ordinary validation map is disabled", () => {
+    const { getByRole, getByText, unmount } = render(
+      <MapView
+        theme="dark"
+        point={null}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+        preview={null}
+        heatmapStale={false}
+        onPointSelect={vi.fn()}
+        basemap={configuredSatelliteOnly}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    expect(getByText("WGS84 内部测试画布 · 未配置真实底图")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-tianditu-vector")).toBeUndefined();
+
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(getByText("Sentinel-2 卫星影像（联网）· 内部验证")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-satellite" });
+    });
+    expect(getByText("在线地图不可用，已回退 WGS84 坐标网格")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+    expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(18);
+    expect(maplibreMocks.map.setZoom).not.toHaveBeenCalled();
+
+    fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(getByText("Sentinel-2 卫星影像（联网）· 内部验证")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
+
+    unmount();
+  });
+  it("falls back from desktop imagery to its ordinary vector map", () => {
     const { getByRole, getByText, unmount } = render(
       <MapView
         theme="dark"
@@ -453,19 +430,21 @@ describe("MapView controls and desired-state replay", () => {
     act(() => {
       maplibreMocks.emit("error", { sourceId: "basemap-tianditu-imagery" });
     });
-    expect(getByText("在线地图不可用，已回退 WGS84 坐标网格")).toBeDefined();
+    expect(getByText("卫星影像不可用，已切回在线地图")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-tianditu-vector")).toBeDefined();
     expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith(
       "basemap-tianditu-imagery",
     );
     expect(maplibreMocks.map.removeSource).toHaveBeenCalledWith(
       "basemap-tianditu-imagery-label",
     );
-    expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(12);
+    expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(18);
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
 
-    fireEvent.click(getByRole("button", { name: "重试" }));
-    expect(getByText("天地图在线矢量底图 · 中文地名")).toBeDefined();
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(getByText("天地图卫星影像（联网）· 中文地名")).toBeDefined();
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
-      "basemap-tianditu-vector",
+      "basemap-tianditu-imagery",
       expect.any(Object),
     );
     expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(18);

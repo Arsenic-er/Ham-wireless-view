@@ -22,15 +22,7 @@ export interface SatelliteBasemapInfo {
 }
 
 export interface BasemapLayer {
-  id:
-    | "vec"
-    | "cva"
-    | "earth"
-    | "landcover"
-    | "landuse"
-    | "water"
-    | "roads"
-    | "places";
+  id: "vec" | "cva";
   displayName: string;
 }
 
@@ -43,9 +35,6 @@ export interface BasemapInfo {
   maxZoom: number;
   layers: BasemapLayer[];
   tilePathTemplate?: string;
-  resourcePath?: string;
-  bounds?: [number, number, number, number];
-  archiveBytes?: number;
   satellite?: SatelliteBasemapInfo;
 }
 export interface OnlineBasemapInfo {

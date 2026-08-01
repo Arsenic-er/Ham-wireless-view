@@ -4,14 +4,14 @@
 - 日期：2026-07-16
 - 状态：地图合规路线为 P0 公开发布阻断项
 
-本轮四省 PMTiles 只用于私有工程验证；本文保留最小数据来源、署名和使用边界，不把公开发行审查作为本轮接入完成条件。
+四省 PMTiles 已退出当前产品目标；本文保留其历史来源、署名和使用边界，同时把现行视觉底图路线固定为纯在线。当前天地图 token 未配置，运行服务尚未按 ADR-0022 重启，约 33 MB 历史 runtime 资产也尚未删除。
 
 ## 1. 原则
 
 计算数据与显示地图严格分离：
 
 - DEM 和水体掩膜只服务于传播计算，不在地图上直接可视化。
-- 显示底图必须来自合法渠道，边界表示合规，具有有效审图信息，并取得桌面应用与离线缓存所需授权。
+- 显示底图必须来自合法在线服务，边界表示合规，具有有效审图信息，并取得桌面应用、热力图叠加与所需署名授权。
 - 开发期底图、国际开源边界和计算数据均不能因为“开源”而自动进入面向中国大陆公众的发行版。
 - 地图合规由正式发行物负责，包括应用界面、截图、PNG、PDF、宣传图片和项目网站。
 
@@ -23,7 +23,7 @@
 |---|---|---:|---|---|
 | DEM | 地形剖面与接收点海拔 | 否 | Copernicus GLO-90 | 许可、来源声明、版本锁定 |
 | 水体掩膜 | 陆地/水体电气参数 | 否 | Copernicus DEM GLO-90 WBM 2021_1 / AWS COG | 许可、来源声明、版本锁定、校验和 |
-| 基础底图 | 点选和空间参照 | 是 | 经审核/授权的中国大陆地图服务或数据包 | 审图号、授权、审核确认 |
+| 基础底图 | 点选和空间参照 | 是 | 经审核/授权的中国大陆在线地图服务 | 审图号、在线服务/叠加授权、审核确认 |
 | 中国大陆有效区 | 限制发射点选择 | 不单独显示 | 与合规底图一致的授权边界 | 不得自绘或使用冲突边界 |
 | 在线卫星视觉层 | 联网视觉参照 | 是，不参与分析 | EOxCloudless Sentinel-2 2025 EPSG:3857 WMTS | 可用性、非商业/商业授权、署名、同源代理验证 |
 | 热力图 | 用户计算结果 | 是 | 本地生成 | 作为叠加内容纳入地图审核评估 |
@@ -67,10 +67,12 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 - 可以使用 Natural Earth 或无边界坐标画布进行内部功能诊断。
 - 开发构建必须显示“内部测试底图，不得公开发布”。
 - 不制作含未经确认国界的宣传截图或公开演示包。
-- 私有 validation 平台可以通过同源代理在线显示天地图 `vec/cva` 以验证地图交互；必须保留来源和内部验证标记。在线服务可访问不等于已经取得桌面离线、再分发、应用分发或 PNG/PDF 导出授权，也不自动关闭审图门槛。
+- 私有 validation 平台通过同源代理在线显示天地图 `vec/cva` 以验证地图交互；必须保留来源和内部验证标记。在线服务可访问不等于已经取得桌面应用、热力图叠加或 PNG/PDF 导出授权，也不自动关闭审图门槛。
 - 私有 validation 可测试 EOxCloudless 在线卫星视觉层，但必须显著署名、保持 `no-store`、不作离线预取，并把非商业许可与商业授权状态作为独立未关闭项。
 
-### 5.2 私有四省 PMTiles 验证
+### 5.2 历史：私有四省 PMTiles 验证
+
+以下内容只保留已发生的资产与许可证据，不再定义当前 provider 或产品回退路径；现行决策见 ADR-0022。
 
 - 固定归档：source build 20260731，bbox 107.5,18,125.5,33.5，z0-9，33,044,072 bytes，SHA-256 5bda49bf909a5b9fae931353edf5aea82ba35be9f8187128643b972eed4c87d0。
 - 归档含 939 个 region tiles、837 个 archive entries，占 2.5 GB 上限的 1.32%；tile payload 为 gzip 压缩 MVT。
@@ -79,14 +81,14 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 - boundaries 与 pois 不显示，但原始归档仍含 boundaries 以及 Natural Earth/OSM 内容。当前只用于私有验证、不纳入正式 EXE，且不作公开发行结论。
 - 地名字形由 MapLibre TinySDF 从明确的本机中文字体栈生成；无 glyph URL，不新增字体或地名资产，也不发起第三方字体请求。
 - 地图持续显示 © OpenStreetMap contributors；源数据按 ODbL Produced Work 记录，landcover 上游署名要求仍待确认。
-- PMTiles JavaScript 4.4.1 为 BSD-3-Clause，传递依赖 fflate 为 MIT。天地图继续作为联网 fallback 与历史验证路径。
+- PMTiles JavaScript 4.4.1 为 BSD-3-Clause，传递依赖 fflate 为 MIT；它们在代码完全移除前继续保留许可证记录。天地图现为 validation 在线普通地图主路径。
 
 ### 5.3 EOxCloudless 在线卫星视觉层
 
 - 已采用 EOxCloudless Sentinel-2 2025 `s2cloudless-2025_3857` WMTS，EPSG:3857 z0-14；只由固定同源、`no-store`、固定 HTTPS、零重定向代理读取，不允许浏览器直连、任意上游、凭据透传或离线批量抓取。
 - 2025 免费 WM(T)S 的当前官方说明为非商业 CC BY-NC-SA 4.0；交互地图必须持续显示 `EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。任何商业使用必须先取得 EOX 适用商业授权。
 - 该服务只提供在线视觉背景。卫星像素不得进入 DEM/WBM、陆水分类、ITM、覆盖统计、缓存准备或导出分析结论；“看起来像山、水或城市”不能替代计算数据。
-- 瓦片不写入项目持久缓存、浏览器持久存储或离线包；上游不可达时回退固定 PMTiles 地图。因此 2.5 GB 硬上限不变。
+- 瓦片不写入项目持久缓存或浏览器持久存储；上游不可达时回退在线天地图普通地图，再失败则显示 WGS84 坐标网格。因此 2.5 GB DEM/WBM 与计算缓存硬上限不变。
 - Google Maps / Google Satellite 因 API key、计费账号、调用条款和离线缓存/再分发限制未采用。
 - 2026-08-01 已完成固定同源代理、严格路由、真实 JPEG、`no-store`、署名 UI 与断网/source error 自动回退的自动化和 live HTTP 验证；商业授权与真实浏览器视觉仍未关闭。
 
@@ -104,7 +106,7 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 必须同时满足：
 
 1. 底图来自自然资源主管部门标准地图、天地图授权服务或具备资质的地图编制/服务单位。
-2. 数据授权明确允许 Windows 桌面应用、离线缓存、应用分发和导出图片/PDF。
+2. 数据授权明确允许 Windows 桌面在线显示、热力图叠加、应用分发，以及项目实际需要的截图/导出行为。
 3. 地图界面显著保留来源、审图号和授权要求的署名。
 4. 不自行修改国界、省级行政边界或重要岛屿表示。
 5. 对缩放、裁切、样式切换、热力图叠加、点标记和导出报告是否构成需重新审核的编辑进行正式确认。
@@ -113,15 +115,14 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 
 自然资源部标准地图服务说明指出：直接使用标准地图需标注审图号，对内容编辑，包括放大、缩小和裁切，公开使用前需要送审。因此静态标准地图不能直接被假定为可任意缩放的交互离线底图。
 
-### 5.6 后续正式离线地图包
+### 5.6 纯在线底图与无网边界
 
-首个 Windows Alpha Release 不包含离线地图。后续离线包不是把内部验证文件复制进安装包，而是独立、受校验、可删除的正式资产：
-
-- 来源必须明确允许 Windows 桌面显示、离线存储、应用分发及项目实际需要的截图/导出行为，并满足审图号、边界和署名要求。
-- manifest 至少冻结 provider ID、数据版本、覆盖范围、格式/缩放、精确字节数、SHA-256、审图号、署名和授权能力；项目发布清单须复核或签名。
-- 安装包可只携带小型 manifest；地图包本体可作为独立 Release 资产或应用内受控下载。无论哪种方式，导入前先做配额预检，partial 和最终文件都计入 2,500,000,000 字节。
-- 完整下载后校验哈希并原子进入 ready；缓存页显示来源、版本、范围和大小，并允许用户单独删除。删除不得影响在线天地图凭据，也不得静默删除 DEM/WBM。
-- 当前四省 PMTiles 含内部验证用途的 Natural Earth/OSM 边界内容，授权链也未关闭；它必须被公开 EXE、NSIS 和 Release 资产排除，不能因体积小或“开源”绕过上述门槛。
+- 当前产品不规划离线视觉底图、离线地图包、批量瓦片下载、地图导入或地图缓存管理。
+- 天地图与 EOxCloudless 响应统一 `no-store`，不得进入 EXE、安装包、Release、Rust 数据根、SQLite、Service Worker 或浏览器持久存储。
+- 在线普通/卫星底图失败时只降级到 WGS84 坐标网格，不静默切换 PMTiles、未知供应商或其他坐标系。
+- 已缓存完整 DEM/WBM 的区域仍可在无网络时运行 ITM、显示分析层并导出无底图诊断 PNG/PDF；未缓存或损坏的计算资产继续阻断计算。
+- 四省 PMTiles 必须排除在公开发行物之外；服务器约 33 MB 历史 runtime 资产尚未删除，后续须通过独立受管清理记录实际释放空间。
+- 取消离线底图不改变 DEM/WBM、partial、索引和计算缓存的十进制 2.5 GB 硬上限。
 
 ## 6. 地图提供者接口
 
@@ -131,41 +132,38 @@ CompliantBasemapProvider
 ├─ dataset_version
 ├─ review_number
 ├─ attribution_text
-├─ allowed_offline
+├─ allowed_online_display
+├─ allowed_analysis_overlay
 ├─ allowed_export
 ├─ allowed_styles
 ├─ coverage_polygon
-├─ tile_manifest
-└─ integrity_manifest
+└─ service_capabilities
 ```
 
-私有 validation 的 `BasemapInfo` 只是在线验证元数据子集：enabled、provider、署名、同源模式、最大缩放、`vec/cva` 和路径模板。它刻意不伪造 `review_number`、离线/导出授权、覆盖多边形或完整性清单，因此不能被当作 `CompliantBasemapProvider`。当前 token 未配置，真实天地图瓦片尚未完成烟雾验证。
+私有 validation 的 `BasemapInfo` 只是在线验证元数据子集：enabled、provider、署名、同源模式、最大缩放、`vec/cva` 和路径模板。它刻意不伪造 `review_number`、在线叠加/导出授权或覆盖多边形，因此不能被当作 `CompliantBasemapProvider`。当前 token 未配置，真实天地图瓦片尚未完成烟雾验证。
 
-私有 PMTiles 的 bootstrap 元数据只公开 provider、相对 Range URL、bbox、zoom、大小和可见署名，不公开服务器文件路径；SHA-256 留在部署复核基线中。它是 validation 能力描述，不替代正式 provider 接口。PMTiles 主路径与天地图 fallback 必须能被前端明确区分。
+私有 PMTiles bootstrap 元数据、相对 Range URL、bbox、zoom、大小与 SHA-256 只属于历史 validation 证据。现行 bootstrap 必须把在线天地图、EOxCloudless 和 WGS84 降级能力明确区分。
 
 token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0600` 普通非符号链接文件管理；bootstrap、浏览器、日志和文档不得包含 token。浏览器只访问同源路径，上游固定 HTTPS 请求由回环 validation server 代发。该设计降低凭据暴露，不改变地图内容和使用方式的许可/审核义务。
 
-生产构建在以下任一条件不满足时拒绝启动地图：
+生产构建在以下任一条件不满足时拒绝启动在线 provider，并回退 WGS84 网格：
 
 - `review_number` 为空；
-- 离线授权未确认；
-- 导出授权未确认；
-- 缓存清单签名/校验失败；
+- 在线显示或热力图叠加授权未确认；
+- 所需导出授权未确认；
 - 数据版本不在发布白名单。
 
 ## 7. 缓存与数据最小化
 
 - 所有持久数据总量硬上限 2,500,000,000 字节。
-- 预算建议：底图 500 MB、DEM 1.55 GB、水体 150 MB、索引与计算缓存 200 MB、下载安全余量 100 MB。
+- 不为视觉底图分配持久预算；2.5 GB 全部用于 DEM、WBM、partial、SQLite/索引、计算缓存和安全余量。
 - 实际分配由下载清单决定，但总量不可突破。
 - 临时下载文件也计入上限。
 - 缓存页只显示区域覆盖和大小，不显示 DEM 高程预览。
 - 删除数据前明确告知哪些离线区域将失效。
 
-- PMTiles 固定归档为 33,044,072 bytes（占 2.5 GB 的 1.32%）；Range 读取不得产生未登记的浏览器整包副本。
-- EOxCloudless 在线瓦片必须为 `no-store`，不得进入持久缓存、缓存配额统计或离线预取；十进制 2,500,000,000 字节上限不因卫星模式改变。
-- 正式离线地图包的 manifest、partial、最终归档和索引都按实际文件长度进入同一配额；缓存管理必须支持单独删除并在删除后重新核对总量。
-- 首个 Windows Alpha 和当前四省内部 PMTiles 不构成正式离线包，公开 Release 检查必须确认它们未被误打包。
+- 天地图与 EOxCloudless 在线瓦片必须为 `no-store`，不得进入持久缓存、缓存配额统计或离线预取；十进制 2,500,000,000 字节上限不因地图模式改变。
+- 四省 PMTiles 只作为尚未清理的历史 runtime 资产记录；它不属于现行预算，且公开 Release 检查必须确认未被误打包。
 
 ## 8. 署名与导出
 
@@ -181,11 +179,11 @@ token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0
 
 当前内部 Alpha 只输出无行政边界、无底图的局部等距诊断报告，并强制显示“内部测试，不得公开发布”、ITM/数据版本和模型限制。这不构成公开地图导出授权，也不允许把诊断报告用于宣传或正式发行。
 
-正式 provider 必须在发行清单中同时给出非空审图号、署名、离线授权和导出授权；任一字段缺失时生产构建必须拒绝带底图地图导出，不能仅显示警告后继续。
+正式 provider 必须在发行清单中同时给出非空审图号、署名、在线显示/叠加授权和所需导出授权；任一字段缺失时生产构建必须拒绝带底图地图导出，不能仅显示警告后继续。
 
 Copernicus 数据署名以发布时适用的许可文本为准。当前工程记录的基础措辞为：`produced using Copernicus WorldDEM-90 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved`；若发布布尔 WBM 或其他派生物，还需明确标注应用进行了改编。
 
-私有 PMTiles 地图界面必须持续显示 © OpenStreetMap contributors；PMTiles/fflate 许可和 landcover 署名 caveat 同步记录在 THIRD_PARTY_LICENSES.md。
+历史 PMTiles 验证曾要求显示 © OpenStreetMap contributors；PMTiles/fflate 与 landcover 署名 caveat 在依赖和资产完全移除前继续记录于 THIRD_PARTY_LICENSES.md。
 
 卫星模式必须在地图界面就近持续显示 `EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)`。本设计不授权离线打包 EOxCloudless，也不把在线查看权外推为 PNG/PDF 导出、再分发或商业使用权。
 
@@ -194,9 +192,8 @@ Copernicus 数据署名以发布时适用的许可文本为准。当前工程记
 - [ ] 底图供应者身份、资质与授权文件已归档。
 - [ ] 有效审图号已写入发行清单。
 - [ ] 浅色、深色样式均在授权/审核范围内。
-- [ ] 离线缓存与重新分发权已书面确认。
-- [ ] 正式离线地图包具有不可变 manifest、精确大小、SHA-256、原子安装/导入和缓存页单独删除证据，并完整计入 2.5 GB。
-- [ ] 发布产物检查确认不含四省内部 PMTiles；首个 Windows Alpha 不含任何离线地图。
+- [ ] 在线显示、热力图叠加、必要署名与应用分发权已书面确认。
+- [ ] 发布产物检查确认不含四省内部 PMTiles、其他离线地图或在线瓦片副本。
 - [ ] PNG/PDF 导出权已书面确认。
 - [ ] 中国大陆有效区与底图使用同一合规边界来源。
 - [ ] 热力图叠加和发射点标记已纳入审核评估。
