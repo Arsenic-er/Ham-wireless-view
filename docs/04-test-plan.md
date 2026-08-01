@@ -1,7 +1,7 @@
 # HamHeatmap MVP 测试计划
 
-- 文档版本：0.1-draft
-- 日期：2026-08-01
+- 文档版本：0.2-draft
+- 日期：2026-08-02
 
 ## 1. 测试层级
 
@@ -15,6 +15,10 @@
 ## 2. 模型测试
 
 - NTIA ITM 官方 point-to-point 样例全部通过。
+- 链路原始 DEM PFL 只调用一次 ITM；显示曲率不写回 PFL，P.526/F1 诊断不追加第二份绕射损耗。
+- 合成 200 km 路径在 `k=4/3`、`Re=6,371,008.8 m` 时中点隆起为 `588.6 ± 0.5 m`。
+- 200 km 中点 F1 半径在 145.00/435.00 MHz 时分别为 `321.5 ± 0.2 m` 与 `185.6 ± 0.2 m`；端点 F1 为 0 且不参与归一化净空最小值。
+- 几何射线、60% F1 和 margin 边界覆盖等号两侧；`margin=0` 预计可用，略低于 0 为 `predicted-unavailable`。
 - 功率 W/dBm、增益 dBi/dBd 换算误差小于 `1e-9`。
 - 发射功率增加 10 倍时结果整体增加约 10 dB。
 - 水平/垂直极化正确映射到 ITM `pol=0/1`。
@@ -29,6 +33,9 @@
 ## 3. 网格与地理测试
 
 - 网格固定 `401 × 401`、1 km 间距。
+- 链路 WGS84 inverse 距离和 direct 样本与权威 GeographicLib 结果一致；仅接受 `1,000..=200,000 m`。
+- 链路样本数为 `ceil(D/90 m)+1`、间隔不超过 90 m且首尾点精确等于 TX/RX；200 km 路径约 2,224 个样本。
+- 链路地图连接线按测地线分段，Web Mercator 屏幕距离不进入剖面计算。
 - 只保留距中心不超过 200 km 的像素。
 - 圆外结果透明且不能导出为有效像素。
 - 发射点必须位于合规中国大陆有效区。
@@ -45,6 +52,12 @@
 ## 4. UI 测试
 
 - 首次启动默认跟随系统主题。
+- 覆盖/链路顶层模式切换不重建地图，不把覆盖发射点当链路 TX，也不清除另一模式结果。
+- 链路第一次地图单击设置 TX、第二次设置 RX；标记和连接线可区分，越界保留 TX 并允许重选 RX。
+- “清空链路”只清 TX/RX、连接线、SVG 与链路结果；“清空热力图”只清覆盖层/预览，两者互不影响。
+- SVG 显示曲率抬高后的地形、端点直线射线、完整 +/-1.0 F1、0.6 F1 边界、TX/RX 和最小净空点；游标显示原始 DEM 与地球隆起，Y 轴为 m AMSL 并提示纵向比例放大。
+- 动态距离轴始终包含 0 和 D，按可视宽度选择 5–9 的目标密度并使用 1/2/5 倍数步长；小于 10 km 的路径显示 m，其余显示 km。
+- SVG 游标显示完整权威样本的距离、地形、射线、F1 和净空；降采样只影响绘制，不改变游标、最严重点或分类。
 - 浅色/深色切换即时生效并持久保存。
 - 两种主题下色标数值和颜色顺序一致。
 - 底图不存在 hillshade、等高线、坡度、高程着色或 3D terrain。
@@ -71,6 +84,8 @@
 ## 5. 数据与缓存测试
 
 - 缺数据且在线时先显示预计大小，再经用户确认下载。
+- 链路数据计划只包含路径和插值所需 DEM/WBM 单元；仍使用正式缓存引用、原子提交与十进制 2.5 GB 配额。
+- 链路路径任一样本缺 DEM/WBM、NoData、损坏、版本混用或单边 404 都 fail closed，不生成部分 SVG 或三类结果。
 - 缺数据且离线时禁止计算。
 - 下载 Agent 强制 HTTPS-only、零重定向和有限 DNS/连接/发送/响应/总超时；HEAD 只有 200 可作为存在对象元数据。
 - 下载中断后可恢复或安全重下单个瓦片，不自动重试。
@@ -105,6 +120,8 @@
 基准硬件为普通四核 Windows 10/11 64 位电脑：
 
 - 已缓存区域目标 60 秒内完成。
+- 已缓存数据的 200 km 单链路目标 2 秒内完成，分别记录 WGS84、DEM/WBM、ITM、曲率/F1、序列化和 SVG 首绘耗时。
+- SVG 游标、窗口 resize、主题/语言切换和动态刻度不得触发 analyze-link IPC/HTTP、ITM 或 DEM/WBM 重读。
 - UI 事件响应延迟目标小于 100 ms。
 - 进度至少每秒更新一次。
 - 计算峰值内存目标小于 2 GB，最终以基准结果确定。
@@ -141,6 +158,7 @@
 - 三个真实区域案例通过人工审查：平原、山区、沿海。
 - Windows 10 和 Windows 11 至少各完成一次安装、离线计算和导出。
 - 2.5 GB 配额压力测试通过。
+- 双点链路的解析几何、ITM/预算、三分类、跨极化、状态隔离、四语言和 SVG 门禁全部通过。
 - 数据许可证清单完成。
 - 地图授权、审核和审图号完成；否则只能发布源代码和无底图内部测试构建。
 
@@ -821,4 +839,55 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] AUTHORS.md、NOTICE、.github/CODEOWNERS、npm/Cargo/Tauri metadata 与四语言 README 统一记录 Arsenic-er 为项目创建者及主开发者。
 - [x] Tauri bundle 资源包含 AUTHORS.md、NOTICE、LICENSE 与 THIRD_PARTY_LICENSES.md，并保持 English、SimpChinese、TradChinese、Japanese 四语言 NSIS 配置。
 - [x] scripts/check-source-attribution.py 使用 Git tracked + untracked allowlist，漏头、第三方误盖章和未分类文件均 fail closed；GitHub Actions documentation job 执行该检查。
-- [x] 当前前端证据更新为 14 files / 133 tests；README 四语言事实检查必须继续通过。
+- [x] 当前前端证据更新为 16 files / 145 tests；README 四语言事实检查必须继续通过。
+
+## 37. 双点链路通视分析（2026-08-02，源码与自动化已通过；受管运行、Windows 与性能待验）
+
+本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面；本次最终门禁确认为前端 16 files / 145 tests 与 Rust workspace 131 passed / 5 ignored。以下勾选只代表代码与自动化证据，不代表受管 validation 进程已经重建/重启、公开服务已经部署、真实 200 km 缓存链路已经跑通，或 Windows 实机已经验收。
+
+### 37.1 请求、路径与数据完整性
+
+- [x] 覆盖与链路使用独立请求/结果 schema；链路不复用覆盖 `CalculationRequest` 的中心点、固定圆或手动 TX 地面海拔字段。
+- [ ] 地图第一次单击选择 TX、第二次选择 RX 已实现；Rust 权威路径严格使用 WGS84 并接受 `1,000..=200,000 m`，但前端禁用按钮前仍以 mean-Earth haversine 做近似范围预检，因此 WGS84 精确边界端到端门禁尚未关闭。
+- [x] Rust 使用 `interval_count=ceil(D/90)`、样本数 `interval_count+1`、间距不超过 90 m，所有内部样本用 WGS84 direct，首尾点精确。
+- [ ] 路径专用资产 planner 尚未实现；当前 `AppService::analyze_link` 复用以 TX 为中心的 200 km `plan_glo90_region`，会准备多于路径和插值余量的 DEM/WBM 单元。缺失、损坏和 NoData 继续 fail closed。
+- [x] 原始 DEM 样本只构造一次 ITM PFL；曲率显示字段不修改 PFL，F1/P.526 诊断不追加到 ITM 基本损耗。
+- [ ] validation exact-ID 运行框架已接入 `/api/link-analysis`，但尚缺链路专属取消、迟到结果和真实数据失败恢复烟测。
+
+### 37.2 曲率、菲涅尔与解析值
+
+- [ ] 固定 `k=4/3`、`Re=6,371,008.8 m` 与精确正弦隆起公式已实现并有短路径单测；200 km 中点 `588.6 ± 0.5 m` 的 Rust 回归仍需补齐。
+- [ ] F1 公式及 145/435 MHz 相对变化已有单测，SVG fixture 覆盖 145 MHz / 200 km / 321.5 m；145.00 MHz 与 435.00 MHz 的 200 km Rust 解析值双回归仍需补齐。
+- [x] F1 两端为 0 且不参与归一化最小值；内部 `0.60` 和 `-1.0` 分类边界包含等号并有上下测试。
+- [ ] 频率、增益与几何不变性已有定向测试；AGL、功率、门限对几何/预算的完整正交敏感性矩阵尚未完成。
+- [ ] 平地与单山脊已有核心测试；双山脊、纯曲率遮挡和海面端到端合成剖面仍待补齐。
+
+### 37.3 极化、链路预算与三分类
+
+- [x] 同极化失配为 0 dB，正交极化使用公开的 20 dB 规划损耗；结果与四语言 UI 均显示该假设。
+- [x] ITM 使用 TX 极化，20 dB 只在链路预算中扣除一次，不修改 PFL 或 ITM 输出。
+- [x] RX 规划门限默认 `-120 dBm` 且可编辑；结果序列化并显示 ITM 基本损耗、失配、预测 RX dBm、门限与 margin。
+- [ ] 负 margin、正 margin 与增益 +10 dB 已有自动化；`margin=0` 精确边界和 TX 功率 10 倍的显式端到端回归仍需补齐。
+- [x] `direct-los` 要求充分 F1 净空对应的 DirectLineOfSight 几何、ITM LineOfSight 和非负 margin。
+- [x] 不满足全部 direct 条件但 margin 非负归 `obstructed-usable`。
+- [x] 负 margin 归 `predicted-unavailable`；未知 ITM 模式 fail closed，文案不把预算不足误写成“完全遮挡”。
+- [x] 三类结果与免责声明均称当前输入、DEM、标准大气、模型和门限下的规划预测，不保证现场通联。
+
+### 37.4 SVG、动态距离刻度与状态隔离
+
+- [x] SVG 使用“曲率抬高地形 + 端点直线射线”的等价表示，并绘制完整 +/-1.0 F1、0.6 F1、最严重净空点；游标显示原始 DEM、地球隆起、射线和 F1。
+- [x] X 轴动态步长使用 `1/2/5 × 10^n` 且始终包含 0 和 D；200 km fixture 与精确端点有自动化。
+- [ ] 小于 10 km 的 m 标签、窄窗口 ResizeObserver、真实字体标签裁切和 DPI 仍需受管浏览器/Windows 视觉验收。
+- [x] 游标二分查找最近的完整权威样本，不重算分类或 ITM。
+- [ ] SVG 游标、resize、主题和语言本身不调用后端；地图/卫星切换、运行中取消与所有组合的零调用门禁仍待补齐。
+- [x] “清空链路”不清热力图/阈值/覆盖点；模式与语言切换保留链路端点、参数、结果和覆盖状态。
+- [x] `en`、`zh-CN`、`zh-TW`、`ja-JP` 资源保持 363-key parity。
+- [ ] 浅/深主题、1080×700、Windows DPI 缩放和 validation 浏览器视觉仍待验收。
+- [ ] 已缓存 200 km 单链路 2 秒目标与真实 DEM/WBM/ITM 分阶段耗时尚未取得运行证据。
+
+### 37.5 本轮执行证据与发布边界
+
+- [x] `scripts/node-project.sh --prefix app test`：16 test files / 145 passed。
+- [x] `scripts/cargo-project.sh test --workspace --all-targets --locked`：131 passed / 5 ignored。
+- [ ] 受管 validation 进程尚未按链路源码 stop/build/start；没有链路 live HTTP、真实缓存或受管浏览器验收，也没有公开部署。
+- [ ] v0.1.0-alpha.2 不含本功能；新的 Windows EXE/NSIS 尚未构建，Windows 10/11 WebView2 实机尚未验收。

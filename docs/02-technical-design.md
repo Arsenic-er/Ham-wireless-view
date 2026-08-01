@@ -1,12 +1,12 @@
 # HamHeatmap 技术设计草案
 
-- 文档版本：0.1-draft
-- 日期：2026-07-16
+- 文档版本：0.2-draft
+- 日期：2026-08-02
 - 对应需求：`01-product-requirements.md`
 
 ## 1. 技术目标
 
-构建一个 Windows 10/11 64 位桌面应用：视觉底图仅在线，传播数据计算离线优先。前端负责地图、参数表单、进度和导出预览；Rust 后端负责 DEM/WBM 与计算缓存、坐标计算、ITM 调用、并行调度、结果栅格化和文件导出。
+构建一个 Windows 10/11 64 位桌面应用：视觉底图仅在线，传播数据计算离线优先。前端负责覆盖/链路模式、地图、参数表单、进度、SVG 地形剖面和导出预览；Rust 后端负责 DEM/WBM 与计算缓存、坐标计算、ITM 调用、覆盖并行调度、双点几何与链路预算、结果栅格化和文件导出。
 
 优先保证：计算可复现、地形确实影响结果、UI 不冻结、离线数据行为明确、数据和模型版本可追踪。
 
@@ -67,9 +67,10 @@ hamheatmap/
 
 ### 4.1 前端层
 
-- `MapView`：合规底图、中文地名、地图/卫星切换、当前发射点、历史站点标记、200 km 圆、最多 8 个不可检查的会话覆盖层和图例；不渲染高程视觉层，也不把卫星影像解释为传播输入。
-- `ParameterPanel`：场景、频率、功率、增益、AGL 天线高度、发射点地面海拔来源和值、极化。
+- `MapView`：合规底图、中文地名、地图/卫星切换、覆盖发射点/历史站点/200 km 圆/最多 8 个不可检查的会话覆盖层，以及独立的链路 TX/RX 标记与 WGS84 连接线；不渲染底图高程视觉层，也不把卫星影像解释为传播输入。
+- `ParameterPanel`：覆盖模式的场景、频率、功率、增益、AGL 天线高度、发射点地面海拔来源和值与单一路径极化；链路模式的频率、TX 功率、RX 门限及两端高度、增益和极化。
 - `CalculationPanel`：开始、取消、进度、状态、模型名称。
+- `LinkProfile`：只读接收权威链路样本，以 SVG 绘制单独的曲率抬高地形、端点直线射线、完整 F1、60% 净空边界、动态距离刻度与游标；游标仍显示原始 DEM 与地球隆起，前端不重算传播损耗。
 - `CacheManager`：已缓存区域、分类大小、删除和 2.5 GB 硬限制。
 - `ExportDialog`：PNG/PDF 预览和保存。
 - `Settings`：单位偏好、日志目录、语言和版本信息。
@@ -82,6 +83,7 @@ hamheatmap/
 - `TerrainService`：DEM/WBM 瓦片定位、读取、插值和剖面采样。
 - `PropagationService`：输入归一化、ITM 调用和链路预算。
 - `CoverageService`：圆形网格生成、并行任务、进度和取消。
+- `LinkAnalysisService`：WGS84 双点距离与等距路径、DEM/WBM 剖面、一次 ITM P2P、曲率/F1 几何、极化失配、链路余量与三类稳定结果。
 - `ExportService`：前端冻结报告快照；独立 Rust crate 负责输入校验、PDF 编码和原子文件保存；Tauri 只负责原生保存对话框。
 
 Phase 2 把可序列化的桌面契约放在独立 `hamheatmap-app-service` crate 中，Tauri 只负责操作系统数据目录、异步阻塞任务调度、事件发送和单任务状态；输入范围、W/dBm、dBi/dBd、频段、缓存验证、下载计划、DEM/WBM 加载和 ITM 调用仍由共享 Rust 服务执行。浏览器模式只用于界面与视觉检查，明确禁止返回模拟传播结果或执行真实下载。
@@ -96,7 +98,8 @@ download_region    → 后端重建计划、原子下载/生成、校验和与 r
 cancel_download    → 下载取消令牌，保留完整资产与合法 partial
 cache_overview     → 实际目录用量和已登记区域/共享引用摘要
 delete_cache_region → 用户确认后只回收无其他区域引用的资产
-calculate          → 真实 DEM/WBM + ITM + 内存 PNG
+calculate          → 覆盖模式真实 DEM/WBM + ITM + 内存 PNG
+analyze_link       → 链路模式 WGS84 剖面 + 一次 ITM + 几何/预算结果
 export_result       → 原生保存对话框 + 校验后的 PNG/A4 PDF 原子写入
 cancel_calculation → 原子取消令牌
 ```
@@ -292,6 +295,15 @@ Rust 服务从同一 dBm 栅格额外生成 `401×401`、轴对齐 `EPSG:3857` �
 
 2026-07-24 自动化验收覆盖纬度 18°、30.5°、40°、54°，最大样本中心定位误差分别为 711.655 m、716.127 m、725.742 m、739.625 m；总体最大值 739.625 m 小于 1 km。绝对仿射 dBm/MapLibre UV、轴对齐四角、半像素边界、199 km 内侧 alpha、NaN 感知重采样、确定性 PNG、真实 14 字段序列化和前端字段分离同时通过回归。精确 200 km 连续边界点均在图像域内；部分边界的最近像素中心透明，但 `3×3` 邻域最近可见中心最差 `1012.102 m`，小于该处一个 WGS-84 实算输出像素对角线 `1431.578 m`。因此自动化栅格几何风险在当前 1 km 输出语义内关闭。
 
+### 5.2 双点链路坐标与路径
+
+- 链路 TX/RX 坐标为 WGS84 / EPSG:4326，与覆盖发射点分开保存。
+- 使用 GeographicLib WGS84 inverse 取得总距离与初始方位；严格接受 `1,000 m <= D <= 200,000 m`。
+- 令 `interval_count = ceil(D / 90 m)`，样本数为 `interval_count + 1`，实际等距间隔为 `D / interval_count <= 90 m`。
+- 单条路径的成本远低于 12.6 万覆盖射线，所有样本使用 WGS84 direct 生成，不使用批量覆盖中的球面大圆内部近似；索引 0 和末索引必须逐位对应 TX/RX。
+- 目标链路数据计划只覆盖路径穿过及插值所需的 DEM/WBM 单元。当前源码切片尚未实现路径专用 planner，仍复用以 TX 为中心的既有 200 km `plan_glo90_region`，因此会准备多于路径本身的单元；资产继续共享正式缓存、引用和配额，此优化门禁保持未关闭。
+- 地图连接线使用测地线折线，不用 Web Mercator 屏幕直线作为距离或剖面输入。
+
 ## 6. 地形数据设计
 
 ### 6.1 DEM
@@ -323,6 +335,7 @@ WBM 只参与传播计算，不作为可见底图。正式在线底图仍通过�
 ### 6.3 地形采样
 
 - DEM 剖面采样间距初始使用原生约 90 m。
+- 覆盖模式继续使用目标约 90 m 的批量剖面策略；链路模式使用 WGS84 精确等距离样本并保证间隔不超过 90 m。
 - 瓦片边界使用一致的双线性插值规则。
 - WBM 采用包含采样点的原始分类像素，不对分类值做双线性插值。
 - 经 DEM/WBM 成对 `404` 确认的纯海洋单元高程为 0 m、水体为真；其他水面仍读取正式 DEM/WBM，不能把一般缺数据误当水面。
@@ -354,9 +367,10 @@ WBM 只参与传播计算，不作为可见底图。正式在线底图仍通过�
 
 ### 7.3 极化
 
-- UI：水平/垂直。
-- ITM：水平映射为 `pol=0`，垂直映射为 `pol=1`。
-- 默认垂直。
+- 覆盖 UI：单一路径水平/垂直；ITM 水平映射为 `pol=0`、垂直映射为 `pol=1`，默认垂直，不追加失配损耗。
+- 链路 UI：TX 与 RX 分别选择水平/垂直，默认均垂直；同极化失配 0 dB，正交极化按 `cross-polar-v1` 追加明确显示的 20 dB 规划损耗。
+- 链路正交极化调用 ITM 时使用 TX 极化；20 dB 只进入链路预算，不修改 PFL 或 ITM 输出。
+- 两种模式的不同语义必须由独立请求字段和版本化测试保护。
 
 ### 7.4 陆地/水面等效参数
 
@@ -381,7 +395,79 @@ rx_gain_dbi = rx_gain_dbd + 2.15
 rx_dbm = tx_dbm + tx_gain_dbi + rx_gain_dbi - itm_basic_loss_db
 ```
 
-不加入馈线损耗、接头损耗、人体吸收或极化失配附加损耗。用户选择的极化作为 ITM 地表波参数输入，而不是额外减去固定交叉极化损耗。
+覆盖模式不加入馈线损耗、接头损耗、人体吸收或极化失配附加损耗；用户选择的单一路径极化作为 ITM 输入。链路模式同样不加入馈线、接头或人体损耗，但按 ADR 0024 对两端正交极化另减版本化 20 dB 规划失配损耗。
+
+### 7.7 双点链路通视引擎
+
+链路功能使用独立 schema，不扩展或复用 `CalculationRequest/CalculationResult` 的覆盖栅格语义。建议首版契约：
+
+```text
+LinkAnalysisRequest schema 1
+  tx/rx: WGS84 point, height AGL, gain dBi, horizontal|vertical
+  frequency MHz, tx power dBm, receiver threshold dBm
+
+LinkProfileSample
+  distance m, coordinate, terrain AMSL
+  radio-ray AMSL, F1 radius, normalized clearance
+
+LinkAnalysisResult schema 1
+  distance/bearing, endpoint ground and antenna AMSL
+  original profile samples, minimum ray/F1 clearance and location
+  ITM basic/free-space/reference loss, warning, propagation mode
+  polarization mismatch loss, predicted RX dBm, margin dB
+  direct-los | obstructed-usable | predicted-unavailable
+  model/default/cross-polar/data versions and limitations
+```
+
+两端地面 AMSL 首版都从 DEM 自动读取；链路请求不接受覆盖模式的 `txGroundElevationOverrideM`，避免只覆盖一端造成不对称语义。后续若增加人工修正，必须同时为 TX/RX 建立独立、可空、仍 fail-closed 校验 DEM 的字段和新 schema。
+
+原始 DEM 样本构造 PFL 并只调用一次 NTIA ITM P2P。沿样本统计 WBM 水体比例并复用 `land-water-v1`；ITM 模式、warning 和所有有限损耗进入结果。未知模式、非有限损耗、缺少样本或数据错误使整个链路失败，不生成三类结果。P.526/F1 公式用于几何解释，不在 ITM 基本损耗上追加第二份绕射损耗。
+
+剖面几何固定：
+
+```text
+EARTH_RADIUS_M = 6_371_008.8
+EFFECTIVE_EARTH_K = 4 / 3
+FRESNEL_CLEARANCE_RATIO = 0.60
+
+effective_radius = EFFECTIVE_EARTH_K * EARTH_RADIUS_M
+bulge(x) = 2 * effective_radius
+           * sin(x / (2 * effective_radius))
+           * sin((D - x) / (2 * effective_radius))
+adjusted_terrain(x) = terrain(x) + bulge(x)
+ray(x) = lerp(tx antenna AMSL, rx antenna AMSL, x / D)
+F1(x) = sqrt((c / frequency_hz) * x * (D - x) / D)
+clearance(x) = ray(x) - adjusted_terrain(x)
+normalized_clearance(x) = clearance(x) / F1(x)
+```
+
+端点 `F1 = 0`，不参与归一化最小值。几何射线无地形遮挡要求所有内部样本 `clearance >= 0`；充分菲涅尔净空要求所有内部样本 `normalized_clearance >= 0.60`，边界包含等号。当前剖面使用“单独抬高显示地形、保持端点射线直线”的等价表示；原始 DEM 与 `earth_bulge` 分字段保留，ITM PFL 只消费原始 DEM。不得再弯曲射线或把 `adjusted_terrain` 送入 ITM，以免重复修正。
+
+链路极化规则版本为 `cross-polar-v1`：
+
+- TX/RX 同为水平或同为垂直：失配 0 dB，ITM 使用共同极化。
+- TX/RX 正交：ITM 使用 TX 极化，链路预算另减 20 dB，并把假设版本和值返回 UI。
+- 20 dB 是明确显示的规划假设，不是理想天线无限隔离或现场测量；不修改覆盖模式现有单一路径极化语义。
+
+链路预算：
+
+```text
+rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi
+          - itm_basic_loss_db - polarization_mismatch_loss_db
+margin_db = rx_dbm - receiver_threshold_dbm
+```
+
+不加入馈线、接头、人体、方向图、建筑物或植被附加损耗。接收门限默认 `-120 dBm` 且由请求显式携带；显示层必须说明它是规划输入。
+
+分类顺序固定：
+
+1. 若 `margin_db < 0`，返回 `predicted-unavailable`。
+2. 否则若射线无地形遮挡、最小 F1 净空 `>= 0.60` 且 ITM 模式为 `LineOfSight`，返回 `direct-los`。
+3. 其他非负余量结果返回 `obstructed-usable`，并保留真实 ITM 模式与几何诊断。
+
+因此“视距但功率不足”属于 `predicted-unavailable`，“射线仍通但 F1 净空不足”属于 `obstructed-usable`，“遮挡但 ITM 绕射/散射后余量非负”也属于 `obstructed-usable`。状态文案始终包含“预测/当前参数”限制，不声称绝对能或不能通信。
+
+SVG 只消费冻结的 `LinkAnalysisResult.profile`。X 轴固定覆盖 `0..D`，按可视宽度把目标密度限制在 5–9，再从 `1/2/5 × 10^n` 选择步长并始终单独绘制 0 和 D；小于 10 km 的路径标签使用 m，其余使用 km。Y 轴为 m AMSL，纵向自动范围必须显示“纵向比例放大”提示。游标二分查找最近的完整样本，图形降采样不得改变游标数值、最严重净空点或分类。
 
 ## 8. 并行与性能
 
@@ -403,6 +489,8 @@ rx_dbm = tx_dbm + tx_gain_dbi + rx_gain_dbi - itm_basic_loss_db
 - 144 与 430 MHz。
 - 1、2、4、8、16 线程。
 - 记录剖面提取时间、ITM 时间、内存和总时间。
+
+单条 200 km 链路在资产已加载或已缓存条件下以 2 秒内完成为阶段性目标；必须分别记录 WGS84 采样、DEM/WBM、一次 ITM、曲率/F1、序列化和 SVG 首绘时间。SVG 游标、缩放和动态刻度不调用 ITM，也不重新读取 DEM/WBM。
 
 若四核 60 秒目标未达到，按顺序优化：DEM 块缓存、射线前缀复用、批量 FFI、剖面采样策略、空间分块。不得通过把输出像素改粗于 1 km 来隐藏性能问题。
 
@@ -490,7 +578,7 @@ tx power
 
 ## 11. 状态机与错误处理
 
-顶层状态：
+顶层 `coverage` 与 `link` 是并列状态容器，不能共享“当前点”或结果身份。覆盖状态保持：
 
 ```text
 Idle → PointSelected → DataChecking
@@ -500,6 +588,19 @@ Ready → Calculating → Completed
 Downloading/Calculating → Cancelling → Ready 或 PointSelected
 任意状态 → RecoverableError
 ```
+
+链路状态独立为：
+
+```text
+NoEndpoints → TxSelected → EndpointsSelected
+EndpointsSelected → DataChecking → DownloadRequired → Downloading → LinkReady
+DataChecking → LinkReady
+LinkReady → Analyzing → LinkCompleted
+Downloading/Analyzing → Cancelling → LinkReady 或 EndpointsSelected
+任意链路状态 → RecoverableLinkError
+```
+
+模式切换只改变当前展示容器，不发送取消、不清点、不清结果。只有相应模式的显式清空或替换动作改变该模式状态；链路清空与覆盖清空互不分发。运行中是否允许另一模式启动任务由共享 operation mutex 决定，但 busy 拒绝不能消费或重置任一模式状态。
 
 错误必须区分：无网络、配额不足、磁盘不足、数据缺失、校验失败、DEM NoData、ITM 输入错误、ITM warning、导出失败和内部错误。界面消息说明用户下一步能做什么，技术细节写入本地日志。
 
@@ -520,6 +621,10 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 ### 13.1 单元测试
 
 - W↔dBm、dBd↔dBi。
+- 链路 WGS84 inverse/direct、1/200 km 包含边界与越界拒绝、`ceil(D/90)+1` 样本数、实际间隔不超过 90 m及精确首尾点。
+- 固定 `k=4/3`、`Re=6,371,008.8 m` 曲率，F1 半径、60% 净空、端点 F1=0 排除与分类边界。
+- 200 km 中点曲率 `588.6 ± 0.5 m`，145/435 MHz 中点 F1 `321.5 ± 0.2 m` / `185.6 ± 0.2 m`。
+- 链路同极化 0 dB、正交极化 `cross-polar-v1=20 dB`、RX 功率和 margin 预算。
 - 经纬度与局部网格往返。
 - 200 km 圆形掩膜。
 - 色标边界和透明阈值。
@@ -565,6 +670,9 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 ### 13.4 端到端
 
 - 首次选择点并下载。
+- 链路模式依次选择 TX/RX、越界重选 RX、路径数据下载、分析与显式清空。
+- 覆盖与链路模式切换、清空、取消、错误和结果身份隔离；语言、主题、地图/卫星切换保留两边状态。
+- SVG 剖面在四语言和浅/深主题下显示地形、曲率射线、完整 F1、60% 边界、动态距离刻度、纵向比例提示与权威样本游标。
 - 无网络时在 WGS84 网格上打开已缓存 DEM/WBM 区域并完成计算。
 - 离线选择未缓存区域。
 - 计算中取消。
@@ -615,6 +723,8 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 ## 16. 官方技术依据
 
 - NTIA ITM：https://github.com/NTIA/itm
+- ITU-R P.526（绕射与菲涅尔区）：https://www.itu.int/rec/R-REC-P.526/en
+- ITU-R P.530（地面视距链路净空与有效地球半径）：https://www.itu.int/rec/R-REC-P.530/en
 - Tauri Windows 安装：https://v2.tauri.app/distribute/windows-installer/
 - MapLibre GL JS：https://maplibre.org/maplibre-gl-js/docs/
 - Copernicus DEM：https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM
@@ -648,7 +758,7 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 应用支持 `en`、`zh-CN`、`zh-TW`、`ja-JP` 四个 BCP 47 语言标识；英文是资源源语言和缺失翻译的唯一 fallback。
 - 初始语言按“已保存的 `hamheatmap.locale.v1` → `navigator.languages`/Windows 系统语言 → 英文”解析。简体中文区域映射到 `zh-CN`，繁体中文区域映射到 `zh-TW`，日语区域映射到 `ja-JP`。
 - React 使用固定版本的 `i18next` 与 `react-i18next`。翻译资源随前端构建打包，不从 CDN、远程翻译服务或服务器动态加载。
-- 初次按系统语言解析时只更新 `<html lang>`，不得写入 `hamheatmap.locale.v1`；只有用户在语言选择器中显式选择后才持久保存。切换不重启应用、不重建 MapLibre 地图实例，也不清除发射点、参数、热力图、视角、缓存状态或运行中状态。
+- 初次按系统语言解析时只更新 `<html lang>`，不得写入 `hamheatmap.locale.v1`；只有用户在语言选择器中显式选择后才持久保存。切换不重启应用、不重建 MapLibre 地图实例，也不清除覆盖发射点/参数/热力图、链路 TX/RX/参数/SVG 结果、视角、缓存状态或运行中状态。
 - 新增用户可见文本必须使用稳定翻译 key。测试强制四个语言资源 key 集完全一致，英文缺失时构建失败，不允许把某个非英文资源当作隐式 fallback。
 - 参数校验与前端自生成错误使用稳定 key/code 与参数再翻译。当前 `localizedBackendError` 是 Rust/Tauri/HTTP 旧字符串协议的集中兼容桥：已知可达消息映射到 catalog key，HTTP 只保留状态码等非敏感技术参数，未知且非当前界面语言的文本降级为本地化通用错误，避免英、繁中或日文界面泄漏简中后端文案。该桥不是长期 IPC 契约；后续协议必须迁移到 `{ schemaVersion, code, params }`，并禁止再以展示字符串判断业务状态。
 - 当前取消兼容层集中识别结构化 `operation.cancelled` 及既有后端消息，业务组件不再散落检查某种自然语言中的“取消”或 `cancel`。

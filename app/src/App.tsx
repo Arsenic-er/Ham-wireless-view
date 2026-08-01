@@ -6,9 +6,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { LinkParameterPanel } from "./components/LinkParameterPanel";
+import { LinkProfileChart } from "./components/LinkProfileChart";
 import { MapView } from "./components/MapView";
 import { ParameterPanel } from "./components/ParameterPanel";
 import {
+  analyzeLink,
   backendCapabilities,
   bootstrap,
   clearOnlineBasemap,
@@ -40,12 +43,19 @@ import {
   createExportReportPngDataUrl,
   suggestedExportFileName,
 } from "./lib/export";
+import {
+  buildLinkAnalysisRequest,
+  DEFAULT_LINK_PARAMETERS,
+  linkParameterValidationMessage,
+} from "./lib/linkParameters";
+import { inverseWgs84DistanceM } from "./lib/geodesy";
 import { DEFAULT_PARAMETERS, parameterValidationMessage } from "./lib/parameters";
 import {
   MAX_SESSION_COVERAGES,
   mergeSessionCoverage,
 } from "./lib/sessionCoverages";
 import type {
+  AnalysisMode,
   BootstrapInfo,
   CacheOverview,
   CacheRegion,
@@ -56,6 +66,9 @@ import type {
   DownloadEstimate,
   DownloadProgress,
   ExportFormat,
+  LinkAnalysisResult,
+  LinkParameters,
+  LinkSelectionStage,
   MapPoint,
   OnlineBasemapProbeResult,
   PointInspection,
@@ -66,7 +79,24 @@ import type {
   WorkflowState,
 } from "./lib/types";
 
+type LinkWorkflow =
+  | "selecting"
+  | "ready"
+  | "inspecting"
+  | "estimating-download"
+  | "download-required"
+  | "downloading"
+  | "missing-data"
+  | "download-cancelled"
+  | "calculating"
+  | "completed"
+  | "cancelled"
+  | "error";
+
 const THEME_STORAGE_KEY = "hamheatmap-theme";
+const LINK_MIN_DISTANCE_M = 1_000;
+const LINK_MAX_DISTANCE_M = 200_000;
+const LINK_DISTANCE_PREFLIGHT_TOLERANCE_M = 0.01;
 function currentSystemTheme(): ResolvedTheme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -182,6 +212,22 @@ export function App() {
   const [point, setPoint] = useState<MapPoint | null>(null);
   const [inspection, setInspection] = useState<PointInspection | null>(null);
   const [parameters, setParameters] = useState<RadioParameters>(DEFAULT_PARAMETERS);
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("coverage");
+  const [linkTx, setLinkTx] = useState<MapPoint | null>(null);
+  const [linkRx, setLinkRx] = useState<MapPoint | null>(null);
+  const [linkSelectionStage, setLinkSelectionStage] =
+    useState<LinkSelectionStage>("tx");
+  const [linkParameters, setLinkParameters] =
+    useState<LinkParameters>(DEFAULT_LINK_PARAMETERS);
+  const [linkWorkflow, setLinkWorkflow] = useState<LinkWorkflow>("selecting");
+  const [linkResult, setLinkResult] = useState<LinkAnalysisResult | null>(null);
+  const [linkResultStale, setLinkResultStale] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [linkInspection, setLinkInspection] = useState<PointInspection | null>(null);
+  const [linkInspectionLoading, setLinkInspectionLoading] = useState(false);
+  const [downloadTargetMode, setDownloadTargetMode] =
+    useState<AnalysisMode | null>(null);
+
   const [workflow, setWorkflow] = useState<WorkflowState>("idle");
   const [progress, setProgress] = useState<CalculationProgress | null>(null);
   const [preview, setPreview] = useState<CalculationPreview | null>(null);
@@ -278,6 +324,41 @@ export function App() {
 
   useEffect(() => {
     let active = true;
+    if (!linkTx) {
+      setLinkInspection(null);
+      setLinkInspectionLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+    setLinkInspection(null);
+    setLinkInspectionLoading(true);
+    setLinkError(null);
+    setLinkWorkflow("inspecting");
+    inspectPoint(linkTx)
+      .then((value) => {
+        if (!active) return;
+        setLinkInspection(value);
+        setBootstrapInfo((current) =>
+          current ? { ...current, cacheUsage: value.cacheUsage } : current,
+        );
+        setLinkWorkflow(value.dataReady ? "ready" : "missing-data");
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setLinkError(localizedBackendError(error));
+        setLinkWorkflow("error");
+      })
+      .finally(() => {
+        if (active) setLinkInspectionLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [linkTx]);
+
+  useEffect(() => {
+    let active = true;
     let unlistenCalculation: (() => void) | undefined;
     let unlistenPreview: (() => void) | undefined;
     let unlistenDownload: (() => void) | undefined;
@@ -304,16 +385,40 @@ export function App() {
   }, []);
 
   const validationMessage = parameterValidationMessage(parameters);
+  const linkValidationMessage = linkParameterValidationMessage(linkParameters);
+  const linkDistanceM = useMemo(
+    () =>
+      linkTx && linkRx ? inverseWgs84DistanceM(linkTx, linkRx) : null,
+    [linkRx, linkTx],
+  );
+  const linkDistanceInRange =
+    linkDistanceM !== null &&
+    linkDistanceM >=
+      LINK_MIN_DISTANCE_M - LINK_DISTANCE_PREFLIGHT_TOLERANCE_M &&
+    linkDistanceM <=
+      LINK_MAX_DISTANCE_M + LINK_DISTANCE_PREFLIGHT_TOLERANCE_M;
+  const linkDistanceValidationMessage =
+    linkDistanceM !== null && !linkDistanceInRange
+      ? t("linkDistanceRangeError", {
+          distance: (linkDistanceM / 1000).toFixed(1),
+        })
+      : null;
   const isCalculating = workflow === "calculating";
+  const isLinkCalculating = linkWorkflow === "calculating";
   const isDownloading = workflow === "downloading";
   const isEstimatingDownload = workflow === "estimating-download";
+  const isLinkDownloading = linkWorkflow === "downloading";
+  const isLinkEstimatingDownload = linkWorkflow === "estimating-download";
   const pointSelectionLocked =
     bootstrapLoading ||
     cacheLoading ||
     workflow === "inspecting" ||
     isEstimatingDownload ||
+    isLinkEstimatingDownload ||
     isDownloading ||
+    isLinkDownloading ||
     isCalculating ||
+    isLinkCalculating ||
     cancellationPending;
   const isBusy =
     pointSelectionLocked || deletingRegion || exportingFormat !== null || mapSettingsBusy;
@@ -326,6 +431,24 @@ export function App() {
   );
   const canPrepareData = Boolean(
     point && inspection && !inspection.dataReady && !isBusy && workflow !== "download-required",
+  );
+  const canPrepareLinkData = Boolean(
+    linkTx &&
+      linkRx &&
+      linkDistanceInRange &&
+      linkInspection &&
+      !linkInspection.dataReady &&
+      !isBusy &&
+      linkWorkflow !== "download-required",
+  );
+  const canAnalyzeLink = Boolean(
+    capabilities.canAnalyzeLink &&
+      linkTx &&
+      linkRx &&
+      linkDistanceInRange &&
+      linkInspection?.dataReady &&
+      !linkValidationMessage &&
+      !isBusy,
   );
 
   const status = useMemo(() => {
@@ -413,6 +536,160 @@ export function App() {
     t,
   ]);
 
+  const linkStatus = useMemo(() => {
+    if (linkWorkflow === "inspecting" || linkInspectionLoading) {
+      return {
+        tone: "working",
+        title: t("statusInspecting"),
+        detail: t("statusInspectingDetail"),
+      };
+    }
+    if (linkDistanceValidationMessage) {
+      return {
+        tone: "error",
+        title: t("linkDistanceInvalidTitle"),
+        detail: linkDistanceValidationMessage,
+      };
+    }
+    if (linkWorkflow === "estimating-download") {
+      return {
+        tone: "working",
+        title: t("statusEstimating"),
+        detail: t("statusEstimatingDetail"),
+      };
+    }
+    if (linkWorkflow === "download-required") {
+      return {
+        tone: "warning",
+        title: t("statusDownloadRequired"),
+        detail: downloadEstimate
+          ? t("statusDownloadBytes", {
+              bytes: formatBytes(downloadEstimate.additionalDownloadBytes),
+            })
+          : t("statusDownloadDetail"),
+      };
+    }
+    if (linkWorkflow === "downloading") {
+      return {
+        tone: "working",
+        title: t("statusDownloading"),
+        detail: downloadProgress
+          ? t("statusDownloadingProgress", {
+              downloaded: formatBytes(downloadProgress.totalDownloadedBytes),
+              expected: formatBytes(downloadProgress.totalExpectedBytes),
+              index: downloadProgress.assetIndex,
+              count: downloadProgress.assetCount,
+            })
+          : t("statusDownloadingDetail"),
+      };
+    }
+    if (linkWorkflow === "missing-data") {
+      return capabilities.mode !== "preview"
+        ? {
+            tone: "warning",
+            title: t("statusMissing"),
+            detail: t("statusMissingDetail", {
+              count: linkInspection?.missingAssetCount ?? 0,
+            }),
+          }
+        : {
+            tone: "warning",
+            title: t("statusPreview"),
+            detail: t("statusPreviewDetail"),
+          };
+    }
+    if (linkWorkflow === "download-cancelled") {
+      return {
+        tone: "neutral",
+        title: t("statusDownloadCancelled"),
+        detail: t("statusDownloadCancelledDetail"),
+      };
+    }
+    if (linkWorkflow === "calculating") {
+      return {
+        tone: "working",
+        title: t("statusLinkCalculating"),
+        detail: t("statusLinkCalculatingDetail"),
+      };
+    }
+    if (linkWorkflow === "completed" && linkResult) {
+      const title =
+        linkResult.classification === "direct-los"
+          ? t("linkClassDirect")
+          : linkResult.classification === "obstructed-usable"
+            ? t("linkClassObstructed")
+            : t("linkClassUnavailable");
+      return {
+        tone:
+          linkResult.classification === "direct-los"
+            ? "ready"
+            : linkResult.classification === "obstructed-usable"
+              ? "warning"
+              : "error",
+        title,
+        detail: t("statusLinkCompletedDetail", {
+          power: linkResult.predictedRxPowerDbm.toFixed(1),
+          margin: linkResult.linkMarginDb.toFixed(1),
+        }),
+      };
+    }
+    if (linkWorkflow === "error") {
+      return {
+        tone: "error",
+        title: t("statusError"),
+        detail: linkError ?? t("unknownError"),
+      };
+    }
+    if (linkWorkflow === "cancelled") {
+      return {
+        tone: "neutral",
+        title: t("statusCancelled"),
+        detail: t("statusLinkCancelledDetail"),
+      };
+    }
+    if (!linkTx || linkSelectionStage === "tx") {
+      return {
+        tone: "neutral",
+        title: t("selectLinkTx"),
+        detail: t("selectLinkTxDetail"),
+      };
+    }
+    if (!linkRx || linkSelectionStage === "rx") {
+      return {
+        tone: "working",
+        title: t("selectLinkRx"),
+        detail: t("selectLinkRxDetail"),
+      };
+    }
+    return {
+      tone: linkResultStale ? "warning" : "ready",
+      title: linkResultStale ? t("statusStale") : t("statusLinkReady"),
+      detail: linkResultStale
+        ? t("statusLinkStaleDetail")
+        : t("statusLinkReadyDetail"),
+    };
+  }, [
+    capabilities.mode,
+    downloadEstimate,
+    downloadProgress,
+    linkError,
+    linkInspection,
+    linkInspectionLoading,
+    linkDistanceValidationMessage,
+    linkResult,
+    linkResultStale,
+    linkRx,
+    linkSelectionStage,
+    linkTx,
+    linkWorkflow,
+    t,
+  ]);
+  const activeStatus = analysisMode === "coverage" ? status : linkStatus;
+  const activeValidationMessage =
+    analysisMode === "coverage"
+      ? validationMessage
+      : linkValidationMessage ?? linkDistanceValidationMessage;
+
   async function refreshCacheOverview() {
     if (cacheLoadingRef.current || deletingRegionRef.current) return;
     cacheLoadingRef.current = true;
@@ -438,39 +715,72 @@ export function App() {
     void refreshCacheOverview();
   }
 
-  async function handlePrepareData() {
-    if (!point || !canPrepareData) return;
-    setWorkflow("estimating-download");
+  async function handlePrepareData(targetMode: AnalysisMode = analysisMode) {
+    const targetPoint = targetMode === "coverage" ? point : linkTx;
+    const targetInspection =
+      targetMode === "coverage" ? inspection : linkInspection;
+    const allowed =
+      targetMode === "coverage" ? canPrepareData : canPrepareLinkData;
+    if (!targetPoint || !targetInspection || !allowed) return;
+
+    setDownloadTargetMode(targetMode);
+    if (targetMode === "coverage") {
+      setWorkflow("estimating-download");
+      setErrorMessage(null);
+    } else {
+      setLinkWorkflow("estimating-download");
+      setLinkError(null);
+    }
     setDownloadProgress(null);
-    setErrorMessage(null);
     try {
-      const value = await estimateDownload(point);
+      const value = await estimateDownload(targetPoint);
       setDownloadEstimate(value);
       setBootstrapInfo((current) =>
         current ? { ...current, cacheUsage: value.cacheUsage } : current,
       );
-      setWorkflow("download-required");
+      if (targetMode === "coverage") setWorkflow("download-required");
+      else setLinkWorkflow("download-required");
     } catch (error) {
+      setDownloadEstimate(null);
+      setDownloadProgress(null);
+      setDownloadTargetMode(null);
       if (isCancellationError(error)) {
-        setDownloadEstimate(null);
-        setDownloadProgress(null);
-        setErrorMessage(null);
-        setWorkflow(inspection?.dataReady ? "ready" : "download-cancelled");
-      } else {
+        if (targetMode === "coverage") {
+          setErrorMessage(null);
+          setWorkflow(
+            targetInspection.dataReady ? "ready" : "download-cancelled",
+          );
+        } else {
+          setLinkError(null);
+          setLinkWorkflow(
+            targetInspection.dataReady ? "ready" : "download-cancelled",
+          );
+        }
+      } else if (targetMode === "coverage") {
         setErrorMessage(localizedBackendError(error));
         setWorkflow("error");
+      } else {
+        setLinkError(localizedBackendError(error));
+        setLinkWorkflow("error");
       }
     }
   }
 
   function dismissDownloadEstimate() {
+    const targetMode = downloadTargetMode ?? analysisMode;
     setDownloadEstimate(null);
-    setWorkflow(inspection?.dataReady ? "ready" : "missing-data");
+    setDownloadTargetMode(null);
+    if (targetMode === "coverage") {
+      setWorkflow(inspection?.dataReady ? "ready" : "missing-data");
+    } else {
+      setLinkWorkflow(linkInspection?.dataReady ? "ready" : "missing-data");
+    }
   }
 
   async function handleConfirmDownload() {
-    if (!point || !downloadEstimate || !capabilities.canDownload || isBusy) return;
+    if (!downloadEstimate || !capabilities.canDownload || isBusy) return;
     const estimate = downloadEstimate;
+    const targetMode = downloadTargetMode ?? analysisMode;
     setDownloadEstimate(null);
     setDownloadProgress({
       assetIndex: 0,
@@ -482,33 +792,58 @@ export function App() {
       totalExpectedBytes: estimate.additionalDownloadBytes,
       percent: 0,
     });
-    setWorkflow("downloading");
-    setErrorMessage(null);
+    if (targetMode === "coverage") {
+      setWorkflow("downloading");
+      setErrorMessage(null);
+    } else {
+      setLinkWorkflow("downloading");
+      setLinkError(null);
+    }
     try {
-      const value = await downloadRegion(point);
-      setInspection(value.inspection);
+      const value = await downloadRegion(estimate.point);
+      if (targetMode === "coverage") {
+        setInspection(value.inspection);
+        setWorkflow("ready");
+      } else {
+        setLinkInspection(value.inspection);
+        setLinkWorkflow("ready");
+      }
       setBootstrapInfo((current) =>
-        current ? { ...current, cacheUsage: value.inspection.cacheUsage } : current,
+        current
+          ? { ...current, cacheUsage: value.inspection.cacheUsage }
+          : current,
       );
-      setWorkflow("ready");
       setDownloadProgress(null);
+      setDownloadTargetMode(null);
       if (cacheOpen) void refreshCacheOverview();
     } catch (error) {
       if (isCancellationError(error)) {
         try {
-          const checked = await inspectPoint(point);
-          setInspection(checked);
+          const checked = await inspectPoint(estimate.point);
+          if (targetMode === "coverage") {
+            setInspection(checked);
+            setWorkflow(checked.dataReady ? "ready" : "download-cancelled");
+          } else {
+            setLinkInspection(checked);
+            setLinkWorkflow(
+              checked.dataReady ? "ready" : "download-cancelled",
+            );
+          }
           setBootstrapInfo((current) =>
             current ? { ...current, cacheUsage: checked.cacheUsage } : current,
           );
-          setWorkflow(checked.dataReady ? "ready" : "download-cancelled");
         } catch {
-          setWorkflow("download-cancelled");
+          if (targetMode === "coverage") setWorkflow("download-cancelled");
+          else setLinkWorkflow("download-cancelled");
         }
-      } else {
+      } else if (targetMode === "coverage") {
         setErrorMessage(localizedBackendError(error));
         setWorkflow("error");
+      } else {
+        setLinkError(localizedBackendError(error));
+        setLinkWorkflow("error");
       }
+      setDownloadTargetMode(null);
     }
   }
 
@@ -524,13 +859,65 @@ export function App() {
         current ? { ...current, cacheUsage: deleted.overview.usage } : current,
       );
       setDeleteCandidate(null);
-      if (point) {
-        const checked = await inspectPoint(point);
-        setInspection(checked);
+
+      const refreshedInspections = new Map<string, PointInspection>();
+      const refreshInspection = async (target: MapPoint) => {
+        const key = target.lat + "," + target.lon;
+        const existing = refreshedInspections.get(key);
+        if (existing) return existing;
+        const checked = await inspectPoint(target);
+        refreshedInspections.set(key, checked);
         setBootstrapInfo((current) =>
           current ? { ...current, cacheUsage: checked.cacheUsage } : current,
         );
-        setWorkflow(result ? "completed" : checked.dataReady ? "ready" : "missing-data");
+        return checked;
+      };
+
+      if (point) {
+        setWorkflow("inspecting");
+        try {
+          const checked = await refreshInspection(point);
+          setInspection(checked);
+          setWorkflow(
+            checked.dataReady
+              ? result
+                ? "completed"
+                : "ready"
+              : "missing-data",
+          );
+        } catch (error) {
+          const message = localizedBackendError(error);
+          setInspection(null);
+          setErrorMessage(message);
+          setWorkflow("error");
+          setCacheError(message);
+        }
+      }
+
+      if (linkTx) {
+        setLinkInspectionLoading(true);
+        setLinkWorkflow("inspecting");
+        try {
+          const checked = await refreshInspection(linkTx);
+          setLinkInspection(checked);
+          setLinkWorkflow(
+            checked.dataReady
+              ? linkResult
+                ? "completed"
+                : linkRx
+                  ? "ready"
+                  : "selecting"
+              : "missing-data",
+          );
+        } catch (error) {
+          const message = localizedBackendError(error);
+          setLinkInspection(null);
+          setLinkError(message);
+          setLinkWorkflow("error");
+          setCacheError(message);
+        } finally {
+          setLinkInspectionLoading(false);
+        }
       }
     } catch (error) {
       setCacheError(localizedBackendError(error));
@@ -704,6 +1091,90 @@ export function App() {
     setPreview(null);
     if (result) setResultStale(true);
   }
+  function handleLinkPointSelect(value: MapPoint) {
+    if (isBusy) return;
+    if (linkSelectionStage === "tx") {
+      setLinkTx(value);
+      setLinkRx(null);
+      setLinkSelectionStage("rx");
+      setLinkWorkflow("selecting");
+    } else if (linkSelectionStage === "rx") {
+      if (linkTx && linkTx.lat === value.lat && linkTx.lon === value.lon) {
+        setLinkError(t("linkSamePointError"));
+        return;
+      }
+      setLinkRx(value);
+      setLinkSelectionStage("ready");
+      setLinkWorkflow("ready");
+    } else {
+      return;
+    }
+    setLinkResult(null);
+    setLinkResultStale(false);
+    setLinkError(null);
+  }
+
+  function handleMapPointSelect(value: MapPoint) {
+    if (analysisMode === "coverage") handlePointSelect(value);
+    else handleLinkPointSelect(value);
+  }
+
+  function handleLinkParameterChange(value: LinkParameters) {
+    setLinkParameters(value);
+    if (linkResult) setLinkResultStale(true);
+  }
+
+  function selectLinkTransmitter() {
+    if (isBusy) return;
+    setLinkTx(null);
+    setLinkRx(null);
+    setLinkResult(null);
+    setLinkResultStale(false);
+    setLinkError(null);
+    setLinkSelectionStage("tx");
+    setLinkWorkflow("selecting");
+  }
+
+  function selectLinkReceiver() {
+    if (isBusy || !linkTx) return;
+    setLinkRx(null);
+    setLinkResult(null);
+    setLinkResultStale(false);
+    setLinkError(null);
+    setLinkSelectionStage("rx");
+    setLinkWorkflow("selecting");
+  }
+
+  function handleClearLink() {
+    if (isBusy) return;
+    selectLinkTransmitter();
+  }
+
+  async function handleAnalyzeLink() {
+    if (!linkTx || !linkRx || !canAnalyzeLink) return;
+    setLinkWorkflow("calculating");
+    setProgress(null);
+    setLinkResult(null);
+    setLinkResultStale(false);
+    setLinkError(null);
+    try {
+      const value = await analyzeLink(
+        buildLinkAnalysisRequest(linkTx, linkRx, linkParameters),
+      );
+      setLinkResult(value);
+      setProgress(null);
+      setLinkWorkflow("completed");
+    } catch (error) {
+      setProgress(null);
+      if (isCancellationError(error)) {
+        setLinkWorkflow("cancelled");
+      } else {
+        setLinkError(localizedBackendError(error));
+        setLinkWorkflow("error");
+      }
+    }
+  }
+
   function resetMapProbeState() {
     setMapProbeResult(null);
     setMapProbeUnexpectedError(false);
@@ -878,7 +1349,13 @@ export function App() {
           <button
             className="header-button"
             type="button"
-            disabled={!capabilities.canExport || !result || resultStale || isBusy}
+            disabled={
+              analysisMode !== "coverage" ||
+              !capabilities.canExport ||
+              !result ||
+              resultStale ||
+              isBusy
+            }
             onClick={openExportModal}
           >
             <span className="button-icon">⇩</span>
@@ -926,20 +1403,48 @@ export function App() {
         </div>
       )}
 
-      <main className="workspace">
+      <div className="analysis-mode-switch" role="tablist" aria-label={t("analysisMode")}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={analysisMode === "coverage"}
+          className={analysisMode === "coverage" ? "active" : ""}
+          disabled={isBusy}
+          onClick={() => setAnalysisMode("coverage")}
+        >
+          {t("coverageAnalysis")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={analysisMode === "link"}
+          className={analysisMode === "link" ? "active" : ""}
+          disabled={isBusy}
+          onClick={() => setAnalysisMode("link")}
+        >
+          {t("linkAnalysis")}
+        </button>
+      </div>
+
+      <main className={`workspace ${analysisMode === "link" ? "link-mode" : "coverage-mode"}`}>
         <div className="map-column">
           <MapView
             theme={resolvedTheme}
             point={point}
+            analysisMode={analysisMode}
+            linkTx={linkTx}
+            linkRx={linkRx}
+            linkResult={linkResult}
             heatmaps={sessionResults}
             activeHeatmapId={activeResultId}
             preview={preview}
             heatmapStale={resultStale}
             visibleSignalThresholdDbm={visibleSignalThresholdDbm}
-            onPointSelect={handlePointSelect}
+            onPointSelect={handleMapPointSelect}
             basemap={desktopMode ? null : (bootstrapInfo?.basemap ?? null)}
             onlineBasemap={desktopMode ? (bootstrapInfo?.onlineBasemap ?? null) : null}
           />
+          {analysisMode === "coverage" ? (
           <div className="legend-bar" aria-label={t("legendAria")}>
             <div className="legend-title">
               <span>{t("predictedPower")}</span>
@@ -989,43 +1494,102 @@ export function App() {
               <div className="legend-note">{t("colorDisclaimer")}</div>
             </div>
           </div>
+          ) : linkResult ? (
+            <LinkProfileChart result={linkResult} />
+          ) : (
+            <div className="link-profile-placeholder">
+              <strong>{t("linkProfileWaiting")}</strong>
+              <span>{t("linkProfileWaitingDetail")}</span>
+            </div>
+          )}
         </div>
 
         <aside className="sidebar">
           <div className="sidebar-scroll">
-            <ParameterPanel
-              parameters={parameters}
-              disabled={isCalculating || cancellationPending || exportingFormat !== null}
-              elevationM={inspection?.elevationM ?? null}
-              onChange={handleParameterChange}
-            />
+            {analysisMode === "coverage" ? (
+              <ParameterPanel
+                parameters={parameters}
+                disabled={isCalculating || cancellationPending || exportingFormat !== null}
+                elevationM={inspection?.elevationM ?? null}
+                onChange={handleParameterChange}
+              />
+            ) : (
+              <>
+                <div className="link-selection-actions">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={selectLinkTransmitter}
+                  >
+                    {t("reselectLinkTx")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy || !linkTx}
+                    onClick={selectLinkReceiver}
+                  >
+                    {t("reselectLinkRx")}
+                  </button>
+                </div>
+                <LinkParameterPanel
+                  parameters={linkParameters}
+                  disabled={isLinkCalculating || cancellationPending}
+                  onChange={handleLinkParameterChange}
+                />
+              </>
+            )}
           </div>
           <div className="action-dock">
-            <div className={`workflow-status ${status.tone}`}>
+            <div className={`workflow-status ${activeStatus.tone}`}>
               <i />
               <div>
-                <strong>{status.title}</strong>
-                <span>{status.detail}</span>
+                <strong>{activeStatus.title}</strong>
+                <span>{activeStatus.detail}</span>
               </div>
             </div>
-            {(isCalculating || isDownloading) && (
-              <div className="progress-track" aria-label={isDownloading ? t("downloadProgress") : t("calculationProgress")}>
+            {(isCalculating ||
+              isLinkCalculating ||
+              isDownloading ||
+              isLinkDownloading) && (
+              <div
+                className={"progress-track" + (isLinkCalculating ? " indeterminate" : "")}
+                aria-label={
+                  isDownloading || isLinkDownloading
+                    ? t("downloadProgress")
+                    : t("calculationProgress")
+                }
+              >
                 <span
                   style={{
                     width: `${Math.max(
                       0,
                       Math.min(
                         100,
-                        isDownloading ? (downloadProgress?.percent ?? 0) : (progress?.percent ?? 0),
+                        isDownloading || isLinkDownloading
+                          ? (downloadProgress?.percent ?? 0)
+                          : (progress?.percent ?? 0),
                       ),
                     )}%`,
                   }}
                 />
               </div>
             )}
-            {validationMessage && <p className="dock-validation">{validationMessage}</p>}
+            {activeValidationMessage && (
+              <p className="dock-validation">{activeValidationMessage}</p>
+            )}
             <div className="action-row">
-              {isCalculating ? (
+              {isLinkCalculating ? (
+                <button
+                  type="button"
+                  className="secondary-action danger"
+                  disabled={cancellationPending}
+                  onClick={() =>
+                    void handleCancellation(cancelCalculation, t("cancelLinkRequest"))
+                  }
+                >
+                  {cancellationPending ? t("cancelling") : t("cancelLinkAnalysis")}
+                </button>
+              ) : isCalculating ? (
                 <button
                   type="button"
                   className="secondary-action danger"
@@ -1036,7 +1600,10 @@ export function App() {
                 >
                   {cancellationPending ? t("cancelling") : t("cancelCalculation")}
                 </button>
-              ) : isDownloading || isEstimatingDownload ? (
+              ) : isDownloading ||
+                isEstimatingDownload ||
+                isLinkDownloading ||
+                isLinkEstimatingDownload ? (
                 <button
                   type="button"
                   className="secondary-action danger"
@@ -1047,7 +1614,7 @@ export function App() {
                 >
                   {cancellationPending
                     ? t("cancelling")
-                    : isEstimatingDownload
+                    : isEstimatingDownload || isLinkEstimatingDownload
                       ? t("cancelDataCheck")
                       : t("cancelDownload")}
                 </button>
@@ -1056,27 +1623,51 @@ export function App() {
                   type="button"
                   className="secondary-action"
                   disabled={isBusy}
-                  onClick={handleClear}
+                  onClick={analysisMode === "coverage" ? handleClear : handleClearLink}
                 >
-                  {t("clear")}
+                  {analysisMode === "coverage" ? t("clear") : t("clearLink")}
                 </button>
               )}
               <button
                 type="button"
                 className="primary-action"
-                disabled={inspection?.dataReady ? !canCalculate : !canPrepareData}
+                disabled={
+                  analysisMode === "link"
+                    ? linkInspection?.dataReady
+                      ? !canAnalyzeLink
+                      : !canPrepareLinkData
+                    : inspection?.dataReady
+                      ? !canCalculate
+                      : !canPrepareData
+                }
                 onClick={() =>
-                  void (inspection?.dataReady ? handleCalculate() : handlePrepareData())
+                  void (
+                    analysisMode === "link"
+                      ? linkInspection?.dataReady
+                        ? handleAnalyzeLink()
+                        : handlePrepareData("link")
+                      : inspection?.dataReady
+                        ? handleCalculate()
+                        : handlePrepareData("coverage")
+                  )
                 }
               >
                 <span>⌁</span>
-                {inspection && !inspection.dataReady
-                  ? capabilities.canDownload
-                    ? t("prepareOfflineData")
-                    : t("previewDownload")
-                  : resultStale
-                    ? t("recalculate")
-                    : t("startCalculation")}
+                {analysisMode === "link"
+                  ? linkInspection && !linkInspection.dataReady
+                    ? capabilities.canDownload
+                      ? t("prepareOfflineData")
+                      : t("previewDownload")
+                    : linkResultStale
+                      ? t("reanalyzeLink")
+                      : t("startLinkAnalysis")
+                  : inspection && !inspection.dataReady
+                    ? capabilities.canDownload
+                      ? t("prepareOfflineData")
+                      : t("previewDownload")
+                    : resultStale
+                      ? t("recalculate")
+                      : t("startCalculation")}
               </button>
             </div>
           </div>

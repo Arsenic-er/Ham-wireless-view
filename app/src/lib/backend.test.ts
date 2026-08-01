@@ -89,6 +89,7 @@ describe("backend mode", () => {
       canDownload: false,
       canDeleteCache: false,
       canCalculate: false,
+      canAnalyzeLink: false,
       canExport: false,
       canConfigureOnlineBasemap: false,
     });
@@ -103,6 +104,7 @@ describe("backend mode", () => {
       canDownload: true,
       canDeleteCache: true,
       canCalculate: true,
+      canAnalyzeLink: true,
       canExport: true,
       canConfigureOnlineBasemap: false,
     });

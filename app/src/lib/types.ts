@@ -10,10 +10,98 @@ export type ScenarioPreset = "base-to-handheld" | "handheld-to-base";
 export type PowerUnit = "watt" | "dbm";
 export type GainUnit = "dbi" | "dbd";
 export type Polarization = "horizontal" | "vertical";
+export type AnalysisMode = "coverage" | "link";
+export type LinkSelectionStage = "tx" | "rx" | "ready";
 
 export interface MapPoint {
   lat: number;
   lon: number;
+}
+
+export interface LinkEndpointRequest {
+  point: MapPoint;
+  antennaHeightM: number;
+  antennaGainValue: number;
+  antennaGainUnit: GainUnit;
+  polarization: Polarization;
+}
+
+export interface LinkAnalysisRequest {
+  tx: LinkEndpointRequest;
+  rx: LinkEndpointRequest;
+  band: "vhf-144" | "uhf-430";
+  frequencyMhz: number;
+  txPowerValue: number;
+  txPowerUnit: PowerUnit;
+  receiverThresholdDbm: number;
+}
+
+export interface LinkEndpointParameters {
+  antennaHeightM: number;
+  antennaGainValue: number;
+  antennaGainUnit: GainUnit;
+  polarization: Polarization;
+}
+
+export interface LinkParameters {
+  band: Band;
+  frequencyMhz: number;
+  txPowerValue: number;
+  txPowerUnit: PowerUnit;
+  receiverThresholdDbm: number;
+  tx: LinkEndpointParameters;
+  rx: LinkEndpointParameters;
+}
+
+export type LinkClassification =
+  | "direct-los"
+  | "obstructed-usable"
+  | "predicted-unavailable";
+
+export interface LinkProfileSample {
+  distanceM: number;
+  lat: number;
+  lon: number;
+  terrainElevationM: number;
+  earthBulgeM: number;
+  adjustedTerrainM: number;
+  losHeightM: number;
+  fresnelRadiusM: number;
+}
+
+export interface LinkAnalysisResult {
+  schemaVersion: number;
+  classification: LinkClassification;
+  classificationReason: string;
+  distanceM: number;
+  initialBearingDeg: number;
+  finalBearingDeg: number;
+  frequencyMhz: number;
+  wavelengthM: number;
+  sampleSpacingM: number;
+  sampleCount: number;
+  effectiveEarthRadiusM: number;
+  kFactor: number;
+  txGroundElevationM: number;
+  rxGroundElevationM: number;
+  txAntennaElevationM: number;
+  rxAntennaElevationM: number;
+  geometricLos: boolean;
+  fresnelClearance60: boolean;
+  minimumLosClearanceM: number;
+  minimumFresnelClearanceRatio: number;
+  criticalSampleIndex: number;
+  itmMode: string;
+  itmBasicTransmissionLossDb: number;
+  itmWarnings: number;
+  waterFraction: number;
+  coPolarizedReferencePowerDbm: number;
+  polarizationMismatchLossDb: number;
+  predictedRxPowerDbm: number;
+  receiverThresholdDbm: number;
+  linkMarginDb: number;
+  critical: boolean;
+  profile: LinkProfileSample[];
 }
 
 export interface SatelliteBasemapInfo {

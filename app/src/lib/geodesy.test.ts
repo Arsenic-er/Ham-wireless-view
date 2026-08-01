@@ -9,6 +9,7 @@ import {
   coverageCircleCoordinates,
   directWgs84,
   heatmapImageCorners,
+  inverseWgs84DistanceM,
   maidenheadLocator,
 } from "./geodesy";
 
@@ -47,6 +48,16 @@ describe("WGS84 display geometry", () => {
       expect(
         Math.abs(haversineDistanceM(center, { lon, lat }) - 200_000 * Math.sqrt(2)),
       ).toBeLessThan(900);
+    }
+  });
+
+  it("round-trips the exact 1 km and 200 km WGS84 link boundaries", () => {
+    for (const distanceM of [1_000, 200_000]) {
+      const endpoint = directWgs84(center, 73, distanceM);
+      expect(inverseWgs84DistanceM(center, endpoint)).toBeCloseTo(
+        distanceM,
+        5,
+      );
     }
   });
 

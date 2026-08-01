@@ -30,6 +30,9 @@ use hamheatmap_propagation::{Polarization, dbd_to_dbi, dbm_to_watts};
 use hamheatmap_terrain::{DemTileId, DemTileSet, WaterTileSet};
 use serde::{Deserialize, Serialize};
 
+mod link;
+pub use link::*;
+
 pub const APP_SERVICE_SCHEMA_VERSION: u32 = 2;
 pub const CALCULATION_RESULT_SCHEMA_VERSION: u32 = 4;
 pub const CALCULATION_PREVIEW_SCHEMA_VERSION: u32 = 1;

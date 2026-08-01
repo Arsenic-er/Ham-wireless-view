@@ -424,6 +424,7 @@ dependencies = [
  "geographiclib-rs",
  "hamheatmap-cache",
  "hamheatmap-coverage",
+ "hamheatmap-link-analysis",
  "hamheatmap-propagation",
  "hamheatmap-terrain",
  "serde",
@@ -463,6 +464,15 @@ dependencies = [
  "printpdf",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "hamheatmap-link-analysis"
+version = "0.1.0"
+dependencies = [
+ "geographiclib-rs",
+ "hamheatmap-propagation",
+ "hamheatmap-terrain",
 ]
 
 [[package]]

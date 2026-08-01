@@ -11,6 +11,8 @@ import type {
   BasemapInfo,
   CalculationPreview,
   CalculationResult,
+  LinkAnalysisResult,
+  LinkParameters,
   OnlineBasemapInfo,
   RadioParameters,
   SessionCoverageResult,
@@ -21,6 +23,7 @@ const backendMocks = vi.hoisted(() => ({
   bootstrap: vi.fn(),
   inspectPoint: vi.fn(),
   calculate: vi.fn(),
+  analyzeLink: vi.fn(),
   cancelCalculation: vi.fn(),
   cacheOverview: vi.fn(),
   estimateDownload: vi.fn(),
@@ -31,6 +34,11 @@ const backendMocks = vi.hoisted(() => ({
   isCancellationError: vi.fn(),
   localizedBackendError: vi.fn(),
   previewHandler: null as ((preview: CalculationPreview) => void) | null,
+  deleteCacheRegion: vi.fn(),
+}));
+
+const mapPointMocks = vi.hoisted(() => ({
+  extraPoint: { lat: 30.5, lon: 103.5 },
 }));
 
 vi.mock("./lib/backend", () => ({
@@ -39,16 +47,18 @@ vi.mock("./lib/backend", () => ({
     canDownload: backendMocks.mode !== "preview",
     canDeleteCache: backendMocks.mode !== "preview",
     canCalculate: backendMocks.mode !== "preview",
+    canAnalyzeLink: backendMocks.mode !== "preview",
     canExport: backendMocks.mode !== "preview",
     canConfigureOnlineBasemap: backendMocks.mode === "tauri",
   }),
   bootstrap: backendMocks.bootstrap,
   inspectPoint: backendMocks.inspectPoint,
   calculate: backendMocks.calculate,
+  analyzeLink: backendMocks.analyzeLink,
   cacheOverview: backendMocks.cacheOverview,
   cancelCalculation: backendMocks.cancelCalculation,
   cancelDownload: vi.fn().mockResolvedValue(undefined),
-  deleteCacheRegion: vi.fn(),
+  deleteCacheRegion: backendMocks.deleteCacheRegion,
   downloadRegion: vi.fn(),
   estimateDownload: backendMocks.estimateDownload,
   exportReport: backendMocks.exportReport,
@@ -84,11 +94,17 @@ vi.mock("./components/MapView", () => ({
     point,
     heatmaps,
     preview,
+    linkTx,
+    linkRx,
+    linkResult,
     onPointSelect,
   }: {
     point: { lat: number; lon: number } | null;
     heatmaps: SessionCoverageResult[];
     preview: CalculationPreview | null;
+    linkTx?: { lat: number; lon: number } | null;
+    linkRx?: { lat: number; lon: number } | null;
+    linkResult?: LinkAnalysisResult | null;
     onPointSelect: (point: { lat: number; lon: number }) => void;
   }) => (
     <div>
@@ -98,10 +114,44 @@ vi.mock("./components/MapView", () => ({
       <button type="button" onClick={() => onPointSelect({ lat: 31, lon: 104 })}>
         select-new-point
       </button>
+      <button type="button" onClick={() => onPointSelect(mapPointMocks.extraPoint)}>
+        select-extra-point
+      </button>
       <span data-testid="selected-point">{point ? `${point.lat},${point.lon}` : "none"}</span>
       <span data-testid="heatmap">{heatmaps.length ? "present" : "none"}</span>
       <span data-testid="heatmap-count">{heatmaps.length}</span>
       <span data-testid="preview">{preview ? String(preview.sequence) : "none"}</span>
+      <span data-testid="link-tx">{linkTx ? `${linkTx.lat},${linkTx.lon}` : "none"}</span>
+      <span data-testid="link-rx">{linkRx ? `${linkRx.lat},${linkRx.lon}` : "none"}</span>
+      <span data-testid="link-result">{linkResult ? linkResult.classification : "none"}</span>
+    </div>
+  ),
+}));
+
+vi.mock("./components/LinkProfileChart", () => ({
+  LinkProfileChart: ({ result }: { result: LinkAnalysisResult }) => (
+    <div data-testid="link-profile">{result.classification}</div>
+  ),
+}));
+
+vi.mock("./components/LinkParameterPanel", () => ({
+  LinkParameterPanel: ({
+    parameters,
+    onChange,
+  }: {
+    parameters: LinkParameters;
+    onChange: (parameters: LinkParameters) => void;
+  }) => (
+    <div>
+      <span data-testid="link-threshold">{parameters.receiverThresholdDbm}</span>
+      <button
+        type="button"
+        onClick={() =>
+          onChange({ ...parameters, receiverThresholdDbm: -110 })
+        }
+      >
+        change-link-threshold
+      </button>
     </div>
   ),
 }));
@@ -138,6 +188,7 @@ vi.mock("./components/ParameterPanel", () => ({
 
 import i18n from "./i18n";
 import { App } from "./App";
+import { directWgs84 } from "./lib/geodesy";
 
 const cacheUsage = {
   totalBytes: 120_000_000,
@@ -148,6 +199,31 @@ const cacheUsage = {
   remainingBytes: 2_380_000_000,
   capBytes: 2_500_000_000,
 };
+
+const cacheRegion = {
+  regionId: "region",
+  center: { lat: 30.5, lon: 103.5 },
+  assetCount: 50,
+  readyAssetCount: 50,
+  partialAssetCount: 0,
+  referencedBytes: 120_000_000,
+  reclaimableBytes: 120_000_000,
+  createdUnix: 1_700_000_000,
+};
+
+function missingInspection(point: { lat: number; lon: number }) {
+  return {
+    point,
+    regionId: "region",
+    tileCount: 25,
+    readyDemCount: 0,
+    readyWaterCount: 0,
+    missingAssetCount: 50,
+    dataReady: false,
+    elevationM: null,
+    cacheUsage: { ...cacheUsage, totalBytes: 0 },
+  };
+}
 
 const tiandituBasemap: BasemapInfo = {
   enabled: true,
@@ -209,6 +285,45 @@ const result: CalculationResult = {
   },
 };
 
+const linkResult: LinkAnalysisResult = {
+  schemaVersion: 1,
+  classification: "direct-los",
+  classificationReason: "clear",
+  distanceM: 75_000,
+  initialBearingDeg: 45,
+  finalBearingDeg: 225,
+  frequencyMhz: 145,
+  wavelengthM: 2.0675,
+  sampleSpacingM: 90,
+  sampleCount: 3,
+  effectiveEarthRadiusM: 8_494_678.4,
+  kFactor: 4 / 3,
+  txGroundElevationM: 500,
+  rxGroundElevationM: 420,
+  txAntennaElevationM: 520,
+  rxAntennaElevationM: 421.5,
+  geometricLos: true,
+  fresnelClearance60: true,
+  minimumLosClearanceM: 20,
+  minimumFresnelClearanceRatio: 0.8,
+  criticalSampleIndex: 1,
+  itmMode: "line-of-sight",
+  itmBasicTransmissionLossDb: 120,
+  itmWarnings: 0,
+  waterFraction: 0,
+  coPolarizedReferencePowerDbm: -85,
+  polarizationMismatchLossDb: 0,
+  predictedRxPowerDbm: -85,
+  receiverThresholdDbm: -120,
+  linkMarginDb: 35,
+  critical: false,
+  profile: [
+    { distanceM: 0, lat: 30.5, lon: 103.5, terrainElevationM: 500, earthBulgeM: 0, adjustedTerrainM: 500, losHeightM: 520, fresnelRadiusM: 0 },
+    { distanceM: 37_500, lat: 30.75, lon: 103.75, terrainElevationM: 430, earthBulgeM: 82, adjustedTerrainM: 512, losHeightM: 470.75, fresnelRadiusM: 197 },
+    { distanceM: 75_000, lat: 31, lon: 104, terrainElevationM: 420, earthBulgeM: 0, adjustedTerrainM: 420, losHeightM: 421.5, fresnelRadiusM: 0 },
+  ],
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -220,6 +335,7 @@ function deferred<T>() {
 beforeEach(() => {
   backendMocks.mode = "validation-server";
   backendMocks.previewHandler = null;
+  mapPointMocks.extraPoint = { lat: 30.5, lon: 103.5 };
   backendMocks.configureOnlineBasemap.mockResolvedValue(onlineBasemap);
   backendMocks.probeOnlineBasemap.mockResolvedValue({
     schemaVersion: 1,
@@ -269,8 +385,17 @@ beforeEach(() => {
     cacheUsage,
   });
   backendMocks.calculate.mockResolvedValue(result);
+  backendMocks.analyzeLink.mockResolvedValue(linkResult);
   backendMocks.cancelCalculation.mockResolvedValue(undefined);
   backendMocks.cacheOverview.mockResolvedValue({ usage: cacheUsage, regions: [] });
+  backendMocks.deleteCacheRegion.mockResolvedValue({
+    deletedAssetCount: 50,
+    freedBytes: 120_000_000,
+    overview: {
+      usage: { ...cacheUsage, totalBytes: 0 },
+      regions: [],
+    },
+  });
   backendMocks.estimateDownload.mockResolvedValue({
     point: { lat: 30.5, lon: 103.5 },
     regionId: "region",
@@ -951,5 +1076,205 @@ describe("progressive calculation preview UI", () => {
     });
     await screen.findByText("\u8ba1\u7b97\u5df2\u53d6\u6d88");
     expect(screen.getByTestId("preview").textContent).toBe("none");
+  });
+});
+
+
+describe("cache deletion inspection refresh", () => {
+  async function startDeletingOnlyRegion() {
+    backendMocks.cacheOverview.mockResolvedValueOnce({
+      usage: cacheUsage,
+      regions: [cacheRegion],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /缓存/ }));
+    await screen.findByText("缓存概览");
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await screen.findByText("删除该离线区域？");
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() =>
+      expect(backendMocks.deleteCacheRegion).toHaveBeenCalledWith("region"),
+    );
+  }
+
+  it("reuses one post-delete inspection when coverage and link TX are the same point", async () => {
+    render(<App />);
+    await screen.findByText("等待选择发射点");
+
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("数据已就绪");
+    fireEvent.click(screen.getByRole("tab", { name: "链路通视分析" }));
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("选择接收台位置");
+    fireEvent.click(screen.getByRole("button", { name: "select-new-point" }));
+    await screen.findByText("链路端点已就绪");
+    await waitFor(() => expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(2));
+
+    backendMocks.inspectPoint.mockResolvedValueOnce(
+      missingInspection({ lat: 30.5, lon: 103.5 }),
+    );
+    await startDeletingOnlyRegion();
+
+    await screen.findByText("当前区域缺少离线计算数据");
+    expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(3);
+    expect(backendMocks.inspectPoint).toHaveBeenLastCalledWith({
+      lat: 30.5,
+      lon: 103.5,
+    });
+    expect(
+      screen.getByRole("button", { name: /准备离线数据/ }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "关闭缓存概览" }),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "覆盖范围分析" }));
+    expect(screen.getByText("当前区域缺少离线计算数据")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /准备离线数据/ }),
+    ).toBeTruthy();
+  });
+
+  it("serially reinspects different coverage and link TX points after deletion", async () => {
+    render(<App />);
+    await screen.findByText("等待选择发射点");
+
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("数据已就绪");
+    fireEvent.click(screen.getByRole("tab", { name: "链路通视分析" }));
+    fireEvent.click(screen.getByRole("button", { name: "select-new-point" }));
+    await screen.findByText("选择接收台位置");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("链路端点已就绪");
+    await waitFor(() => expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(2));
+
+    const coverageRefresh = deferred<ReturnType<typeof missingInspection>>();
+    backendMocks.inspectPoint
+      .mockImplementationOnce(() => coverageRefresh.promise)
+      .mockResolvedValueOnce(missingInspection({ lat: 31, lon: 104 }));
+
+    await startDeletingOnlyRegion();
+    await waitFor(() => expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(3));
+    expect(backendMocks.inspectPoint).toHaveBeenNthCalledWith(3, {
+      lat: 30.5,
+      lon: 103.5,
+    });
+    expect(backendMocks.inspectPoint).not.toHaveBeenNthCalledWith(4, {
+      lat: 31,
+      lon: 104,
+    });
+
+    await act(async () => {
+      coverageRefresh.resolve(
+        missingInspection({ lat: 30.5, lon: 103.5 }),
+      );
+      await coverageRefresh.promise;
+    });
+    await waitFor(() => expect(backendMocks.inspectPoint).toHaveBeenCalledTimes(4));
+    expect(backendMocks.inspectPoint).toHaveBeenNthCalledWith(4, {
+      lat: 31,
+      lon: 104,
+    });
+    await screen.findByText("当前区域缺少离线计算数据");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "关闭缓存概览" }),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "覆盖范围分析" }));
+    expect(screen.getByText("当前区域缺少离线计算数据")).toBeTruthy();
+  });
+});
+
+describe("link analysis workspace", () => {
+  it("accepts exact 1 km and 200 km WGS84 endpoint boundaries", async () => {
+    render(<App />);
+    await screen.findByText("等待选择发射点");
+    fireEvent.click(screen.getByRole("tab", { name: "链路通视分析" }));
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("选择接收台位置");
+
+    mapPointMocks.extraPoint = directWgs84(
+      { lat: 30.5, lon: 103.5 },
+      73,
+      1_000,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "select-extra-point" }));
+    const analyzeButton = screen.getByRole("button", { name: /分析链路/ });
+    await waitFor(() =>
+      expect((analyzeButton as HTMLButtonElement).disabled).toBe(false),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "重选接收台" }));
+    mapPointMocks.extraPoint = directWgs84(
+      { lat: 30.5, lon: 103.5 },
+      73,
+      200_000,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "select-extra-point" }));
+    await waitFor(() =>
+      expect((analyzeButton as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.queryByText(/链路分析仅支持 1–200 km/)).toBeNull();
+  });
+
+  it("selects TX then RX, preserves heatmaps across modes, and clears only the link", async () => {
+    render(<App />);
+    await screen.findByText("等待选择发射点");
+
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("数据已就绪");
+    fireEvent.click(screen.getByRole("button", { name: /开始计算/ }));
+    await screen.findByText("覆盖计算完成");
+    expect(screen.getByTestId("heatmap-count").textContent).toBe("1");
+
+    fireEvent.click(screen.getByRole("tab", { name: "链路通视分析" }));
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    expect(screen.getByTestId("link-tx").textContent).toBe("30.5,103.5");
+    expect(screen.getByTestId("link-rx").textContent).toBe("none");
+    fireEvent.click(screen.getByRole("button", { name: "select-new-point" }));
+    expect(screen.getByTestId("link-rx").textContent).toBe("31,104");
+
+    const analyzeButton = screen.getByRole("button", { name: /分析链路/ });
+    await waitFor(() => expect((analyzeButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(analyzeButton);
+    await screen.findByText("视距良好 · 模型预测可用");
+    expect(backendMocks.analyzeLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tx: expect.objectContaining({ point: { lat: 30.5, lon: 103.5 } }),
+        rx: expect.objectContaining({ point: { lat: 31, lon: 104 } }),
+        receiverThresholdDbm: -120,
+      }),
+    );
+    expect(screen.getByTestId("link-profile").textContent).toBe("direct-los");
+
+    fireEvent.click(screen.getByRole("button", { name: "清空链路" }));
+    expect(screen.getByTestId("link-tx").textContent).toBe("none");
+    expect(screen.getByTestId("link-rx").textContent).toBe("none");
+    expect(screen.getByTestId("heatmap-count").textContent).toBe("1");
+
+    fireEvent.click(screen.getByRole("tab", { name: "覆盖范围分析" }));
+    expect(screen.getByTestId("heatmap-count").textContent).toBe("1");
+    expect(screen.getByTestId("selected-point").textContent).toBe("30.5,103.5");
+  });
+
+  it("preserves both endpoints, parameters, and result across language changes", async () => {
+    render(<App />);
+    await screen.findByText("等待选择发射点");
+    fireEvent.click(screen.getByRole("tab", { name: "链路通视分析" }));
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    fireEvent.click(screen.getByRole("button", { name: "select-new-point" }));
+    fireEvent.click(screen.getByRole("button", { name: "change-link-threshold" }));
+    const analyzeButton = screen.getByRole("button", { name: /分析链路/ });
+    await waitFor(() => expect((analyzeButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(analyzeButton);
+    await screen.findByText("视距良好 · 模型预测可用");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "语言" }), {
+      target: { value: "ja-JP" },
+    });
+    await screen.findByRole("tab", { name: "見通しリンク解析" });
+    expect(screen.getByTestId("link-tx").textContent).toBe("30.5,103.5");
+    expect(screen.getByTestId("link-rx").textContent).toBe("31,104");
+    expect(screen.getByTestId("link-threshold").textContent).toBe("-110");
+    expect(screen.getByTestId("link-result").textContent).toBe("direct-los");
   });
 });

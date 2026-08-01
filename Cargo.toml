@@ -9,6 +9,7 @@ members = [
     "crates/cache",
     "crates/export",
     "crates/coverage",
+    "crates/link-analysis",
     "crates/mvp-cli",
     "crates/phase0-cli",
     "crates/propagation",

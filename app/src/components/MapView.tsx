@@ -35,8 +35,10 @@ import {
 import { MapOverlayCanvasLease } from "../lib/mapOverlayCanvas";
 import { MapOverlayBlobUrlLease, buildMapOverlayImageSpec } from "../lib/mapOverlay";
 import type {
+  AnalysisMode,
   BasemapInfo,
   CalculationPreview,
+  LinkAnalysisResult,
   MapPoint,
   OnlineBasemapInfo,
   ResolvedTheme,
@@ -46,6 +48,10 @@ import type {
 interface MapViewProps {
   theme: ResolvedTheme;
   point: MapPoint | null;
+  analysisMode?: AnalysisMode;
+  linkTx?: MapPoint | null;
+  linkRx?: MapPoint | null;
+  linkResult?: LinkAnalysisResult | null;
   heatmaps: readonly SessionCoverageResult[];
   activeHeatmapId: string | null;
   preview: CalculationPreview | null;
@@ -99,6 +105,45 @@ function coverageCircleData(point: MapPoint | null): FeatureCollection {
   };
 }
 
+function linkEndpointData(
+  tx: MapPoint | null,
+  rx: MapPoint | null,
+): FeatureCollection {
+  const features: FeatureCollection["features"] = [];
+  if (tx) {
+    features.push({
+      type: "Feature",
+      properties: { role: "tx" },
+      geometry: { type: "Point", coordinates: [tx.lon, tx.lat] },
+    });
+  }
+  if (rx) {
+    features.push({
+      type: "Feature",
+      properties: { role: "rx" },
+      geometry: { type: "Point", coordinates: [rx.lon, rx.lat] },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+function linkPathData(result: LinkAnalysisResult | null): FeatureCollection {
+  if (!result || result.profile.length < 2) return EMPTY_FEATURE_COLLECTION;
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "LineString",
+          coordinates: result.profile.map((sample) => [sample.lon, sample.lat]),
+        },
+      },
+    ],
+  };
+}
+
 function completedPointData(heatmaps: readonly SessionCoverageResult[]): FeatureCollection {
   return {
     type: "FeatureCollection",
@@ -117,6 +162,9 @@ function updateSelection(
   map: MapLibreMap,
   point: MapPoint | null,
   heatmaps: readonly SessionCoverageResult[],
+  linkTx: MapPoint | null,
+  linkRx: MapPoint | null,
+  linkResult: LinkAnalysisResult | null,
 ): void {
   (map.getSource("selected-point") as GeoJSONSource | undefined)?.setData(
     selectedPointData(point),
@@ -126,6 +174,12 @@ function updateSelection(
   );
   (map.getSource("completed-points") as GeoJSONSource | undefined)?.setData(
     completedPointData(heatmaps),
+  );
+  (map.getSource("link-endpoints") as GeoJSONSource | undefined)?.setData(
+    linkEndpointData(linkTx, linkRx),
+  );
+  (map.getSource("link-path") as GeoJSONSource | undefined)?.setData(
+    linkPathData(linkResult),
   );
 }
 
@@ -321,6 +375,10 @@ function updateHeatmaps(
 export function MapView({
   theme,
   point,
+  analysisMode = "coverage",
+  linkTx = null,
+  linkRx = null,
+  linkResult = null,
   heatmaps,
   activeHeatmapId,
   preview,
@@ -352,6 +410,9 @@ export function MapView({
   }
   const themeRef = useRef(theme);
   const pointRef = useRef(point);
+  const linkTxRef = useRef(linkTx);
+  const linkRxRef = useRef(linkRx);
+  const linkResultRef = useRef(linkResult);
   const heatmapsRef = useRef(heatmaps);
   const activeHeatmapIdRef = useRef(activeHeatmapId);
   const previewRef = useRef(preview);
@@ -364,6 +425,9 @@ export function MapView({
   const basemapPresentationRef = useRef(basemapPresentation);
   themeRef.current = theme;
   pointRef.current = point;
+  linkTxRef.current = linkTx;
+  linkRxRef.current = linkRx;
+  linkResultRef.current = linkResult;
   heatmapsRef.current = heatmaps;
   activeHeatmapIdRef.current = activeHeatmapId;
   previewRef.current = preview;
@@ -429,7 +493,14 @@ export function MapView({
         basemapPresentationRef.current,
         failed ? null : onlineBasemapRef.current,
       );
-      updateSelection(map, pointRef.current, heatmapsRef.current);
+      updateSelection(
+        map,
+        pointRef.current,
+        heatmapsRef.current,
+        linkTxRef.current,
+        linkRxRef.current,
+        linkResultRef.current,
+      );
       updateHeatmaps(
         map,
         heatmapsRef.current,
@@ -488,6 +559,30 @@ export function MapView({
           "line-dasharray": [3, 2],
         },
       });
+      map.addSource("link-path", {
+        type: "geojson",
+        data: linkPathData(linkResultRef.current),
+      });
+      map.addLayer({
+        id: "link-path-casing",
+        type: "line",
+        source: "link-path",
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": 5,
+          "line-opacity": 0.8,
+        },
+      });
+      map.addLayer({
+        id: "link-path-line",
+        type: "line",
+        source: "link-path",
+        paint: {
+          "line-color": "#8b5cf6",
+          "line-width": 3,
+          "line-dasharray": [2, 1.5],
+        },
+      });
       map.addSource("completed-points", {
         type: "geojson",
         data: completedPointData(heatmapsRef.current),
@@ -511,6 +606,34 @@ export function MapView({
           "circle-color": "#087f74",
           "circle-stroke-color": "#ffffff",
           "circle-stroke-width": 1.5,
+        },
+      });
+      map.addSource("link-endpoints", {
+        type: "geojson",
+        data: linkEndpointData(linkTxRef.current, linkRxRef.current),
+      });
+      map.addLayer({
+        id: "link-tx-marker",
+        type: "circle",
+        source: "link-endpoints",
+        filter: ["==", ["get", "role"], "tx"],
+        paint: {
+          "circle-radius": 7,
+          "circle-color": "#ff5c35",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2.5,
+        },
+      });
+      map.addLayer({
+        id: "link-rx-marker",
+        type: "circle",
+        source: "link-endpoints",
+        filter: ["==", ["get", "role"], "rx"],
+        paint: {
+          "circle-radius": 7,
+          "circle-color": "#2563eb",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2.5,
         },
       });
       map.addSource("selected-point", {
@@ -625,7 +748,7 @@ export function MapView({
 
   useEffect(() => {
     synchronizeMapStateRef.current?.();
-  }, [point]);
+  }, [point, linkTx, linkRx, linkResult]);
 
   useEffect(() => {
     if (
@@ -806,20 +929,41 @@ export function MapView({
             : `${trustedLegacyBasemap?.attribution} · ${t("onlineBasemapAttribution")}`}
         </div>
       )}
-      {!point && (
+      {analysisMode === "coverage" && !point && (
         <div className="map-empty-state">
           <div className="map-crosshair" aria-hidden="true" />
           <strong>{t("mapEmpty")}</strong>
           <span>{t("mapEmptyDetail")}</span>
         </div>
       )}
-      {point && (
+      {analysisMode === "link" && (!linkTx || !linkRx) && (
+        <div className="map-empty-state">
+          <div className="map-crosshair" aria-hidden="true" />
+          <strong>{linkTx ? t("selectLinkRx") : t("selectLinkTx")}</strong>
+          <span>{linkTx ? t("selectLinkRxDetail") : t("selectLinkTxDetail")}</span>
+        </div>
+      )}
+      {analysisMode === "coverage" && point && (
         <div className="map-point-card">
           <span>{t("transmitter")}</span>
           <strong>
             {point.lat.toFixed(5)}°, {point.lon.toFixed(5)}°
           </strong>
           <small>{maidenheadLocator(point)}</small>
+        </div>
+      )}
+      {analysisMode === "link" && linkTx && (
+        <div className="map-point-card link-point-card">
+          <span>{t("linkTx")}</span>
+          <strong>{linkTx.lat.toFixed(5)}°, {linkTx.lon.toFixed(5)}°</strong>
+          <small>{maidenheadLocator(linkTx)}</small>
+          {linkRx && (
+            <>
+              <span>{t("linkRx")}</span>
+              <strong>{linkRx.lat.toFixed(5)}°, {linkRx.lon.toFixed(5)}°</strong>
+              <small>{maidenheadLocator(linkRx)}</small>
+            </>
+          )}
         </div>
       )}
     </section>

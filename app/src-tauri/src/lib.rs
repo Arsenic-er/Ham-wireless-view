@@ -8,7 +8,7 @@ use std::{path::PathBuf, sync::Arc};
 use hamheatmap_app_service::{
     AppService, BootstrapInfo, CacheDeleteResult, CacheOverview, CalculationPreview,
     CalculationRequest, CalculationResult, DownloadEstimate, DownloadProgressView, DownloadResult,
-    MapPoint, PointInspection,
+    LinkAnalysisRequest, LinkAnalysisResult, MapPoint, PointInspection,
 };
 use hamheatmap_export::{
     ReportFormat, encode_report, path_with_format_extension, validate_suggested_file_name,
@@ -202,6 +202,25 @@ async fn calculate(
 }
 
 #[tauri::command]
+async fn analyze_link(
+    request: LinkAnalysisRequest,
+    state: State<'_, DesktopState>,
+) -> Result<LinkAnalysisResult, String> {
+    let lease = state.operations.begin(DesktopOperation::Calculating)?;
+    let data_root = state.data_root.clone();
+    let cancelled = lease.cancellation_flag();
+    let join_result = tauri::async_runtime::spawn_blocking(move || {
+        AppService::new(data_root).analyze_link(&request, &cancelled)
+    })
+    .await;
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("link-analysis worker failed: {error}")),
+    };
+    lease.finish(outcome)
+}
+
+#[tauri::command]
 async fn export_result(
     request: ExportRequest,
     app: AppHandle,
@@ -359,6 +378,7 @@ pub fn run() {
             cache_overview,
             delete_cache_region,
             calculate,
+            analyze_link,
             export_result,
             cancel_calculation,
             cancel_download,

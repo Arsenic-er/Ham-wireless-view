@@ -9,6 +9,7 @@ import type { Feature, FeatureCollection, LineString } from "geojson";
 const WGS84_A_M = 6_378_137;
 const WGS84_F = 1 / 298.257_223_563;
 const WGS84_B_M = WGS84_A_M * (1 - WGS84_F);
+const EARTH_MEAN_RADIUS_M = 6_371_008.8;
 const COVERAGE_RADIUS_M = 200_000;
 
 function toRadians(degrees: number): number {
@@ -21,6 +22,107 @@ function toDegrees(radians: number): number {
 
 function normalizeLongitude(longitude: number): number {
   return ((longitude + 540) % 360) - 180;
+}
+
+export function haversineDistanceM(from: MapPoint, to: MapPoint): number {
+  const phi1 = toRadians(from.lat);
+  const phi2 = toRadians(to.lat);
+  const deltaPhi = phi2 - phi1;
+  const deltaLambda = toRadians(to.lon - from.lon);
+  const a =
+    Math.sin(deltaPhi / 2) ** 2 +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) ** 2;
+  const clamped = Math.min(1, Math.max(0, a));
+  return (
+    2 *
+    EARTH_MEAN_RADIUS_M *
+    Math.atan2(Math.sqrt(clamped), Math.sqrt(1 - clamped))
+  );
+}
+
+export function inverseWgs84DistanceM(from: MapPoint, to: MapPoint): number {
+  const phi1 = toRadians(from.lat);
+  const phi2 = toRadians(to.lat);
+  const reduced1 = Math.atan((1 - WGS84_F) * Math.tan(phi1));
+  const reduced2 = Math.atan((1 - WGS84_F) * Math.tan(phi2));
+  const sinReduced1 = Math.sin(reduced1);
+  const cosReduced1 = Math.cos(reduced1);
+  const sinReduced2 = Math.sin(reduced2);
+  const cosReduced2 = Math.cos(reduced2);
+  const longitudeDelta = toRadians(normalizeLongitude(to.lon - from.lon));
+  let lambda = longitudeDelta;
+  let sinSigma = 0;
+  let cosSigma = 0;
+  let sigma = 0;
+  let sinAlpha = 0;
+  let cosSqAlpha = 0;
+  let cos2SigmaM = 0;
+  let converged = false;
+
+  for (let iteration = 0; iteration < 100; iteration += 1) {
+    const sinLambda = Math.sin(lambda);
+    const cosLambda = Math.cos(lambda);
+    const first = cosReduced2 * sinLambda;
+    const second =
+      cosReduced1 * sinReduced2 -
+      sinReduced1 * cosReduced2 * cosLambda;
+    sinSigma = Math.sqrt(first * first + second * second);
+    if (sinSigma === 0) return 0;
+    cosSigma =
+      sinReduced1 * sinReduced2 +
+      cosReduced1 * cosReduced2 * cosLambda;
+    sigma = Math.atan2(sinSigma, cosSigma);
+    sinAlpha =
+      (cosReduced1 * cosReduced2 * sinLambda) / sinSigma;
+    cosSqAlpha = 1 - sinAlpha * sinAlpha;
+    cos2SigmaM =
+      cosSqAlpha > 1e-15
+        ? cosSigma -
+          (2 * sinReduced1 * sinReduced2) / cosSqAlpha
+        : 0;
+    const c =
+      (WGS84_F / 16) *
+      cosSqAlpha *
+      (4 + WGS84_F * (4 - 3 * cosSqAlpha));
+    const nextLambda =
+      longitudeDelta +
+      (1 - c) *
+        WGS84_F *
+        sinAlpha *
+        (sigma +
+          c *
+            sinSigma *
+            (cos2SigmaM +
+              c * cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM)));
+    if (Math.abs(nextLambda - lambda) < 1e-12) {
+      lambda = nextLambda;
+      converged = true;
+      break;
+    }
+    lambda = nextLambda;
+  }
+
+  if (!converged) return haversineDistanceM(from, to);
+  const uSq =
+    (cosSqAlpha * (WGS84_A_M * WGS84_A_M - WGS84_B_M * WGS84_B_M)) /
+    (WGS84_B_M * WGS84_B_M);
+  const bigA =
+    1 +
+    (uSq / 16_384) *
+      (4096 + uSq * (-768 + uSq * (320 - 175 * uSq)));
+  const bigB =
+    (uSq / 1024) * (256 + uSq * (-128 + uSq * (74 - 47 * uSq)));
+  const deltaSigma =
+    bigB *
+    sinSigma *
+    (cos2SigmaM +
+      (bigB / 4) *
+        (cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM) -
+          (bigB / 6) *
+            cos2SigmaM *
+            (-3 + 4 * sinSigma * sinSigma) *
+            (-3 + 4 * cos2SigmaM * cos2SigmaM)));
+  return WGS84_B_M * bigA * (sigma - deltaSigma);
 }
 
 export function directWgs84(

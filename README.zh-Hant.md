@@ -10,15 +10,17 @@ HamHeatmap（業餘無線電傳播熱力圖）是一套面向中國大陸業餘�
 英文 [`README.md`](README.md) 是規範介紹頁；本頁提供完整的繁體中文介紹。
 
 <!-- section:current-status -->
-<!-- synchronized-tests: frontend=133 rust=110 ignored=5 -->
+<!-- synchronized-tests: frontend=145 rust=131 ignored=5 -->
 ## 目前狀態
 
 ### 線上驗證版
 
 - 私有 validation 服務在伺服器上執行，僅監聽 `127.0.0.1:1421`，必須透過 SSH 通道存取。
 - 目前產品目標只使用線上視覺底圖。validation 版支援透過同源代理使用天地圖向量圖和 EOxCloudless 衛星圖；線上底圖無法使用時，會退回 WGS84 座標網格。真實 DEM/WBM + ITM 計算、最多 8 個工作階段覆蓋圖層、動態比例尺，以及瀏覽器本機診斷 PNG/PDF 匯出均維持可用。
-- 已實作 -140..-60 dBm、步進 1 dB 的全域顯示門檻滑桿；它會動態隱藏較弱像素，不會重新計算傳播結果，也不改變統計或本次匯出內容。目前閘門通過 133 項前端測試和 110 項 Rust workspace 測試（另有 5 項環境相依測試略過），以及三組真實快取 HTTP 煙霧測試。8 圖層伺服器 CPU 微基準的 P95 為 5.982 ms。由於 Codex Windows ACL 故障，受管瀏覽器拖曳仍未驗證，Windows WebView2 實機測試也尚待完成。
+- 已實作 -140..-60 dBm、步進 1 dB 的全域顯示門檻滑桿；它會動態隱藏較弱像素，不會重新計算傳播結果，也不改變統計或本次匯出內容。目前閘門通過 145 項前端測試和 131 項 Rust workspace 測試（另有 5 項環境相依測試略過），以及三組真實快取 HTTP 煙霧測試。8 圖層伺服器 CPU 微基準的 P95 為 5.982 ms。由於 Codex Windows ACL 故障，受管瀏覽器拖曳仍未驗證，Windows WebView2 實機測試也尚待完成。
 - 過去的四省 PMTiles 路線已不再是產品目標，只保留為歷史工程證據。EOxCloudless 仍是 validation 使用的線上衛星圖層，不會納入公開 Windows 發行資產。
+
+- 目前原始碼已實作獨立的線上雙點 TX/RX 鏈路分析模式，適用於 1–200 km 路徑。使用者在地圖上選擇 TX 與 RX，結果包含地形／菲涅爾剖面及規劃分類。受管 validation 程序尚未依此程式碼重新建置或重新啟動，也沒有部署公開服務。
 
 ### Windows Alpha
 
@@ -26,6 +28,8 @@ HamHeatmap（業餘無線電傳播熱力圖）是一套面向中國大陸業餘�
 - v0.1.0-alpha.2 已從提交 9b0fb79 交叉建置並上傳至 GitHub Releases：獨立 EXE 為 16,174,080 bytes，內含離線 WebView2 元件的 NSIS 安裝程式為 217,265,419 bytes。
 - Release 同時提供 `SHA256SUMS.txt`。兩個 Windows 產物都未簽章；Windows 10/11 實機、SmartScreen、安裝／解除安裝，以及中國大陸真實網路仍待驗證。
 - Windows 產品只使用線上視覺底圖，不規劃或發行離線地圖套件；任何線上圖磚都不會持久保存。DEM/WBM、partial 檔案、索引和計算快取仍受不可變更的十進位 2.5 GB 上限約束；已快取區域可在無網路時繼續計算，並在 WGS84 座標網格上顯示結果。
+
+- 此鏈路分析原始碼晚於 v0.1.0-alpha.2，尚未封裝為新的 Windows 發行版。
 
 <!-- section:windows-download -->
 ## Windows 下載
@@ -44,6 +48,11 @@ SHA-256：`HamHeatmap.exe` 為 a1968a48bca419d58680adca31759284f7971d36c59050345
 <!-- section:mvp -->
 ## MVP
 
+- 獨立的線上雙點 TX/RX 鏈路分析，支援 1–200 km 路徑，使用真實 DEM/WBM，並按 WGS84 以 ≤ 90 m 間距取樣。
+- 採用 k = 4/3 有效地球曲率，繪製完整第一菲涅爾區（F1）及 60% F1 淨空邊界，並結合 NTIA ITM 損耗。
+- TX/RX 的天線高度、增益及水平／垂直極化均可獨立編輯；RX 規劃閾值可編輯，預設為 -120 dBm。正交極化採用明確且版本化的 20 dB 規劃假設。
+- 響應式 SVG 地形剖面包含動態距離刻度、通視直線、完整 F1 包絡及淨空邊界。
+- 穩定結果代碼 `direct-los`、`obstructed-usable`、`predicted-unavailable` 只是依目前輸入、DEM、標準大氣及閾值作出的規劃預測，不保證現場通聯。清除鏈路分析不會清除覆蓋熱力圖。
 - 支援 144 MHz 與 430 MHz 頻段，具體頻率可輸入至小數點後兩位。
 - Longley–Rice / NTIA ITM 點對點地形傳播。
 - 基地臺→手持電臺、手持電臺→基地臺預設。
@@ -82,6 +91,7 @@ SHA-256：`HamHeatmap.exe` 為 a1968a48bca419d58680adca31759284f7971d36c59050345
 - `docs/18-progressive-coverage-preview-validation.md`：漸進式預覽、雙傳輸契約、真實成都執行及待驗 Windows 閘門。
 - `docs/19-parameter-sensitivity-validation.md`：真實成都逐像素參數矩陣、雙 PNG 確定性及不可變快取快照。
 - `docs/20-tianditu-basemap-proxy.md`：天地圖同源代理、token 邊界、動態比例尺、清除／重播行為與待驗閘門。
+- [`docs/decisions/0024-point-to-point-link-analysis.md`](docs/decisions/0024-point-to-point-link-analysis.md)：鎖定的點對點鏈路分析契約、公式、分類及驗證邊界。
 - `docs/decisions/`：具有證據的工程決策。
 - [`docs/21-protomaps-four-province-basemap.md`](docs/21-protomaps-four-province-basemap.md)：已退出目前產品目標的四省 PMTiles 歷史驗證證據。
 
@@ -160,6 +170,8 @@ scripts/node-project.sh --prefix app run dev
 <!-- section:validation-platform -->
 ## 私有伺服器驗證平台
 
+上述原始碼層級的鏈路分析變更尚未重新建置至受管 validation 程序，也未在該程序上重新啟動。本節指令描述的是現有私有平台，不代表已公開部署。
+
 驗證平台只供內部開發使用。它從同一來源提供 validation React 前端與重複使用 `hamheatmap-app-service` 的 Linux HTTP 橋接器，以檢查真實資料準備、快取管理和傳播計算。行程固定監聽 `127.0.0.1:1421`；不得改為 `0.0.0.0`、占用 Cockpit 的 `9090`，或在雲端防火牆開啟新連接埠。
 
 在伺服器建置並啟動：
@@ -210,6 +222,8 @@ scripts/tauri-windows-cross.sh
 
 <!-- section:limitations -->
 ## 重要限制
+
+三類鏈路結果是在所選參數、真實 DEM/WBM、標準大氣 k = 4/3 假設及可編輯閾值下的規劃預測，不保證現場通聯；目前模型也未加入建築、植被、局部雜波、干擾或即時大氣條件。
 
 HamHeatmap 是規劃及教學工具，不保證實際通聯。MVP 不考慮建築、植被、都市雜波、外部干擾、即時天氣、異常傳播、水面反射或饋線損耗。
 

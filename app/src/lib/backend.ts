@@ -26,6 +26,8 @@ import type {
   DownloadEstimate,
   DownloadProgress,
   DownloadResult,
+  LinkAnalysisRequest,
+  LinkAnalysisResult,
   MapPoint,
   OperationKind,
   OperationStatus,
@@ -44,6 +46,7 @@ export interface BackendCapabilities {
   canDownload: boolean;
   canDeleteCache: boolean;
   canCalculate: boolean;
+  canAnalyzeLink: boolean;
   canExport: boolean;
   canConfigureOnlineBasemap: boolean;
 }
@@ -62,6 +65,7 @@ export function backendCapabilities(): BackendCapabilities {
     canDownload: mode !== "preview",
     canDeleteCache: mode !== "preview",
     canCalculate: mode !== "preview",
+    canAnalyzeLink: mode !== "preview",
     canExport: mode !== "preview",
     canConfigureOnlineBasemap: mode === "tauri",
   };
@@ -289,6 +293,108 @@ function isCurrentOperation(handle: ValidationOperationHandle): boolean {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+const LINK_CLASSIFICATIONS = new Set([
+  "direct-los",
+  "obstructed-usable",
+  "predicted-unavailable",
+]);
+
+function validateLinkAnalysisResult(value: unknown): LinkAnalysisResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(i18n.t("errorLinkResultObject"));
+  }
+  const result = value as Partial<LinkAnalysisResult>;
+  if (result.schemaVersion !== 1) {
+    throw new Error(i18n.t("errorLinkResultSchema"));
+  }
+  if (
+    typeof result.classification !== "string" ||
+    !LINK_CLASSIFICATIONS.has(result.classification) ||
+    typeof result.classificationReason !== "string" ||
+    typeof result.geometricLos !== "boolean" ||
+    typeof result.fresnelClearance60 !== "boolean" ||
+    typeof result.itmMode !== "string" ||
+    typeof result.critical !== "boolean" ||
+    !Array.isArray(result.profile) ||
+    result.profile.length < 2 ||
+    result.sampleCount !== result.profile.length
+  ) {
+    throw new Error(i18n.t("errorLinkResultProtocol"));
+  }
+
+  const numericFields = [
+    result.distanceM,
+    result.initialBearingDeg,
+    result.finalBearingDeg,
+    result.frequencyMhz,
+    result.wavelengthM,
+    result.sampleSpacingM,
+    result.sampleCount,
+    result.effectiveEarthRadiusM,
+    result.kFactor,
+    result.txGroundElevationM,
+    result.rxGroundElevationM,
+    result.txAntennaElevationM,
+    result.rxAntennaElevationM,
+    result.minimumLosClearanceM,
+    result.minimumFresnelClearanceRatio,
+    result.criticalSampleIndex,
+    result.itmBasicTransmissionLossDb,
+    result.itmWarnings,
+    result.waterFraction,
+    result.coPolarizedReferencePowerDbm,
+    result.polarizationMismatchLossDb,
+    result.predictedRxPowerDbm,
+    result.receiverThresholdDbm,
+    result.linkMarginDb,
+  ];
+  if (numericFields.some((item) => !isFiniteNumber(item))) {
+    throw new Error(i18n.t("errorLinkResultProtocol"));
+  }
+  if (
+    !Number.isSafeInteger(result.sampleCount) ||
+    !Number.isSafeInteger(result.criticalSampleIndex) ||
+    (result.criticalSampleIndex as number) < 0 ||
+    (result.criticalSampleIndex as number) >= result.profile.length ||
+    (result.distanceM as number) <= 0 ||
+    (result.sampleSpacingM as number) <= 0
+  ) {
+    throw new Error(i18n.t("errorLinkResultProtocol"));
+  }
+
+  let previousDistance = -1;
+  for (const sample of result.profile) {
+    if (
+      !sample ||
+      typeof sample !== "object" ||
+      [
+        sample.distanceM,
+        sample.lat,
+        sample.lon,
+        sample.terrainElevationM,
+        sample.earthBulgeM,
+        sample.adjustedTerrainM,
+        sample.losHeightM,
+        sample.fresnelRadiusM,
+      ].some((item) => !isFiniteNumber(item)) ||
+      sample.distanceM < previousDistance ||
+      sample.fresnelRadiusM < 0
+    ) {
+      throw new Error(i18n.t("errorLinkResultProfile"));
+    }
+    previousDistance = sample.distanceM;
+  }
+  const first = result.profile[0];
+  const last = result.profile[result.profile.length - 1];
+  if (
+    Math.abs(first.distanceM) > 1e-6 ||
+    Math.abs(last.distanceM - (result.distanceM as number)) > 1
+  ) {
+    throw new Error(i18n.t("errorLinkResultProfile"));
+  }
+  return result as LinkAnalysisResult;
 }
 
 function validateCalculationResult(value: unknown): CalculationResult {
@@ -1029,6 +1135,24 @@ export async function calculate(
     return validateCalculationResult(result);
   }
   throw new Error(i18n.t("errorCalculationPreviewOnly"));
+}
+
+export async function analyzeLink(
+  request: LinkAnalysisRequest,
+): Promise<LinkAnalysisResult> {
+  if (desktopBackendAvailable()) {
+    const result = await invoke<unknown>("analyze_link", { request });
+    return validateLinkAnalysisResult(result);
+  }
+  if (backendMode() === "validation-server") {
+    const result = await runValidationOperation<unknown>(
+      "calculation",
+      "/api/link-analysis",
+      { request },
+    );
+    return validateLinkAnalysisResult(result);
+  }
+  throw new Error(i18n.t("errorLinkAnalysisPreviewOnly"));
 }
 
 export async function cancelCalculation(): Promise<void> {

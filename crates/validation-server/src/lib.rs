@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use basemap::{Basemap, BasemapError, SATELLITE_TILE_PATH_PREFIX};
 use hamheatmap_app_service::{
     AppService, CalculationPreview, CalculationProgress, CalculationRequest, DownloadProgressView,
-    MapPoint,
+    LinkAnalysisRequest, MapPoint,
 };
 use serde::{Deserialize, Serialize};
 
@@ -319,6 +319,13 @@ impl ValidationServer {
                             reporter.report_preview(preview);
                         },
                     )
+                },
+            )),
+            ("POST", "/api/link-analysis") => Some(self.json_ticketed_operation(
+                &request,
+                TicketKind::Calculation,
+                |body: TicketLinkAnalysisBody, cancelled, _| {
+                    self.state.service.analyze_link(&body.request, cancelled)
                 },
             )),
             ("POST", "/api/cancel-calculation") => {
@@ -1246,6 +1253,19 @@ struct TicketCalculationBody {
 }
 
 impl TicketedBody for TicketCalculationBody {
+    fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TicketLinkAnalysisBody {
+    operation_id: String,
+    request: LinkAnalysisRequest,
+}
+
+impl TicketedBody for TicketLinkAnalysisBody {
     fn operation_id(&self) -> &str {
         &self.operation_id
     }

@@ -8,15 +8,17 @@
 HamHeatmap is an open-source Windows desktop application for amateur-radio operators in mainland China. Select one transmitter location on the map and the application uses frequency, power, antenna gain, height, polarization, terrain, and land/water parameters to predict received power on a fixed 200 km radius, 1 km grid.
 
 <!-- section:current-status -->
-<!-- synchronized-tests: frontend=133 rust=110 ignored=5 -->
+<!-- synchronized-tests: frontend=145 rust=131 ignored=5 -->
 ## Current status
 
 ### Online validation build
 
 - The private validation service runs on the server, listens only on `127.0.0.1:1421`, and is accessed through an SSH tunnel.
 - The current product target uses online visual basemaps only. The validation build supports a same-origin proxy for the Tianditu vector map and the EOxCloudless satellite layer; if online basemaps are unavailable, it falls back to a WGS84 coordinate grid. Real DEM/WBM + ITM calculations, up to 8 session coverage layers, the dynamic scale, and browser-local diagnostic PNG/PDF export remain available.
-- A global -140..-60 dBm display-threshold slider with 1 dB steps dynamically hides weaker pixels without recalculating propagation or changing statistics and the current export. Current gates pass 133 frontend tests and 110 Rust workspace tests, with 5 environment-dependent tests ignored, plus three real-cache HTTP smoke suites. The 8-layer server CPU microbenchmark has a P95 of 5.982 ms. Managed-browser dragging is still unverified because of a Codex Windows ACL failure, and Windows WebView2 hardware testing is also pending.
+- A global -140..-60 dBm display-threshold slider with 1 dB steps dynamically hides weaker pixels without recalculating propagation or changing statistics and the current export. Current gates pass 145 frontend tests and 131 Rust workspace tests, with 5 environment-dependent tests ignored, plus three real-cache HTTP smoke suites. The 8-layer server CPU microbenchmark has a P95 of 5.982 ms. Managed-browser dragging is still unverified because of a Codex Windows ACL failure, and Windows WebView2 hardware testing is also pending.
 - The former four-province PMTiles path is no longer a product target and remains only as historical engineering evidence. EOxCloudless is an online satellite layer for validation and is not included in the public Windows release assets.
+
+- The current source implements a separate online point-to-point TX/RX link-analysis mode for 1–200 km paths. Users select TX and RX on the map; the result includes a terrain/Fresnel profile and a planning classification. The managed validation process has not yet been rebuilt or restarted with this code, and no public service is deployed.
 
 ### Windows Alpha
 
@@ -24,6 +26,8 @@ HamHeatmap is an open-source Windows desktop application for amateur-radio opera
 - v0.1.0-alpha.2 was cross-built from commit 9b0fb79 and uploaded to GitHub Releases: the standalone EXE is 16,174,080 bytes and the NSIS installer with the offline WebView2 component is 217,265,419 bytes.
 - The Release also includes `SHA256SUMS.txt`. Both Windows artifacts are unsigned; Windows 10/11 hardware testing, SmartScreen, installation/uninstallation, and real mainland-China network testing remain pending.
 - The Windows product uses online visual basemaps only and does not plan or distribute an offline map package. Online tiles are never persisted. DEM/WBM, partial files, indexes, and calculation caches remain subject to the immutable decimal 2.5 GB cap; cached regions can still be calculated without a network connection and displayed on the WGS84 coordinate grid.
+
+- This link-analysis source is newer than v0.1.0-alpha.2 and has not been packaged into a new Windows release.
 
 <!-- section:windows-download -->
 ## Windows download
@@ -42,6 +46,11 @@ SHA-256: `HamHeatmap.exe` is a1968a48bca419d58680adca31759284f7971d36c5905034512
 <!-- section:mvp -->
 ## MVP
 
+- Separate online point-to-point TX/RX link analysis for 1–200 km paths, using real DEM/WBM and WGS84 samples spaced ≤ 90 m apart.
+- A k = 4/3 effective-Earth-curvature profile, the full first Fresnel zone (F1), and a 60% F1 clearance boundary, combined with NTIA ITM loss.
+- Independently editable TX/RX antenna height, gain, and horizontal/vertical polarization; the editable RX planning threshold defaults to -120 dBm. Orthogonal polarization applies a visible, versioned 20 dB planning assumption.
+- A responsive SVG terrain profile with dynamic distance ticks, the direct path, full F1 envelope, and clearance boundary.
+- Stable result codes `direct-los`, `obstructed-usable`, and `predicted-unavailable` are planning predictions for the current inputs, DEM, standard atmosphere, and threshold—not field-contact guarantees. Clearing link analysis does not clear coverage heatmaps.
 - 144 MHz and 430 MHz bands, with exact frequencies entered to two decimal places.
 - Longley–Rice / NTIA ITM point-to-point terrain propagation.
 - Base-station-to-handheld and handheld-to-base-station presets.
@@ -80,6 +89,7 @@ Most engineering documents are currently written in Simplified Chinese. Their co
 - `docs/18-progressive-coverage-preview-validation.md`: progressive preview, dual transport, real Chengdu run, and pending Windows gates.
 - `docs/19-parameter-sensitivity-validation.md`: real Chengdu pixel-level parameter matrix, dual-PNG determinism, and immutable cache snapshots.
 - `docs/20-tianditu-basemap-proxy.md`: Tianditu same-origin proxy, token boundary, dynamic scale, clear/replay behavior, and pending gates.
+- [`docs/decisions/0024-point-to-point-link-analysis.md`](docs/decisions/0024-point-to-point-link-analysis.md): locked point-to-point link-analysis contract, equations, classifications, and verification boundary.
 - `docs/decisions/`: evidence-backed engineering decisions.
 - [`docs/21-protomaps-four-province-basemap.md`](docs/21-protomaps-four-province-basemap.md): historical four-province PMTiles validation evidence, no longer a product target.
 
@@ -158,6 +168,8 @@ scripts/node-project.sh --prefix app run dev
 <!-- section:validation-platform -->
 ## Private server validation platform
 
+The current source-level link-analysis changes described above have not yet been rebuilt into or restarted on the managed validation process. The commands in this section document the existing private platform; they do not indicate a public deployment.
+
 The validation platform is for internal development only. It serves the validation React build and a Linux HTTP bridge reusing `hamheatmap-app-service` from one origin, so real data preparation, cache management, and propagation calculations can be checked. The process is fixed to `127.0.0.1:1421`; never change it to `0.0.0.0`, reuse Cockpit port `9090`, or open a new cloud-firewall port.
 
 Build and start it on the server:
@@ -208,6 +220,8 @@ The restore script writes only under the server project's `.tools/`. LLVM, its a
 
 <!-- section:limitations -->
 ## Important limitations
+
+The three link result classes are planning predictions under the selected inputs, real DEM/WBM, the standard-atmosphere k = 4/3 assumption, and the editable threshold. They do not guarantee a field contact, and the current model does not add buildings, vegetation, local clutter, interference, or live atmospheric conditions.
 
 HamHeatmap is a planning and educational tool and does not guarantee an actual radio contact. The MVP does not model buildings, vegetation, urban clutter, external interference, real-time weather, anomalous propagation, water-surface reflection, or feedline loss.
 
