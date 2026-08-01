@@ -20,6 +20,7 @@ const backendMocks = vi.hoisted(() => ({
   cacheOverview: vi.fn(),
   estimateDownload: vi.fn(),
   configureOnlineBasemap: vi.fn(),
+  probeOnlineBasemap: vi.fn(),
   clearOnlineBasemap: vi.fn(),
   previewHandler: null as ((preview: CalculationPreview) => void) | null,
 }));
@@ -44,6 +45,7 @@ vi.mock("./lib/backend", () => ({
   estimateDownload: backendMocks.estimateDownload,
   exportReport: vi.fn(),
   configureOnlineBasemap: backendMocks.configureOnlineBasemap,
+  probeOnlineBasemap: backendMocks.probeOnlineBasemap,
   clearOnlineBasemap: backendMocks.clearOnlineBasemap,
   listenCalculationPreview: vi.fn().mockImplementation(
     async (handler: (preview: CalculationPreview) => void) => {
@@ -206,10 +208,22 @@ const result: CalculationResult = {
   },
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   backendMocks.mode = "validation-server";
   backendMocks.previewHandler = null;
   backendMocks.configureOnlineBasemap.mockResolvedValue(onlineBasemap);
+  backendMocks.probeOnlineBasemap.mockResolvedValue({
+    schemaVersion: 1,
+    status: "reachable",
+  });
   backendMocks.clearOnlineBasemap.mockResolvedValue({ ...onlineBasemap, configured: false });
   backendMocks.bootstrap.mockResolvedValue({
     schemaVersion: 2,
@@ -263,7 +277,7 @@ afterEach(() => {
 });
 
 describe("desktop online map settings", () => {
-  it("keeps tk temporary, applies metadata, and clears configuration", async () => {
+  function useDesktopBasemap(configured: boolean) {
     backendMocks.mode = "tauri";
     backendMocks.bootstrap.mockResolvedValue({
       schemaVersion: 2,
@@ -273,41 +287,175 @@ describe("desktop online map settings", () => {
       gridSize: 401,
       cacheUsage,
       internalBuildWarning: "internal",
-      onlineBasemap: { ...onlineBasemap, configured: false },
+      onlineBasemap: { ...onlineBasemap, configured },
     });
-    const storageSpy = vi.spyOn(Storage.prototype, "setItem");
-    render(<App />);
+  }
 
+  async function openDesktopMapSettings() {
     const settingsButton = await screen.findByRole("button", { name: /在线地图/ });
     await waitFor(() => {
       expect((settingsButton as HTMLButtonElement).disabled).toBe(false);
     });
     fireEvent.click(settingsButton);
-    expect(screen.getByRole("dialog", { name: "配置天地图" })).toBeTruthy();
+    return screen.getByRole("dialog", { name: "配置天地图" });
+  }
+
+  it("keeps tk temporary, saves then probes, and clears configuration", async () => {
+    useDesktopBasemap(false);
+    const storageSpy = vi.spyOn(Storage.prototype, "setItem");
+    render(<App />);
+
+    await openDesktopMapSettings();
     const input = screen.getByLabelText("天地图 tk") as HTMLInputElement;
     expect(input.type).toBe("password");
     expect(input.value).toBe("");
+    expect(screen.getByText("尚未测试")).toBeTruthy();
 
     const secret = "temporary-secret-token";
     fireEvent.change(input, { target: { value: secret } });
-    expect(input.value).toBe(secret);
-    fireEvent.click(screen.getByRole("button", { name: "保存并启用" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并测试" }));
 
     await waitFor(() => {
       expect(backendMocks.configureOnlineBasemap).toHaveBeenCalledWith(secret);
+      expect(backendMocks.probeOnlineBasemap).toHaveBeenCalledOnce();
       expect(input.value).toBe("");
     });
     expect(screen.queryByDisplayValue(secret)).toBeNull();
     expect(storageSpy.mock.calls.every(([, value]) => value !== secret)).toBe(true);
-    expect(screen.getByText("在线地图已配置。地图和卫星影像均通过本机安全代理读取。")).toBeTruthy();
+    expect(screen.getByText("配置已保存。")).toBeTruthy();
+    expect(screen.getByText("连接测试通过")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "清除配置" }));
     await waitFor(() => expect(backendMocks.clearOnlineBasemap).toHaveBeenCalledOnce());
     expect(screen.getByText("已清除在线地图配置，当前使用 WGS84 坐标网格。")).toBeTruthy();
-    expect(
-      screen.getByText("未配置受信任的真实底图；当前只显示 WGS84 坐标网格。"),
-    ).toBeTruthy();
+    expect(screen.getByText("尚未测试")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /测试连接/ })).toBeNull();
   });
+
+  it("retains a saved configuration when the immediate probe fails", async () => {
+    useDesktopBasemap(false);
+    backendMocks.probeOnlineBasemap.mockResolvedValueOnce({
+      schemaVersion: 1,
+      status: "upstream-or-credential",
+    });
+    render(<App />);
+    await openDesktopMapSettings();
+
+    fireEvent.change(screen.getByLabelText("天地图 tk"), {
+      target: { value: "temporary-secret-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并测试" }));
+
+    expect(await screen.findByText("配置已保存。")).toBeTruthy();
+    expect(screen.getByText("服务或配置暂不可用")).toBeTruthy();
+    expect(screen.getByText("已保存")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新测试连接" })).toBeTruthy();
+  });
+
+  it("does not probe when saving the configuration fails", async () => {
+    useDesktopBasemap(false);
+    backendMocks.configureOnlineBasemap.mockRejectedValueOnce(
+      new Error("sensitive backend detail"),
+    );
+    render(<App />);
+    await openDesktopMapSettings();
+
+    fireEvent.change(screen.getByLabelText("天地图 tk"), {
+      target: { value: "temporary-secret-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并测试" }));
+
+    expect(
+      await screen.findByText("在线地图配置未保存。请确认 tk 格式；若缓存接近 2.5 GB，请先清理缓存；若 Windows 本地安全存储（DPAPI）暂不可用，请稍后重试或检查系统状态。"),
+    ).toBeTruthy();
+    expect(screen.queryByText("sensitive backend detail")).toBeNull();
+    expect(backendMocks.probeOnlineBasemap).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["not-configured", "尚未保存配置"],
+    ["network", "网络连接失败"],
+    ["timeout", "连接测试超时"],
+    ["upstream-or-credential", "服务或配置暂不可用"],
+    ["invalid-content", "地图响应内容无效"],
+  ] as const)("maps %s probe failures to actionable local copy", async (status, title) => {
+    useDesktopBasemap(true);
+    backendMocks.probeOnlineBasemap.mockResolvedValueOnce({
+      schemaVersion: 1,
+      status,
+    });
+    render(<App />);
+    await openDesktopMapSettings();
+
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    expect(await screen.findByText(title)).toBeTruthy();
+    expect(backendMocks.configureOnlineBasemap).not.toHaveBeenCalled();
+    expect(backendMocks.probeOnlineBasemap).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "重新测试连接" })).toBeTruthy();
+  });
+
+  it("retries an explicit failed probe and reaches success", async () => {
+    useDesktopBasemap(true);
+    backendMocks.probeOnlineBasemap
+      .mockResolvedValueOnce({ schemaVersion: 1, status: "network" })
+      .mockResolvedValueOnce({ schemaVersion: 1, status: "reachable" });
+    render(<App />);
+    await openDesktopMapSettings();
+
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByText("网络连接失败")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新测试连接" }));
+
+    expect(await screen.findByText("连接测试通过")).toBeTruthy();
+    expect(backendMocks.probeOnlineBasemap).toHaveBeenCalledTimes(2);
+  });
+
+  it("locks the modal while an explicit probe is pending", async () => {
+    useDesktopBasemap(true);
+    const pending = deferred<{ schemaVersion: 1; status: "reachable" }>();
+    backendMocks.probeOnlineBasemap.mockReturnValueOnce(pending.promise);
+    render(<App />);
+    await openDesktopMapSettings();
+
+    const input = screen.getByLabelText("天地图 tk") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "replacement-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    expect(await screen.findByText("正在测试连接…")).toBeTruthy();
+    expect(input.disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "关闭在线地图设置" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "正在测试…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "清除配置" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "保存并测试" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      pending.resolve({ schemaVersion: 1, status: "reachable" });
+      await pending.promise;
+    });
+    expect(await screen.findByText("连接测试通过")).toBeTruthy();
+  });
+
+  it.each(["validation-server", "preview"] as const)(
+    "does not expose or invoke desktop map probing in %s mode",
+    async (mode) => {
+      backendMocks.mode = mode;
+      render(<App />);
+
+      await screen.findByText("等待选择发射点");
+      expect(screen.queryByRole("button", { name: /在线地图/ })).toBeNull();
+      expect(backendMocks.probeOnlineBasemap).not.toHaveBeenCalled();
+    },
+  );
 });
 describe("validation server UI", () => {
   it("discloses remote processing and enables calculation plus browser export", async () => {

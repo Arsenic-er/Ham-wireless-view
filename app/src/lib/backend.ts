@@ -24,6 +24,7 @@ import type {
   OperationStatus,
   OperationTicket,
   OnlineBasemapInfo,
+  OnlineBasemapProbeResult,
   PointInspection,
 } from "./types";
 
@@ -718,6 +719,30 @@ export async function clearOnlineBasemap(): Promise<OnlineBasemapInfo> {
     throw new Error("在线地图设置只在 Tauri Windows 桌面应用中可用。");
   }
   return invoke<OnlineBasemapInfo>("clear_online_basemap");
+}
+
+const ONLINE_BASEMAP_PROBE_STATUSES = new Set([
+  "reachable",
+  "not-configured",
+  "network",
+  "timeout",
+  "upstream-or-credential",
+  "invalid-content",
+]);
+
+export async function probeOnlineBasemap(): Promise<OnlineBasemapProbeResult> {
+  if (!desktopBackendAvailable()) {
+    throw new Error("在线地图连接测试只在 Tauri Windows 桌面应用中可用。");
+  }
+  const result = await invoke<OnlineBasemapProbeResult>("probe_online_basemap");
+  if (
+    !result ||
+    result.schemaVersion !== 1 ||
+    !ONLINE_BASEMAP_PROBE_STATUSES.has(result.status)
+  ) {
+    throw new Error("在线地图连接测试返回了不兼容的结果。");
+  }
+  return result;
 }
 
 export async function bootstrap(): Promise<BootstrapInfo> {

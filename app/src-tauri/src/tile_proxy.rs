@@ -9,6 +9,11 @@ const TOKEN_FILE_NAME: &str = "tianditu-token.dpapi";
 const MIN_ZOOM: u8 = 1;
 const MAX_ZOOM: u8 = 18;
 const MAX_TILE_BYTES: usize = 2 * 1024 * 1024;
+const BASEMAP_PROBE_SCHEMA_VERSION: u8 = 1;
+const PROBE_LAYER: &str = "vec";
+const PROBE_ZOOM: u8 = 8;
+const PROBE_COLUMN: u32 = 215;
+const PROBE_ROW: u32 = 106;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,12 +46,48 @@ impl BasemapInfo {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum BasemapProbeStatus {
+    Reachable,
+    NotConfigured,
+    Network,
+    Timeout,
+    UpstreamOrCredential,
+    InvalidContent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BasemapProbeResult {
+    schema_version: u8,
+    status: BasemapProbeStatus,
+}
+
+impl BasemapProbeResult {
+    fn new(status: BasemapProbeStatus) -> Self {
+        Self {
+            schema_version: BASEMAP_PROBE_SCHEMA_VERSION,
+            status,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TileRequest<'a> {
     layer: &'a str,
     z: u8,
     x: u32,
     y: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TileFetchFailure {
+    Network,
+    Timeout,
+    UpstreamOrCredential,
+    InvalidContent,
+    PayloadTooLarge,
 }
 
 pub(crate) struct TileProxy {
@@ -99,6 +140,31 @@ impl TileProxy {
             .map_err(|_| "online basemap credential state is unavailable".to_string())? = None;
         Ok(BasemapInfo::new(false))
     }
+    pub(crate) fn probe(&self) -> Result<BasemapProbeResult, String> {
+        let token = self
+            .token
+            .read()
+            .map_err(|_| "online basemap credential state is unavailable".to_string())?
+            .as_ref()
+            .cloned();
+        let Some(token) = token else {
+            return Ok(BasemapProbeResult::new(
+                BasemapProbeStatus::NotConfigured,
+            ));
+        };
+        let tile = TileRequest {
+            layer: PROBE_LAYER,
+            z: PROBE_ZOOM,
+            x: PROBE_COLUMN,
+            y: PROBE_ROW,
+        };
+        let status = match self.fetch_tile_checked(tile, &token) {
+            Ok(_) => BasemapProbeStatus::Reachable,
+            Err(error) => error.probe_status(),
+        };
+        Ok(BasemapProbeResult::new(status))
+    }
+
     pub(crate) fn handle(&self, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         if request.method() != Method::GET || !request.body().is_empty() {
             return reply(
@@ -139,6 +205,15 @@ impl TileProxy {
         tile: TileRequest<'_>,
         token: &str,
     ) -> Result<(&'static str, Vec<u8>), StatusCode> {
+        self.fetch_tile_checked(tile, token)
+            .map_err(TileFetchFailure::protocol_status)
+    }
+
+    fn fetch_tile_checked(
+        &self,
+        tile: TileRequest<'_>,
+        token: &str,
+    ) -> Result<(&'static str, Vec<u8>), TileFetchFailure> {
         let url = tile_url(tile, token);
         let mut response = self
             .http
@@ -146,18 +221,18 @@ impl TileProxy {
             .header("Accept", "image/png,image/jpeg")
             .header("Accept-Encoding", "identity")
             .call()
-            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+            .map_err(|error| classify_request_error(&error))?;
         if response.status() != StatusCode::OK {
-            return Err(StatusCode::BAD_GATEWAY);
+            return Err(TileFetchFailure::UpstreamOrCredential);
         }
         if let Some(value) = response.headers().get(header::CONTENT_LENGTH) {
             let size = value
                 .to_str()
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
-                .ok_or(StatusCode::BAD_GATEWAY)?;
+                .ok_or(TileFetchFailure::InvalidContent)?;
             if size > MAX_TILE_BYTES {
-                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+                return Err(TileFetchFailure::PayloadTooLarge);
             }
         }
         let mime = response
@@ -165,23 +240,57 @@ impl TileProxy {
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .and_then(normalize_mime)
-            .ok_or(StatusCode::BAD_GATEWAY)?;
+            .ok_or(TileFetchFailure::InvalidContent)?;
         let body = response
             .body_mut()
             .with_config()
             .limit((MAX_TILE_BYTES + 1) as u64)
             .read_to_vec()
-            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+            .map_err(|error| classify_request_error(&error))?;
         if body.len() > MAX_TILE_BYTES {
-            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            return Err(TileFetchFailure::PayloadTooLarge);
         }
         if !valid_signature(mime, &body) {
-            return Err(StatusCode::BAD_GATEWAY);
+            return Err(TileFetchFailure::InvalidContent);
         }
         Ok((mime, body))
     }
 }
 
+impl TileFetchFailure {
+    fn probe_status(self) -> BasemapProbeStatus {
+        match self {
+            Self::Network => BasemapProbeStatus::Network,
+            Self::Timeout => BasemapProbeStatus::Timeout,
+            Self::UpstreamOrCredential => BasemapProbeStatus::UpstreamOrCredential,
+            Self::InvalidContent | Self::PayloadTooLarge => BasemapProbeStatus::InvalidContent,
+        }
+    }
+
+    fn protocol_status(self) -> StatusCode {
+        match self {
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::Network
+            | Self::Timeout
+            | Self::UpstreamOrCredential
+            | Self::InvalidContent => StatusCode::BAD_GATEWAY,
+        }
+    }
+}
+
+fn classify_request_error(error: &ureq::Error) -> TileFetchFailure {
+    match error {
+        ureq::Error::Timeout(_) => TileFetchFailure::Timeout,
+        ureq::Error::StatusCode(_)
+        | ureq::Error::RedirectFailed
+        | ureq::Error::TooManyRedirects => TileFetchFailure::UpstreamOrCredential,
+        ureq::Error::Protocol(_)
+        | ureq::Error::BodyExceedsLimit(_)
+        | ureq::Error::LargeResponseHeader(_, _)
+        | ureq::Error::BodyStalled => TileFetchFailure::InvalidContent,
+        _ => TileFetchFailure::Network,
+    }
+}
 fn validate_token(token: &str) -> Result<(), String> {
     if !(16..=128).contains(&token.len()) || !token.bytes().all(|v| v.is_ascii_alphanumeric()) {
         return Err("天地图 tk 必须为 16 到 128 位 ASCII 字母或数字".to_string());
@@ -699,6 +808,99 @@ mod tests {
         assert!(!body.contains(upstream_url.as_str()));
         assert!(!body.contains(token));
     }
+
+    #[test]
+    fn probe_result_schema_and_statuses_are_fixed_and_redacted() {
+        let cases = [
+            (BasemapProbeStatus::Reachable, "reachable"),
+            (BasemapProbeStatus::NotConfigured, "not-configured"),
+            (BasemapProbeStatus::Network, "network"),
+            (BasemapProbeStatus::Timeout, "timeout"),
+            (
+                BasemapProbeStatus::UpstreamOrCredential,
+                "upstream-or-credential",
+            ),
+            (BasemapProbeStatus::InvalidContent, "invalid-content"),
+        ];
+        for (status, expected) in cases {
+            let value = serde_json::to_value(BasemapProbeResult::new(status)).unwrap();
+            assert_eq!(value["schemaVersion"], serde_json::json!(1));
+            assert_eq!(value["status"], serde_json::json!(expected));
+            assert_eq!(value.as_object().unwrap().len(), 2);
+            let encoded = value.to_string();
+            for forbidden in ["tk", "url", "body", "path", TILE_HOST] {
+                assert!(!encoded.contains(forbidden));
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn probe_without_credentials_returns_without_network() {
+        let root = std::env::temp_dir().join(format!(
+            "hamheatmap-probe-unconfigured-{}",
+            std::process::id()
+        ));
+        let proxy = TileProxy::new(&root);
+        assert_eq!(
+            proxy.probe().unwrap(),
+            BasemapProbeResult::new(BasemapProbeStatus::NotConfigured)
+        );
+        assert!(!root.join("settings").join(TOKEN_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn probe_tile_is_a_fixed_representative_request() {
+        let tile = TileRequest {
+            layer: PROBE_LAYER,
+            z: PROBE_ZOOM,
+            x: PROBE_COLUMN,
+            y: PROBE_ROW,
+        };
+        assert_eq!(
+            tile,
+            TileRequest {
+                layer: "vec",
+                z: 8,
+                x: 215,
+                y: 106,
+            }
+        );
+        let actual = tile_url(tile, "1234567890abcdef");
+        assert_eq!(
+            actual.as_str(),
+            "https://t0.tianditu.gov.cn/vec_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILECOL=215&TILEROW=106&TILEMATRIX=8&tk=1234567890abcdef"
+        );
+    }
+
+    #[test]
+    fn probe_failure_categories_are_stable() {
+        assert_eq!(
+            classify_request_error(&ureq::Error::Timeout(ureq::Timeout::Global)),
+            TileFetchFailure::Timeout
+        );
+        assert_eq!(
+            classify_request_error(&ureq::Error::HostNotFound),
+            TileFetchFailure::Network
+        );
+        assert_eq!(
+            classify_request_error(&ureq::Error::StatusCode(401)),
+            TileFetchFailure::UpstreamOrCredential
+        );
+        assert_eq!(
+            classify_request_error(&ureq::Error::BodyExceedsLimit(1)),
+            TileFetchFailure::InvalidContent
+        );
+        assert_eq!(
+            TileFetchFailure::PayloadTooLarge.probe_status(),
+            BasemapProbeStatus::InvalidContent
+        );
+        assert_eq!(
+            TileFetchFailure::PayloadTooLarge.protocol_status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
     #[test]
     #[cfg(windows)]
     fn dpapi_round_trip() {

@@ -1530,6 +1530,65 @@ fieldset {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
 }
+
+.online-map-probe {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.online-map-probe > span {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.online-map-probe > strong {
+  font-size: 11px;
+}
+
+.online-map-form .online-map-probe > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.online-map-probe.success {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: var(--accent-soft);
+}
+
+.online-map-probe.success > strong {
+  color: var(--accent-strong);
+}
+
+.online-map-probe.warning {
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+  background: var(--warning-soft);
+}
+
+.online-map-probe.warning > strong {
+  color: var(--warning);
+}
+
+.online-map-probe.error {
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
+}
+
+.online-map-probe.error > strong {
+  color: var(--danger);
+}
+
+.online-map-modal .modal-actions {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
 @keyframes pulse {
   50% {
     box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 2%, transparent);

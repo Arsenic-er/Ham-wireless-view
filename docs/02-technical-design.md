@@ -237,6 +237,8 @@ EOxCloudless 只是视觉背景，不进入 DEM/WBM 采样、ITM、路径陆水�
 
 `configure_online_basemap` 校验用户输入后，在 Windows 用当前用户作用域 DPAPI 保存密文；`clear_online_basemap` 删除密文并立即回到未配置态。前端 Key 字段只保存本次编辑的临时值，不进入 localStorage、sessionStorage、查询字符串、bootstrap、错误文本或日志。非 Windows 编译只支持测试所需的内存态，不得用明文文件持久化。
 
+`probe_online_basemap` 只由设置界面的显式操作调用，并在桌面单操作门闩内通过固定中国区域代表瓦片复用同一 HTTPS 代理校验链。schema 1 响应只允许 `reachable/not-configured/network/timeout/upstream-or-credential/invalid-content` 六种状态，不返回 Key、上游 URL、响应正文、路径或供应方错误细节；界面文案由本地固定映射生成。保存成功不自动等价于连接成功，`upstream-or-credential` 也不能被解释为已精确判定 Key 无效。
+
 自定义协议后端只接受 `vec/cva/img/cia`、规范十进制坐标和 z1-18；它固定构造 `https://t0.tianditu.gov.cn` WMTS 请求，拒绝重定向，限制连接/读取/总超时与 2 MiB 响应体，同时验证成功状态、图片 MIME 和 PNG/JPEG 签名。响应统一 `Cache-Control: no-store`，不写入 SQLite、缓存目录、浏览器存储或 Service Worker。
 
 桌面 CSP 的 `img-src` 和 `connect-src` 都只放行 `tianditu:` 自定义协议及其 Windows 映射域 `http://tianditu.localhost`、`https://tianditu.localhost`；不开放任意公网 HTTPS。设置入口只在 Tauri 模式可见；普通 preview 和 validation-server 不获得桌面命令能力。地图/卫星切换不改变发射点、传播输入、热力图或相机。未配置 Key、断网、配额或上游错误都 fail closed，并保留可行动的设置提示。

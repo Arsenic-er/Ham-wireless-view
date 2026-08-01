@@ -1648,6 +1648,7 @@ dependencies = [
  "hamheatmap-cache",
  "hamheatmap-export",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

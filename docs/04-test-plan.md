@@ -62,6 +62,9 @@
 - 样式暂时未就绪时的清空不得丢失；style 恢复后必须删除全部旧 heatmap layer/source 并逐项释放 Blob URL。
 - 地图右下显示随缩放和平移变化的公制比例尺，左下发射点坐标不被遮挡。
 - DEM 自动/手动界面显示 DEM 参考值与有效天线 AMSL，且不把 AMSL 误当新的传播输入。
+- Windows 在线地图设置分别显示“配置已保存”和代表瓦片连接自检结果；保存失败、自检失败与自检通过不能共用误导性成功文案。
+- 自检只能由用户显式触发；重新测试、清除配置、busy 阻断和关闭重开均保持确定状态，普通 preview 与 validation-server 不暴露该入口。
+- 自检响应严格为 schema 1 固定状态集合，非法 schema/状态 fail closed；界面不显示 Key、上游 URL、响应正文、路径或供应方内部错误。
 - validation-server 模式中，计算与下载进度由约 250 ms 的非重叠状态轮询驱动，并复用 Tauri 已有的进度监听接口。
 - 多标签页同时存在时，取消只影响本页 exact operation ID；旧 ID、旧 generation 或迟到 poll 不能覆盖新任务进度/结果。
 
@@ -708,7 +711,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 - [x] Rust 单元测试覆盖 `vec/cva/img/cia`、规范瓦片坐标与矩阵边界、固定 Web Mercator WMTS URL、无 `tk` 禁用、输入校验、PNG/JPEG MIME 与签名、配额边界和错误响应不泄漏凭据。
 - [x] Windows xwin all-target check、严格 Clippy 和 `test --no-run` 均通过，覆盖 Windows DPAPI FFI 与测试程序编译；非 Windows 回退测试确认不创建明文凭据文件。
-- [x] 前端只信任固定 `Tianditu + tianditu:` 元数据和四个完整模板；设置入口只在 Tauri 模式出现，临时 `tk` 不进入 Web Storage、URL、bootstrap 或渲染文本。
+- [x] 前端只信任固定 `Tianditu + tianditu:` 元数据和四个完整模板；设置入口只在 Tauri 模式出现，临时 `tk` 不进入 Web Storage、WebView URL、bootstrap 或渲染文本；原生代理仅按供应方协议把它加入固定 HTTPS 上游请求。
 - [x] MapView 自动化覆盖普通地图 `vec+cva`、卫星图 `img+cia`、切换保持相机/覆盖层/发射点，以及未配置时 fail closed。
 - [x] production/dev CSP 只放行 `tianditu:` 及其固定 Tauri localhost 映射，不增加任意远程 HTTPS 图片源或脚本源。
 - [x] 在线瓦片强制 `no-store`，不写入持久缓存、不计入 2.5 GB DEM/WBM 配额，也不进入诊断 PNG/PDF。
@@ -760,3 +763,22 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] 下载后的 SHA-256 与服务器受验产物一致；发布说明明确未签名、SmartScreen、Windows 实机和真实网络待验边界。
 - [x] 本轮 Release 内容审计确认不含四省内部 PMTiles、EOxCloudless 离线副本、DEM/WBM、密钥、源码依赖或构建缓存。
 - [ ] 后续正式离线地图包只有在授权、审图/边界、不可变 manifest、SHA-256、partial/原子 ready、缓存页可删除及十进制 2.5 GB 全量计费均通过后才能发布。
+
+## 33. Windows 天地图显式连接自检（2026-08-01，自动化与交叉编译已通过）
+
+### 33.1 已完成行为
+
+- [x] 保存配置与连接自检分离；保存成功后才探测，探测失败不会删除已经保存的 DPAPI 配置。
+- [x] 已保存配置可单独测试和重新测试；清除配置重置结果，busy 期间输入、关闭、保存、测试和清除均被阻断。
+- [x] 探测固定 `vec/8/215/106`，复用正式代理的 HTTPS-only、零重定向、有限超时、2 MiB、MIME 与 PNG/JPEG 签名校验。
+- [x] schema 1 只序列化 `schemaVersion/status`；六种状态固定，前端未知 schema/状态 fail closed，后端正文不回显。
+- [x] 临时 `tk` 不进入 Web Storage、WebView URL、bootstrap、DOM 文本或测试结果；原生代理仅按供应方协议把它加入固定 HTTPS 上游请求，探测不写瓦片缓存、SQLite 或诊断导出。
+- [x] 普通 preview 与 validation-server 不显示入口，也不会调用桌面探测命令。
+
+### 33.2 执行证据与边界
+
+- [x] TypeScript check、13 个前端测试文件/111 项测试和 production build 通过。
+- [x] Rust workspace `114 passed / 5 ignored`、rustfmt 与 workspace Clippy `-D warnings` 通过。
+- [x] Windows xwin all-target check、测试程序 `--no-run` 与严格 Clippy 通过；只有既有缺失 MSVC PDB 的 LNK4099 非阻断警告。
+- [ ] 服务器缺少 Tauri Linux 主机测试所需的 pkg-config/libdbus，因此本轮只执行 Windows 测试程序交叉编译，没有把该限制写成运行通过。
+- [ ] 有效个人 `tk`、中国大陆真实网络、Windows 10/11 DPAPI/WebView2、弱网、额度与上游故障仍需实机验收。

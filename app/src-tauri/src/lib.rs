@@ -18,7 +18,9 @@ mod tile_proxy;
 use operation_state::{CancellationTarget, DesktopOperation, DesktopOperationController};
 #[cfg(windows)]
 use tauri_plugin_dialog::DialogExt;
-use tile_proxy::{BasemapInfo, TILE_PROTOCOL_SCHEME, TileProxy};
+use tile_proxy::{
+    BasemapInfo, BasemapProbeResult, TILE_PROTOCOL_SCHEME, TileProxy,
+};
 
 struct DesktopState {
     data_root: PathBuf,
@@ -284,6 +286,23 @@ fn clear_online_basemap(state: State<'_, DesktopState>) -> Result<BasemapInfo, S
 }
 
 #[tauri::command]
+async fn probe_online_basemap(
+    state: State<'_, DesktopState>,
+) -> Result<BasemapProbeResult, String> {
+    let lease = state
+        .operations
+        .begin(DesktopOperation::ConfiguringBasemap)?;
+    let tile_proxy = Arc::clone(&state.tile_proxy);
+    let join_result =
+        tauri::async_runtime::spawn_blocking(move || tile_proxy.probe()).await;
+    let outcome = match join_result {
+        Ok(outcome) => outcome,
+        Err(error) => Err(format!("online basemap probe worker failed: {error}")),
+    };
+    lease.finish(outcome)
+}
+
+#[tauri::command]
 fn cancel_calculation(state: State<'_, DesktopState>) {
     let _ = state.operations.cancel(CancellationTarget::Calculation);
 }
@@ -340,7 +359,8 @@ pub fn run() {
             cancel_download,
             get_online_basemap,
             configure_online_basemap,
-            clear_online_basemap
+            clear_online_basemap,
+            probe_online_basemap,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run HamHeatmap desktop application");

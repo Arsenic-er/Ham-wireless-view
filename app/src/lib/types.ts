@@ -61,7 +61,18 @@ export interface OnlineBasemapInfo {
   maxZoom: number;
 }
 
+export type OnlineBasemapProbeStatus =
+  | "reachable"
+  | "not-configured"
+  | "network"
+  | "timeout"
+  | "upstream-or-credential"
+  | "invalid-content";
 
+export interface OnlineBasemapProbeResult {
+  schemaVersion: 1;
+  status: OnlineBasemapProbeStatus;
+}
 export interface CacheUsage {
   totalBytes: number;
   demBytes: number;

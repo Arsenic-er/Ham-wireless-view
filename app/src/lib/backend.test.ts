@@ -19,6 +19,7 @@ import {
   listenCalculationPreview,
   listenCalculationProgress,
   listenDownloadProgress,
+  probeOnlineBasemap,
 } from "./backend";
 import type {
   CalculationPreview,
@@ -117,6 +118,9 @@ describe("backend mode", () => {
       if (command === "clear_online_basemap") {
         return Promise.resolve({ ...onlineBasemap, configured: false });
       }
+      if (command === "probe_online_basemap") {
+        return Promise.resolve({ schemaVersion: 1, status: "reachable" });
+      }
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
@@ -136,6 +140,10 @@ describe("backend mode", () => {
       ...onlineBasemap,
       configured: false,
     });
+    await expect(probeOnlineBasemap()).resolves.toEqual({
+      schemaVersion: 1,
+      status: "reachable",
+    });
 
     expect(invokeMock).toHaveBeenCalledWith(
       "configure_online_basemap",
@@ -148,7 +156,32 @@ describe("backend mode", () => {
       "get_online_basemap",
       "configure_online_basemap",
       "clear_online_basemap",
+      "probe_online_basemap",
     ]);
+  });
+
+  it("rejects probing outside Tauri with a stable localized error", async () => {
+    removeTauriInternals();
+
+    await expect(probeOnlineBasemap()).rejects.toThrow(
+      "在线地图连接测试只在 Tauri Windows 桌面应用中可用。",
+    );
+  });
+
+  it("rejects an incompatible probe result without exposing backend text", async () => {
+    const invokeMock = vi.fn().mockResolvedValue({
+      schemaVersion: 1,
+      status: "unexpected",
+      message: "sensitive backend detail",
+    });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: { invoke: invokeMock },
+    });
+
+    await expect(probeOnlineBasemap()).rejects.toThrow(
+      "在线地图连接测试返回了不兼容的结果。",
+    );
   });
 
   it("falls back to grid metadata when desktop online metadata loading fails", async () => {

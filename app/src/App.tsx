@@ -19,6 +19,7 @@ import {
   listenCalculationPreview,
   listenCalculationProgress,
   listenDownloadProgress,
+  probeOnlineBasemap,
 } from "./lib/backend";
 import {
   isTrustedProtomapsBasemap,
@@ -47,6 +48,7 @@ import type {
   DownloadProgress,
   ExportFormat,
   MapPoint,
+  OnlineBasemapProbeResult,
   PointInspection,
   RadioParameters,
   ResolvedTheme,
@@ -82,6 +84,56 @@ function phaseLabel(progress: CalculationProgress | null): string {
       return "正在生成热力图";
     case "complete":
       return "计算完成";
+  }
+}
+
+type OnlineBasemapProbePresentation = {
+  tone: "success" | "warning" | "error";
+  title: string;
+  detail: string;
+};
+
+function describeOnlineBasemapProbe(
+  status: OnlineBasemapProbeResult["status"],
+): OnlineBasemapProbePresentation {
+  switch (status) {
+    case "reachable":
+      return {
+        tone: "success",
+        title: "连接测试通过",
+        detail: "天地图瓦片服务当前可访问。实际显示仍取决于各缩放级别的服务状态。",
+      };
+    case "not-configured":
+      return {
+        tone: "warning",
+        title: "尚未保存配置",
+        detail: "请先输入天地图 tk，然后点击“保存并测试”。",
+      };
+    case "network":
+      return {
+        tone: "error",
+        title: "网络连接失败",
+        detail: "请检查网络、代理或防火墙设置，然后重新测试连接。",
+      };
+    case "timeout":
+      return {
+        tone: "warning",
+        title: "连接测试超时",
+        detail: "请稍后重试，并检查当前网络是否稳定。",
+      };
+    case "upstream-or-credential":
+      return {
+        tone: "warning",
+        title: "服务或配置暂不可用",
+        detail:
+          "可能与 tk、账号权限、调用配额或天地图服务状态有关；自检无法精确区分，请在天地图控制台检查后重试。",
+      };
+    case "invalid-content":
+      return {
+        tone: "error",
+        title: "地图响应内容无效",
+        detail: "请稍后重试；如果持续出现，请检查代理或网络内容拦截设置。",
+      };
   }
 }
 
@@ -147,7 +199,13 @@ export function App() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [mapSettingsOpen, setMapSettingsOpen] = useState(false);
   const [mapToken, setMapToken] = useState("");
-  const [mapSettingsBusy, setMapSettingsBusy] = useState(false);
+  const [mapSettingsAction, setMapSettingsAction] = useState<
+    "saving-and-testing" | "testing" | "clearing" | null
+  >(null);
+  const mapSettingsBusy = mapSettingsAction !== null;
+  const [mapProbeResult, setMapProbeResult] =
+    useState<OnlineBasemapProbeResult | null>(null);
+  const [mapProbeUnexpectedError, setMapProbeUnexpectedError] = useState(false);
   const [mapSettingsMessage, setMapSettingsMessage] = useState<string | null>(null);
   const [mapSettingsError, setMapSettingsError] = useState<string | null>(null);
 
@@ -634,11 +692,17 @@ export function App() {
     setPreview(null);
     if (result) setResultStale(true);
   }
+  function resetMapProbeState() {
+    setMapProbeResult(null);
+    setMapProbeUnexpectedError(false);
+  }
+
   function openMapSettings() {
     if (!desktopMode || isBusy) return;
     setMapToken("");
     setMapSettingsMessage(null);
     setMapSettingsError(null);
+    resetMapProbeState();
     setMapSettingsOpen(true);
   }
 
@@ -647,7 +711,27 @@ export function App() {
     setMapToken("");
     setMapSettingsMessage(null);
     setMapSettingsError(null);
+    resetMapProbeState();
     setMapSettingsOpen(false);
+  }
+
+  async function handleProbeOnlineBasemap() {
+    if (
+      mapSettingsBusy ||
+      bootstrapInfo?.onlineBasemap?.configured !== true
+    ) {
+      return;
+    }
+    setMapSettingsAction("testing");
+    setMapSettingsError(null);
+    resetMapProbeState();
+    try {
+      setMapProbeResult(await probeOnlineBasemap());
+    } catch {
+      setMapProbeUnexpectedError(true);
+    } finally {
+      setMapSettingsAction(null);
+    }
   }
 
   async function handleConfigureOnlineBasemap() {
@@ -656,9 +740,10 @@ export function App() {
       setMapSettingsError("请输入天地图 tk。");
       return;
     }
-    setMapSettingsBusy(true);
+    setMapSettingsAction("saving-and-testing");
     setMapSettingsMessage(null);
     setMapSettingsError(null);
+    resetMapProbeState();
     try {
       const onlineBasemap = await configureOnlineBasemap(mapToken);
       setBootstrapInfo((current) =>
@@ -666,27 +751,30 @@ export function App() {
           ? { ...current, basemap: undefined, onlineBasemap }
           : current,
       );
-      setMapSettingsMessage("在线地图已配置。地图和卫星影像均通过本机安全代理读取。");
-    } catch (error: unknown) {
-      const detail =
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "请检查 tk 格式或先删除部分缓存。";
-      setMapSettingsError("在线地图配置失败：" + detail);
+      setMapToken("");
+      setMapSettingsMessage("配置已保存。");
+      try {
+        setMapProbeResult(await probeOnlineBasemap());
+      } catch {
+        setMapProbeUnexpectedError(true);
+      }
+    } catch {
+      setMapSettingsError(
+        "在线地图配置未保存。请确认 tk 格式；若缓存接近 2.5 GB，请先清理缓存；若 Windows 本地安全存储（DPAPI）暂不可用，请稍后重试或检查系统状态。",
+      );
     } finally {
       setMapToken("");
-      setMapSettingsBusy(false);
+      setMapSettingsAction(null);
     }
   }
 
   async function handleClearOnlineBasemap() {
     if (mapSettingsBusy) return;
-    setMapSettingsBusy(true);
+    setMapSettingsAction("clearing");
     setMapToken("");
     setMapSettingsMessage(null);
     setMapSettingsError(null);
+    resetMapProbeState();
     try {
       const onlineBasemap = await clearOnlineBasemap();
       setBootstrapInfo((current) =>
@@ -699,7 +787,7 @@ export function App() {
       setMapSettingsError("无法清除在线地图配置，请稍后重试。");
     } finally {
       setMapToken("");
-      setMapSettingsBusy(false);
+      setMapSettingsAction(null);
     }
   }
 
@@ -730,6 +818,10 @@ export function App() {
   );
   const trustedOnlineBasemap =
     desktopMode && isTrustedOnlineBasemap(bootstrapInfo?.onlineBasemap);
+  const savedOnlineBasemap = bootstrapInfo?.onlineBasemap?.configured === true;
+  const mapProbePresentation = mapProbeResult
+    ? describeOnlineBasemapProbe(mapProbeResult.status)
+    : null;
   const basemapStatus = trustedOnlineBasemap
     ? "已接入天地图在线矢量、中文地名及卫星影像；网络不可用时自动回退 WGS84 网格。"
     : isTrustedProtomapsBasemap(bootstrapInfo?.basemap)
@@ -1000,8 +1092,8 @@ export function App() {
               </button>
             </div>
             <div className="online-map-status">
-              <span>当前状态</span>
-              <strong>{trustedOnlineBasemap ? "已配置" : "未配置"}</strong>
+              <span>配置状态</span>
+              <strong>{savedOnlineBasemap ? "已保存" : "未保存"}</strong>
             </div>
             <form
               className="online-map-form"
@@ -1018,7 +1110,11 @@ export function App() {
                 autoComplete="new-password"
                 spellCheck={false}
                 disabled={mapSettingsBusy}
-                placeholder={trustedOnlineBasemap ? "输入新的 tk 以替换现有配置" : "输入天地图控制台提供的 tk"}
+                placeholder={
+                  savedOnlineBasemap
+                    ? "输入新的 tk 以替换现有配置"
+                    : "输入天地图控制台提供的 tk"
+                }
                 onChange={(event) => setMapToken(event.target.value)}
               />
               <p>
@@ -1026,20 +1122,63 @@ export function App() {
               </p>
               {mapSettingsMessage && <p className="online-map-message">{mapSettingsMessage}</p>}
               {mapSettingsError && <p className="online-map-error">{mapSettingsError}</p>}
+              <div
+                className={`online-map-probe ${mapProbePresentation?.tone ?? (mapProbeUnexpectedError ? "error" : "idle")}`}
+                aria-live="polite"
+              >
+                <span>连接自检</span>
+                {mapSettingsAction === "testing" ||
+                mapSettingsAction === "saving-and-testing" ? (
+                  <>
+                    <strong>正在测试连接…</strong>
+                    <p>正在请求一个小型地图瓦片，不会批量下载或写入地图缓存。</p>
+                  </>
+                ) : mapProbePresentation ? (
+                  <>
+                    <strong>{mapProbePresentation.title}</strong>
+                    <p>{mapProbePresentation.detail}</p>
+                  </>
+                ) : mapProbeUnexpectedError ? (
+                  <>
+                    <strong>连接自检未完成</strong>
+                    <p>请稍后重新测试；已保存的配置不会因此被删除。</p>
+                  </>
+                ) : (
+                  <>
+                    <strong>尚未测试</strong>
+                    <p>只有点击“保存并测试”或“测试连接”时才会访问天地图服务。</p>
+                  </>
+                )}
+              </div>
               <div className="modal-actions">
                 <button
                   type="button"
-                  disabled={mapSettingsBusy || bootstrapInfo?.onlineBasemap?.configured !== true}
+                  disabled={mapSettingsBusy || !savedOnlineBasemap}
                   onClick={() => void handleClearOnlineBasemap()}
                 >
-                  清除配置
+                  {mapSettingsAction === "clearing" ? "正在清除…" : "清除配置"}
                 </button>
+                {savedOnlineBasemap && (
+                  <button
+                    type="button"
+                    disabled={mapSettingsBusy}
+                    onClick={() => void handleProbeOnlineBasemap()}
+                  >
+                    {mapSettingsAction === "testing"
+                      ? "正在测试…"
+                      : mapProbeResult || mapProbeUnexpectedError
+                        ? "重新测试连接"
+                        : "测试连接"}
+                  </button>
+                )}
                 <button
                   type="submit"
                   className="confirm-download"
                   disabled={mapSettingsBusy || !mapToken.trim()}
                 >
-                  {mapSettingsBusy ? "正在应用…" : "保存并启用"}
+                  {mapSettingsAction === "saving-and-testing"
+                    ? "正在保存并测试…"
+                    : "保存并测试"}
                 </button>
               </div>
             </form>

@@ -125,6 +125,15 @@ revision `6e9714c6cdcdeb54ff47e229d8d43b18bf32b3c6` 于 2026-07-31 完成受管 
 
 `GET /api/bootstrap` 返回固定天地图元数据、`enabled=false`，且不包含 token 或上游主机。合法 `GET /api/basemap/tianditu/vec/3/6/3` 返回 HTTP 503、JSON 和 `Cache-Control: no-store`。这证明未配置 token 时服务不会伪造或回退到来源不明的瓦片；它不证明真实上游可用。
 
+### Windows 显式连接自检
+
+Windows/Tauri 设置界面增加“保存并测试”和“测试连接”。保存只说明 DPAPI 密文已经原子提交；随后或单独点击测试时，`probe_online_basemap` 才访问固定中国区域代表瓦片。探测复用正式瓦片代理的 HTTPS-only、零重定向、超时、2 MiB、MIME 与图片签名门禁，不写缓存、SQLite、浏览器存储或诊断报告。
+
+结果契约固定为 schema 1 和六种脱敏状态：`reachable`、`not-configured`、`network`、`timeout`、`upstream-or-credential`、`invalid-content`。前端拒绝未知 schema/状态，全部中文提示由本地固定映射生成；响应不包含 token、上游 URL、响应正文、文件路径或供应方错误。由于供应方可能用相同 HTTP 状态表示无效 Key、额度、权限和服务故障，产品不得把 `upstream-or-credential` 说成已精确定位某一种原因。
+
+该自检只证明测试时点的一张代表瓦片可以通过完整校验链，不承诺所有图层、缩放级别、地区或未来时刻持续可用。真实有效个人 `tk`、中国大陆 ISP、Windows DPAPI 和 WebView2 仍需实机验收。
+
+
 ## 9. 尚未验证与发布门槛
 
 当前 token 未配置，因此没有请求真实天地图瓦片，也没有记录上游 HTTP 200、瓦片哈希、浏览器截图、控制台结果、弱网表现或调用额度。代码级测试不能替代真实上游烟雾。
