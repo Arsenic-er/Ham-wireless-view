@@ -1,3 +1,8 @@
+# Ham Wireless View
+# Project creator and lead developer: Arsenic-er
+# SPDX-FileCopyrightText: 2026 Arsenic-er
+# SPDX-License-Identifier: Apache-2.0
+
 name: core
 
 on:
@@ -5,6 +10,15 @@ on:
   pull_request:
 
 jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check source attribution coverage
+        run: python3 scripts/check-source-attribution.py
+      - name: Verify localized README pages
+        run: python3 scripts/check-readme-locales.py
+
   test:
     strategy:
       fail-fast: false
