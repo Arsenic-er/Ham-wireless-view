@@ -779,6 +779,8 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 - [x] TypeScript check、13 个前端测试文件/111 项测试和 production build 通过。
 - [x] Rust workspace `114 passed / 5 ignored`、rustfmt 与 workspace Clippy `-D warnings` 通过。
+- [x] 基于提交 `9b0fb79` 完成全新 Windows 交叉构建，并通过 `verify-windows-artifacts.sh`；独立 EXE 为 16,174,080 bytes / `a1968a48...8247`，NSIS 为 217,265,419 bytes / `4df826b0...bc0e`。
+- [x] `v0.1.0-alpha.2` GitHub 预发行版已公开上传两个 EXE 与 `SHA256SUMS.txt`；包内审计确认不含离线地图、DEM/WBM、个人 `tk`、源码或构建缓存。
 - [x] Windows xwin all-target check、测试程序 `--no-run` 与严格 Clippy 通过；只有既有缺失 MSVC PDB 的 LNK4099 非阻断警告。
 - [ ] 服务器缺少 Tauri Linux 主机测试所需的 pkg-config/libdbus，因此本轮只执行 Windows 测试程序交叉编译，没有把该限制写成运行通过。
 - [ ] 有效个人 `tk`、中国大陆真实网络、Windows 10/11 DPAPI/WebView2、弱网、额度与上游故障仍需实机验收。

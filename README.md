@@ -8,25 +8,25 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 
 - 私有 validation 服务已在服务器运行，只监听 `127.0.0.1:1421`，需通过 SSH 隧道访问。
 - 已可使用四省区域地图、中文地名、联网卫星图、真实 DEM/WBM + ITM 计算、最多 8 个会话覆盖层、动态比例尺，以及浏览器本地诊断 PNG/PDF 导出。
-- 已实现 -140..-60 dBm、1 dB 步长的全局显示阈值游标；它动态隐藏较弱像素，不重新计算传播结果，也不改变统计与本轮导出内容。门禁通过前端 98 项、Rust workspace 114 项（另 5 项环境型测试忽略）和三组真实缓存 HTTP 烟测；8 层服务器 CPU 微基准 P95 为 5.982 ms。受管浏览器拖动因 Codex Windows ACL 故障尚未完成，Windows WebView2 实机仍待验。
+- 已实现 -140..-60 dBm、1 dB 步长的全局显示阈值游标；它动态隐藏较弱像素，不重新计算传播结果，也不改变统计与本轮导出内容。当前门禁通过前端 111 项、Rust workspace 114 项（另 5 项环境型测试忽略）和三组真实缓存 HTTP 烟测；8 层服务器 CPU 微基准 P95 为 5.982 ms。受管浏览器拖动因 Codex Windows ACL 故障尚未完成，Windows WebView2 实机仍待验。
 - 四省 PMTiles 和 EOxCloudless 仅供内部验证，不属于公开 Windows 发行资产。
 
 ### Windows Alpha
 
-- Windows/Tauri 已支持在线天地图普通地图与卫星图；用户自行配置 `tk`，Windows 使用当前用户 DPAPI 加密保存，在线瓦片不进入 2.5 GB 缓存或诊断导出。
-- v0.1.0-alpha.1 已从提交 671a2ee 重新交叉构建并上传 GitHub Release：独立 EXE 16,109,568 bytes，内嵌离线 WebView2 的 NSIS 安装包 217,249,212 bytes。
+- Windows/Tauri 已支持在线天地图普通地图与卫星图；用户自行配置 `tk`，Windows 使用当前用户 DPAPI 加密保存，在线瓦片不进入 2.5 GB 缓存或诊断导出。Alpha 2 增加显式连接自检，清楚区分“配置已保存”与“在线地图可达”，且探测不写瓦片缓存。
+- v0.1.0-alpha.2 已从提交 9b0fb79 重新交叉构建并上传 GitHub Release：独立 EXE 16,174,080 bytes，内嵌离线 WebView2 的 NSIS 安装包 217,265,419 bytes。
 - Release 同时提供 SHA256SUMS.txt；两个 Windows 产物均未签名，Windows 10/11 实机、SmartScreen、安装/卸载和中国大陆真实网络仍待验证。
 - 本轮 Windows Release **不含离线地图**。后续离线地图包必须使用正式授权资产，带版本、大小与校验和，可由用户删除，并与 DEM/WBM 等全部持久数据共同计入不可修改的十进制 2.5 GB 上限；现有四省内部 PMTiles 不得打入公开 EXE。
 
 ## Windows 下载
 
-请直接打开 [v0.1.0-alpha.1 发布页](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.1) 下载：
+请直接打开 [v0.1.0-alpha.2 发布页](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.2) 下载：
 
 - `HamHeatmap.exe`：独立程序；目标电脑需要已有 WebView2 Runtime。
 - `HamHeatmap_*_x64-setup.exe`：当前用户安装包；内嵌 WebView2 离线安装组件，体积更大。
 - `SHA256SUMS.txt`：下载后校验文件完整性。
 
-SHA-256：HamHeatmap.exe 为 990d559fc05ce4fa671cdd38cd5e22f8df3cfe765cd4c242b3c9b85bfff4080f；安装包为 b8bdfbcf1f351b08ba5329d062255476f404520fe1ae2224c22a4ba300c45dba。
+SHA-256：HamHeatmap.exe 为 a1968a48bca419d58680adca31759284f7971d36c590503451212114c3808247；安装包为 4df826b0eb96cd5a69f3c6a3a6d2b9d248c067fe60be34bb9bcd2e7bbe0fbc0e。
 
 > [!WARNING]
 > 当前版本是未签名的内部 Alpha。传播结果是模型估算，尚未经过外场测量校准，不得作为生命安全、应急指挥或法规合规决策的唯一依据。仓库公开的是源代码；这不代表当前占位地图或导出报告已经满足中国大陆公开地图发行要求。

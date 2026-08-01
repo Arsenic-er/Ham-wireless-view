@@ -82,11 +82,29 @@ scripts/cargo-xwin-static.sh test --manifest-path app/src-tauri/Cargo.toml --lib
 bash -n scripts/cargo-xwin-static.sh scripts/makensis-project.sh scripts/tauri-windows-cross.sh
 ```
 
-## 自动化与交叉构建结果
+## 早期 Alpha 自动化与交叉构建基线
 
-本次证据为：前端 `11 files / 79 tests`；Rust workspace `113 passed / 5 ignored`；TypeScript、production build、rustfmt、workspace Clippy 和 validation 管理 self-test 通过；Windows xwin all-target check、严格 Clippy 与测试程序 `--no-run` 通过。交叉编译成功证明目标代码可编译和打包，不等于测试程序已在 Windows 上执行。
+先前提交 `59ae5b188f48db52618846246de27eb0cfe6bbba` 的构建证据为：前端 `11 files / 79 tests`；Rust workspace `113 passed / 5 ignored`；TypeScript、production build、rustfmt、workspace Clippy 和 validation 管理 self-test 通过；Windows xwin all-target check、严格 Clippy 与测试程序 `--no-run` 通过。交叉编译成功证明目标代码可编译和打包，不等于测试程序已在 Windows 上执行。
 
 正式 NSIS 包含离线 WebView2，安装范围为当前用户；standalone EXE 和 NSIS 均未签名。
+
+## Alpha 2 连接自检重建
+
+2026-08-01 基于提交 `9b0fb795b4b24feb1f79ce93609b8b0f58de8d41` 重新执行完整交叉构建并发布 `v0.1.0-alpha.2`。该版本增加用户显式触发的天地图连接自检：保存配置与可达性状态分离，结果只返回固定脱敏状态，探测不写瓦片缓存。
+
+回归证据：
+
+- TypeScript、13 个前端测试文件/111 项测试和 production build 通过。
+- Rust workspace `114 passed / 5 ignored`、rustfmt 与严格 Clippy 通过。
+- Windows xwin all-target check、严格 Clippy 和测试程序 `--no-run` 通过；只有既有缺失 MSVC PDB 的 LNK4099 非阻断警告。
+- `scripts/tauri-windows-cross.sh -- --locked` 完整执行退出 0，耗时 108.1 秒；`scripts/verify-windows-artifacts.sh` 通过。
+
+| Alpha 2 产物 | 大小 | SHA-256 |
+|---|---:|---|
+| `HamHeatmap.exe` | 16,174,080 bytes | `a1968a48bca419d58680adca31759284f7971d36c590503451212114c3808247` |
+| `HamHeatmap_0.1.0_x64-setup.exe` | 217,265,419 bytes | `4df826b0eb96cd5a69f3c6a3a6d2b9d248c067fe60be34bb9bcd2e7bbe0fbc0e` |
+
+安装包内容审计仅见插件、离线 WebView2 安装器、HamHeatmap.exe 与第三方许可证；不含 PMTiles、DEM/WBM、密钥、源码或缓存。两个 EXE 仍未签名。有效个人 `tk`、中国大陆真实 ISP、Windows 10/11 DPAPI/WebView2 与 SmartScreen 仍需实机验收。
 
 ## Windows 实机门槛
 
