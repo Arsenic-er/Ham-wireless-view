@@ -731,32 +731,32 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 详细架构和发行边界见 ADR 0020。
 
-## 32. 全局 dBm 显示阈值与离线地图包边界（2026-08-01，执行证据待回填）
+## 32. 全局 dBm 显示阈值与离线地图包边界（2026-08-01，服务器证据已回填；浏览器与 Windows 待验）
 
 本节定义本轮验收口径，不以设计或编译成功冒充浏览器性能、Windows 实机或 Release 完成。结果契约见 ADR 0021。
 
 ### 32.1 结果契约与显示语义
 
-- [ ] CalculationResult schema 4 同时携带 `mapOverlayPngDataUrl`、固定 `mapOverlayFilterEncoding="u8-dbm-floor-v1"` 和 Base64 bins；bootstrap schema 2、preview schema 1 保持不变。
-- [ ] bins 解码后长度严格等于 `mapOverlayWidth × mapOverlayHeight`；0 表示原本透明，1..81 与整数 `-140..-60 dBm` cutoff 在边界上下均满足 `value >= threshold`。
-- [ ] 缺字段、未知 encoding、非法 Base64、错误长度或尺寸不匹配时 fail closed，不显示可被误筛选的最终层，也不退化为像素查询接口。
-- [ ] 色标游标默认 `-140 dBm`，范围和键盘步长正确，显示负号与 dBm；无已完成结果时禁用或不执行渲染。
-- [ ] `-140` 保留原 PNG 可见 alpha；拖到 `-120` 时只保留 `>= -120 dBm`；`-60` 只保留最强区。透明像素始终透明，可见像素 RGB 不改变。
-- [ ] 同一阈值同步作用于最多 8 个已完成层；选择新点、参数变化、新计算和地图/卫星切换保留阈值，清空删除层但保留阈值。
+- [x] CalculationResult schema 4 同时携带 `mapOverlayPngDataUrl`、固定 `mapOverlayFilterEncoding="u8-dbm-floor-v1"` 和 Base64 bins；bootstrap schema 2、preview schema 1 保持不变。
+- [x] bins 解码后长度严格等于 `mapOverlayWidth × mapOverlayHeight`；0 表示原本透明，1..81 与整数 `-140..-60 dBm` cutoff 在边界上下均满足 `value >= threshold`。
+- [x] 缺字段、未知 encoding、非法 Base64、错误长度或尺寸不匹配时 fail closed，不显示可被误筛选的最终层，也不退化为像素查询接口。
+- [x] 色标游标默认 `-140 dBm`，范围和键盘步长正确，显示负号与 dBm；无已完成结果时禁用或不执行渲染。
+- [x] `-140` 保留原 PNG 可见 alpha；拖到 `-120` 时只保留 `>= -120 dBm`；`-60` 只保留最强区。透明像素始终透明，可见像素 RGB 不改变。
+- [x] 同一阈值同步作用于最多 8 个已完成层；选择新点、参数变化、新计算和地图/卫星切换保留阈值，清空删除层但保留阈值。
 - [ ] 阈值不作用于渐进 preview，不改变计算请求/次数、统计、缓存键、结果 PNG、当前导出身份或 PNG/PDF 字节。
 
 ### 32.2 MapLibre 生命周期与性能
 
-- [ ] 最终层以 `animate:false` CanvasSource 复用；首次 PNG 解码后拖动只更新 alpha 和一次纹理上传，不重新编码 PNG、不删除/增加 source/layer、不移动相机。
-- [ ] `requestAnimationFrame` 与至少 33 ms 间隔把连续 input 合并到最多 30 fps；相同整数值不重绘，迟到帧不能覆盖最新阈值。
-- [ ] 纯函数/DOM 测试覆盖 1 层和 8 层、clear/unmount 释放、style 未就绪后 desired-state 重放，以及 preview image source 与 final canvas source 不混用。
-- [ ] 服务器上的自动化或微基准记录 8×401×401 最坏 alpha 扫描耗时；只有实际浏览器拖动、控制台、WebGL 和长任务证据完成后才能说明“无明显卡顿”。
+- [x] 最终层以 `animate:false` CanvasSource 复用；首次 PNG 解码后拖动只更新 alpha 和一次纹理上传，不重新编码 PNG、不删除/增加 source/layer、不移动相机。
+- [x] `requestAnimationFrame` 与至少 33 ms 间隔把连续 input 合并到最多 30 fps；相同整数值不重绘，迟到帧不能覆盖最新阈值。
+- [x] 纯函数/DOM 测试覆盖 1 层和 8 层、clear/unmount 释放、style 未就绪后 desired-state 重放，以及 preview image source 与 final canvas source 不混用。
+- [x] 服务器上的自动化或微基准记录 8×401×401 最坏 alpha 扫描耗时；只有实际浏览器拖动、控制台、WebGL 和长任务证据完成后才能说明“无明显卡顿”。
 - [ ] 经 SSH 隧道在受管 validation 浏览器中连续拖动 `-140 → -60 → -120`，视觉确认弱像素动态剔除、地名/发射点层级不变、无控制台错误；该证据不外推为 Windows WebView2。
 - [ ] Windows 10/11 实机对独立 EXE/NSIS 分别复测 8 层拖动、DPI/缩放、浅/深主题、GPU/软件渲染和内存。
 
 ### 32.3 Windows Release 与离线地图
 
-- [ ] GitHub Alpha Release 实际创建后上传独立 EXE、NSIS 安装包与 `SHA256SUMS.txt`；README 只链接 Releases 页面，不提前写不存在的 tag/资产 URL。
+- [x] GitHub Alpha Release 实际创建后上传独立 EXE、NSIS 安装包与 `SHA256SUMS.txt`；README 只链接 Releases 页面，不提前写不存在的 tag/资产 URL。
 - [ ] 下载后的 SHA-256 与服务器受验产物一致；发布说明明确未签名、SmartScreen、Windows 实机和真实网络待验边界。
-- [ ] 本轮 Release 内容审计确认不含四省内部 PMTiles、EOxCloudless 离线副本、DEM/WBM、密钥、源码依赖或构建缓存。
+- [x] 本轮 Release 内容审计确认不含四省内部 PMTiles、EOxCloudless 离线副本、DEM/WBM、密钥、源码依赖或构建缓存。
 - [ ] 后续正式离线地图包只有在授权、审图/边界、不可变 manifest、SHA-256、partial/原子 ready、缓存页可删除及十进制 2.5 GB 全量计费均通过后才能发布。
