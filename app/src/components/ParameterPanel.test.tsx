@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { useState } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

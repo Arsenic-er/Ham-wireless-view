@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -37,7 +42,7 @@ describe("coverage visibility filter", () => {
         mapOverlayFilterEncoding: "unknown",
         mapOverlayFilterBase64: base64([1]),
       }),
-    ).toThrow(/unsupported/);
+    ).toThrow(/不支持/);
     expect(() =>
       decodeMapOverlayFilter({
         mapOverlayWidth: 2,
@@ -45,7 +50,7 @@ describe("coverage visibility filter", () => {
         mapOverlayFilterEncoding: "u8-dbm-floor-v1",
         mapOverlayFilterBase64: base64([1]),
       }),
-    ).toThrow(/length/);
+    ).toThrow(/长度/);
     expect(() =>
       decodeMapOverlayFilter({
         mapOverlayWidth: 1,
@@ -53,7 +58,7 @@ describe("coverage visibility filter", () => {
         mapOverlayFilterEncoding: "u8-dbm-floor-v1",
         mapOverlayFilterBase64: base64([82]),
       }),
-    ).toThrow(/0\.\.81/);
+    ).toThrow(/0–81/);
   });
 
   it("hides weaker pixels and restores their original alpha when relaxed", () => {

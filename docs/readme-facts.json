@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "canonical": "README.md",
+  "locales": {
+    "en": {
+      "file": "README.md",
+      "navigation": "**English** | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md) | [日本語](README.ja.md)"
+    },
+    "zh-Hans": {
+      "file": "README.zh-Hans.md",
+      "navigation": "[English](README.md) | **简体中文** | [繁體中文](README.zh-Hant.md) | [日本語](README.ja.md)"
+    },
+    "zh-Hant": {
+      "file": "README.zh-Hant.md",
+      "navigation": "[English](README.md) | [简体中文](README.zh-Hans.md) | **繁體中文** | [日本語](README.ja.md)"
+    },
+    "ja": {
+      "file": "README.ja.md",
+      "navigation": "[English](README.md) | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md) | **日本語**"
+    }
+  },
+  "section_markers": [
+    "current-status",
+    "windows-download",
+    "mvp",
+    "documentation",
+    "development",
+    "validation-platform",
+    "limitations",
+    "technology",
+    "author",
+    "license"
+  ],
+  "required_literals": [
+    "v0.1.0-alpha.2",
+    "https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.2",
+    "9b0fb79",
+    "HamHeatmap.exe",
+    "16,174,080",
+    "HamHeatmap_*_x64-setup.exe",
+    "217,265,419",
+    "SHA256SUMS.txt",
+    "a1968a48bca419d58680adca31759284f7971d36c590503451212114c3808247",
+    "4df826b0eb96cd5a69f3c6a3a6d2b9d248c067fe60be34bb9bcd2e7bbe0fbc0e",
+    "-140..-60 dBm",
+    "1 dB",
+    "110",
+    "<!-- synchronized-tests: frontend=133 rust=110 ignored=5 -->",
+    "P95",
+    "5.982 ms",
+    "144 MHz",
+    "430 MHz",
+    "200 km",
+    "1 km",
+    "2.5 GB",
+    "Tauri 2.11.5",
+    "React 19.2.7",
+    "TypeScript 7.0.2",
+    "Vite 8.1.4",
+    "MapLibre GL JS 5.24.0",
+    "ITM C++ v1.4",
+    "PMTiles JavaScript 4.4.1",
+    "fflate 0.8.3",
+    "https://github.com/Arsenic-er",
+    "Apache License 2.0",
+    "docs/21-protomaps-four-province-basemap.md",
+    "AUTHORS.md",
+    "NOTICE"
+  ],
+  "forbidden_literals": [
+    "当前占位地图"
+  ]
+}

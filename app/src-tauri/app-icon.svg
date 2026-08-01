@@ -1,3 +1,10 @@
+<!--
+  Ham Wireless View
+  Project creator and lead developer: Arsenic-er
+  SPDX-FileCopyrightText: 2026 Arsenic-er
+  SPDX-License-Identifier: Apache-2.0
+-->
+
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="background" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">

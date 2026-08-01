@@ -1,6 +1,12 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { act, fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import i18n from "../i18n";
 import type { BasemapInfo, CalculationResult, OnlineBasemapInfo, SessionCoverageResult } from "../lib/types";
 
 const objectUrlMocks = vi.hoisted(() => ({
@@ -99,7 +105,14 @@ const maplibreMocks = vi.hoisted(() => {
     },
     addProtocol: vi.fn(),
     removeProtocol: vi.fn(),
-    Map: vi.fn(function Map() {
+    Map: vi.fn(function Map(options?: { container?: HTMLElement }) {
+      if (options?.container) {
+        const zoomIn = document.createElement("button");
+        zoomIn.className = "maplibregl-ctrl-zoom-in";
+        const zoomOut = document.createElement("button");
+        zoomOut.className = "maplibregl-ctrl-zoom-out";
+        options.container.append(zoomIn, zoomOut);
+      }
       return map;
     }),
     NavigationControl: vi.fn(function NavigationControl() {
@@ -275,6 +288,39 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.removeProtocol).not.toHaveBeenCalled();
   });
 
+
+  it("updates localized controls without reconstructing MapLibre", async () => {
+    const { container, unmount } = render(
+      <MapView
+        theme="dark"
+        point={{ lat: 30.5, lon: 103.5 }}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+        preview={null}
+        heatmapStale={false}
+        visibleSignalThresholdDbm={-120}
+        onPointSelect={vi.fn()}
+      />,
+    );
+
+    const zoomIn = container.querySelector(".maplibregl-ctrl-zoom-in");
+    expect(zoomIn?.getAttribute("aria-label")).toBe("放大");
+    expect(maplibreMocks.Map).toHaveBeenCalledTimes(1);
+
+    try {
+      await act(async () => {
+        await i18n.changeLanguage("ja-JP");
+      });
+      expect(zoomIn?.getAttribute("aria-label")).toBe("拡大");
+      expect(maplibreMocks.Map).toHaveBeenCalledTimes(1);
+      expect(maplibreMocks.map.remove).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("zh-CN");
+      });
+      unmount();
+    }
+  });
 
   it("uses same-origin online map and satellite and falls back to WGS84", () => {
     const { getByRole, getByText, unmount } = render(

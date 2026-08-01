@@ -1,3 +1,10 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
+import { useTranslation } from "react-i18next";
+
 import {
   applyPreset,
   convertGainUnit,
@@ -114,6 +121,7 @@ function GainField({
   onValueChange: (value: number) => void;
   onUnitChange: (unit: GainUnit, converted: number) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <label className="field" htmlFor={id}>
       <span>{label}</span>
@@ -129,7 +137,7 @@ function GainField({
           onChange={(event) => onValueChange(Number(event.target.value))}
         />
         <select
-          aria-label={`${label}单位`}
+          aria-label={t("unitLabel", { label })}
           value={unit}
           disabled={disabled}
           onChange={(event) => {
@@ -151,6 +159,7 @@ export function ParameterPanel({
   elevationM,
   onChange,
 }: ParameterPanelProps) {
+  const { t } = useTranslation();
   const validation = parameterValidationMessage(parameters);
   const groundElevationMode = parameters.txGroundElevationOverrideM === null ? "dem" : "manual";
   const effectiveGroundElevationM = parameters.txGroundElevationOverrideM ?? elevationM;
@@ -162,19 +171,19 @@ export function ParameterPanel({
     <div className="parameter-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">传播参数</span>
-          <h2>配置电台</h2>
+          <span className="eyebrow">{t("propagationParameters")}</span>
+          <h2>{t("configureStation")}</h2>
         </div>
         <span className="model-pill">ITM P2P</span>
       </div>
 
       <Segmented<ScenarioPreset>
-        label="场景预设"
+        label={t("scenarioPreset")}
         value={parameters.preset}
         disabled={disabled}
         options={[
-          { value: "base-to-handheld", label: "基地台 → 手台", detail: "25 W · 20 m" },
-          { value: "handheld-to-base", label: "手台 → 基地台", detail: "5 W · 1.5 m" },
+          { value: "base-to-handheld", label: t("baseToHandheld"), detail: "25 W · 20 m" },
+          { value: "handheld-to-base", label: t("handheldToBase"), detail: "5 W · 1.5 m" },
         ]}
         onChange={(preset) => onChange(applyPreset(parameters, preset))}
       />
@@ -182,10 +191,10 @@ export function ParameterPanel({
       <div className="panel-section">
         <div className="section-title">
           <span>01</span>
-          <strong>频率与极化</strong>
+          <strong>{t("frequencyPolarization")}</strong>
         </div>
         <Segmented<Band>
-          label="频段"
+          label={t("band")}
           value={parameters.band}
           disabled={disabled}
           options={[
@@ -196,7 +205,7 @@ export function ParameterPanel({
         />
         <NumberField
           id="frequency"
-          label="具体频率"
+          label={t("exactFrequency")}
           value={parameters.frequencyMhz}
           min={parameters.band === "vhf144" ? 144 : 430}
           max={parameters.band === "vhf144" ? 148 : 440}
@@ -206,12 +215,12 @@ export function ParameterPanel({
           onChange={(frequencyMhz) => onChange({ ...parameters, frequencyMhz })}
         />
         <Segmented
-          label="极化方式"
+          label={t("polarization")}
           value={parameters.polarization}
           disabled={disabled}
           options={[
-            { value: "vertical", label: "垂直" },
-            { value: "horizontal", label: "水平" },
+            { value: "vertical", label: t("vertical") },
+            { value: "horizontal", label: t("horizontal") },
           ]}
           onChange={(polarization) => onChange({ ...parameters, polarization })}
         />
@@ -220,10 +229,10 @@ export function ParameterPanel({
       <div className="panel-section">
         <div className="section-title">
           <span>02</span>
-          <strong>发射站</strong>
+          <strong>{t("transmitterSection")}</strong>
         </div>
         <label className="field" htmlFor="power">
-          <span>发射功率</span>
+          <span>{t("transmitPower")}</span>
           <span className="compound-input">
             <input
               id="power"
@@ -238,7 +247,7 @@ export function ParameterPanel({
               }
             />
             <select
-              aria-label="发射功率单位"
+              aria-label={t("unitLabel", { label: t("transmitPower") })}
               value={parameters.powerUnit}
               disabled={disabled}
               onChange={(event) => {
@@ -263,7 +272,7 @@ export function ParameterPanel({
         </label>
         <GainField
           id="tx-gain"
-          label="发射天线增益"
+          label={t("transmitGain")}
           value={parameters.txGainValue}
           unit={parameters.txGainUnit}
           disabled={disabled}
@@ -274,7 +283,7 @@ export function ParameterPanel({
         />
         <NumberField
           id="tx-height"
-          label="发射天线高度 AGL"
+          label={t("transmitHeight")}
           value={parameters.txHeightM}
           min={0.5}
           max={500}
@@ -284,12 +293,12 @@ export function ParameterPanel({
           onChange={(txHeightM) => onChange({ ...parameters, txHeightM })}
         />
         <Segmented<"dem" | "manual">
-          label="发射点地面高程来源"
+          label={t("groundSource")}
           value={groundElevationMode}
           disabled={disabled || (groundElevationMode === "dem" && elevationM === null)}
           options={[
-            { value: "dem", label: "DEM 自动" },
-            { value: "manual", label: "手动覆盖" },
+            { value: "dem", label: t("demAutomatic") },
+            { value: "manual", label: t("manualOverride") },
           ]}
           onChange={(mode) => {
             if (mode === groundElevationMode) return;
@@ -304,7 +313,7 @@ export function ParameterPanel({
         {groundElevationMode === "manual" && (
           <NumberField
             id="tx-ground-elevation"
-            label="手动地面海拔 AMSL"
+            label={t("manualGround")}
             value={parameters.txGroundElevationOverrideM ?? 0}
             min={-500}
             max={9000}
@@ -317,30 +326,30 @@ export function ParameterPanel({
           />
         )}
         <div className="readonly-field">
-          <span>DEM 参考海拔</span>
-          <strong>{elevationM === null ? "选择点后读取" : `${elevationM.toFixed(1)} m AMSL`}</strong>
+          <span>{t("demReference")}</span>
+          <strong>{elevationM === null ? t("selectPointFirst") : `${elevationM.toFixed(1)} m AMSL`}</strong>
         </div>
         <div className="readonly-field">
-          <span>有效发射天线海拔</span>
+          <span>{t("effectiveTxElevation")}</span>
           <strong>
             {effectiveAntennaElevationM === null
-              ? "选择点后读取"
+              ? t("selectPointFirst")
               : `${effectiveAntennaElevationM.toFixed(1)} m AMSL`}
           </strong>
         </div>
         <p className="field-help">
-          手动覆盖只替换发射点地面高程；发射天线高度始终按离地高度 AGL 计算。
+          {t("groundHelp")}
         </p>
       </div>
 
       <div className="panel-section">
         <div className="section-title">
           <span>03</span>
-          <strong>接收端</strong>
+          <strong>{t("receiverSection")}</strong>
         </div>
         <GainField
           id="rx-gain"
-          label="接收天线增益"
+          label={t("receiveGain")}
           value={parameters.rxGainValue}
           unit={parameters.rxGainUnit}
           disabled={disabled}
@@ -351,7 +360,7 @@ export function ParameterPanel({
         />
         <NumberField
           id="rx-height"
-          label="接收天线高度 AGL"
+          label={t("receiveHeight")}
           value={parameters.rxHeightM}
           min={0.5}
           max={500}
@@ -361,8 +370,8 @@ export function ParameterPanel({
           onChange={(rxHeightM) => onChange({ ...parameters, rxHeightM })}
         />
         <div className="readonly-field">
-          <span>接收点海拔</span>
-          <strong>逐像素读取 DEM</strong>
+          <span>{t("receiverElevation")}</span>
+          <strong>{t("perPixelDem")}</strong>
         </div>
       </div>
 

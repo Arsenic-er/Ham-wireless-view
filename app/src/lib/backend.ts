@@ -1,6 +1,13 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import i18n, { currentAppLocale } from "../i18n";
+import type { AppLocale } from "../i18n/locale";
 import { exportReportInBrowser } from "./browserExport";
 import {
   decodeMapOverlayFilter,
@@ -64,6 +71,97 @@ export function desktopBackendAvailable(): boolean {
   return backendMode() === "tauri";
 }
 
+export function isCancellationError(error: unknown): boolean {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === "operation.cancelled" || code === "cancelled") return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.trim().toLowerCase();
+  return normalized === "operation cancelled" ||
+    normalized === "operation canceled" ||
+    normalized === "coverage calculation cancelled" ||
+    normalized.includes("操作已取消") ||
+    normalized.includes("計算をキャンセル") ||
+    normalized.includes("運算已取消");
+}
+
+function messageMatchesLocale(message: string, locale: AppLocale): boolean {
+  const hasHan = /\p{Script=Han}/u.test(message);
+  const hasKana = /[\u3040-\u30ff]/u.test(message);
+  if (locale === "en") return !hasHan && !hasKana;
+  if (locale === "ja-JP") return hasKana;
+  if (locale === "zh-CN") return hasHan && !hasKana;
+  return (
+    hasHan &&
+    !hasKana &&
+    /[體傳檔錯誤請與為後線區數據緩載網應]/u.test(message)
+  );
+}
+
+export function localizedBackendError(
+  error: unknown,
+  locale: AppLocale = currentAppLocale(),
+): string {
+  const t = i18n.getFixedT(locale);
+  if (isCancellationError(error)) return t("statusCancelled");
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("already active") ||
+    normalized.includes("operation is already") ||
+    message.includes("正在进行，请稍候或先取消")
+  ) {
+    return t("errorOperationActive");
+  }
+  if (
+    message.includes("缓存空间不足") ||
+    message.includes("持久数据空间不足") ||
+    normalized.includes("cache quota") ||
+    normalized.includes("cache space")
+  ) {
+    return t("errorBackendCacheFull");
+  }
+  if (
+    message.includes("正在使用中") ||
+    normalized.includes("currently in use")
+  ) {
+    return t("errorBackendRegionInUse");
+  }
+  if (
+    message.includes("数据仍不完整") ||
+    message.includes("仍缺少") ||
+    message.includes("先联网缓存") ||
+    normalized.includes("calculation data") && normalized.includes("missing") ||
+    normalized.includes("region data") && normalized.includes("incomplete")
+  ) {
+    return t("errorBackendDataMissing");
+  }
+  if (
+    message.includes("完整性检查失败") ||
+    normalized.includes("integrity check")
+  ) {
+    return t("errorBackendIntegrity");
+  }
+  if (
+    normalized.includes("failed to fetch") ||
+    normalized.includes("networkerror") ||
+    normalized.includes("network request failed")
+  ) {
+    return t("errorBackendNetwork");
+  }
+
+  const status =
+    error && typeof error === "object" && "status" in error
+      ? (error as { status?: unknown }).status
+      : undefined;
+  if (typeof status === "number" && Number.isSafeInteger(status)) {
+    return t("errorBackendHttp", { status });
+  }
+  return messageMatchesLocale(message, locale) ? message : t("errorBackendUnknown");
+}
+
 class ValidationRequestError extends Error {
   constructor(
     readonly status: number,
@@ -76,7 +174,7 @@ class ValidationRequestError extends Error {
 
 class CancellationTimeoutError extends Error {
   constructor() {
-    super("Cancellation timed out before the operation became cancellable.");
+    super(i18n.t("errorCancellationTimeout"));
     this.name = "CancellationTimeoutError";
   }
 }
@@ -195,20 +293,14 @@ function isFiniteNumber(value: unknown): value is number {
 
 function validateCalculationResult(value: unknown): CalculationResult {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(
-      "\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u65e0\u6548\uff1a\u540e\u7aef\u672a\u8fd4\u56de\u6709\u6548\u5bf9\u8c61\u3002",
-    );
+    throw new Error(i18n.t("errorResultObject"));
   }
   const result = value as Partial<CalculationResult>;
   if (result.schemaVersion !== 4) {
-    throw new Error(
-      "\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u4e0d\u517c\u5bb9\uff1a\u9700\u8981 schemaVersion 4\uff0c\u8bf7\u66f4\u65b0\u540e\u7aef\u6216\u5e94\u7528\u540e\u91cd\u8bd5\u3002",
-    );
+    throw new Error(i18n.t("errorResultSchema"));
   }
   if (result.mapOverlayFilterEncoding !== MAP_OVERLAY_FILTER_ENCODING) {
-    throw new Error(
-      `\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u4e0d\u517c\u5bb9\uff1a\u573a\u5f3a\u7b5b\u9009\u7f16\u7801\u5fc5\u987b\u4e3a ${MAP_OVERLAY_FILTER_ENCODING}\u3002`,
-    );
+    throw new Error(i18n.t("errorResultEncoding", { encoding: MAP_OVERLAY_FILTER_ENCODING }));
   }
   const width = result.mapOverlayWidth;
   const height = result.mapOverlayHeight;
@@ -220,9 +312,7 @@ function validateCalculationResult(value: unknown): CalculationResult {
     typeof result.mapOverlayPngDataUrl !== "string" ||
     result.mapOverlayPngDataUrl.length === 0
   ) {
-    throw new Error(
-      "\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u65e0\u6548\uff1a\u9700\u8981 401 x 401 \u7684\u573a\u5f3a\u7b5b\u9009\u6570\u636e\u548c\u5730\u56fe\u56fe\u50cf\u3002",
-    );
+    throw new Error(i18n.t("errorResultImage"));
   }
   try {
     decodeMapOverlayFilter({
@@ -233,7 +323,7 @@ function validateCalculationResult(value: unknown): CalculationResult {
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`\u8ba1\u7b97\u7ed3\u679c\u573a\u5f3a\u7b5b\u9009\u6570\u636e\u65e0\u6548\uff1a${detail}`);
+    throw new Error(i18n.t("errorResultFilter", { detail }));
   }
   return result as CalculationResult;
 }
@@ -241,7 +331,7 @@ function validateCalculationResult(value: unknown): CalculationResult {
 function beginValidationOperation(kind: OperationKind): ValidationOperationHandle {
   const family = operationFamily(kind);
   if (activeOperation(family)) {
-    throw new Error(`A ${family} operation is already active.`);
+    throw new Error(i18n.t("errorOperationActive"));
   }
 
   const generation =
@@ -270,7 +360,7 @@ function beginValidationOperation(kind: OperationKind): ValidationOperationHandl
       ticket.state !== "reserved" ||
       !OPERATION_ID_PATTERN.test(ticket.operationId)
     ) {
-      throw new Error("The validation server returned an invalid operation ticket.");
+      throw new Error(i18n.t("errorInvalidTicket"));
     }
     handle.operationId = ticket.operationId;
     return ticket.operationId;
@@ -667,7 +757,7 @@ async function cancelValidationOperation(
     }
 
     if (typeof cancellation.cancelled !== "boolean") {
-      throw new Error("The validation server returned an invalid cancellation response.");
+      throw new Error(i18n.t("errorInvalidCancellationResponse"));
     }
     if (cancellation.cancelled) return;
     if (!isCurrentOperation(handle) || handle.stopped) return;
@@ -685,7 +775,7 @@ async function cancelValidationOperation(
 
     if (!isCurrentOperation(handle) || handle.stopped) return;
     if (!status || !statusMatchesHandle(status, handle)) {
-      throw new Error("The validation server returned an invalid operation status.");
+      throw new Error(i18n.t("errorInvalidOperationStatus"));
     }
     if (
       status.state === "cancellation-requested" ||
@@ -707,16 +797,16 @@ export async function getOnlineBasemap(): Promise<OnlineBasemapInfo | null> {
 
 export async function configureOnlineBasemap(token: string): Promise<OnlineBasemapInfo> {
   if (!desktopBackendAvailable()) {
-    throw new Error("在线地图设置只在 Tauri Windows 桌面应用中可用。");
+    throw new Error(i18n.t("errorMapDesktopOnly"));
   }
   const value = token.trim();
-  if (!value) throw new Error("请输入天地图 tk。");
+  if (!value) throw new Error(i18n.t("errorEnterToken"));
   return invoke<OnlineBasemapInfo>("configure_online_basemap", { token: value });
 }
 
 export async function clearOnlineBasemap(): Promise<OnlineBasemapInfo> {
   if (!desktopBackendAvailable()) {
-    throw new Error("在线地图设置只在 Tauri Windows 桌面应用中可用。");
+    throw new Error(i18n.t("errorMapDesktopOnly"));
   }
   return invoke<OnlineBasemapInfo>("clear_online_basemap");
 }
@@ -732,7 +822,7 @@ const ONLINE_BASEMAP_PROBE_STATUSES = new Set([
 
 export async function probeOnlineBasemap(): Promise<OnlineBasemapProbeResult> {
   if (!desktopBackendAvailable()) {
-    throw new Error("在线地图连接测试只在 Tauri Windows 桌面应用中可用。");
+    throw new Error(i18n.t("errorMapProbeDesktopOnly"));
   }
   const result = await invoke<OnlineBasemapProbeResult>("probe_online_basemap");
   if (
@@ -740,7 +830,7 @@ export async function probeOnlineBasemap(): Promise<OnlineBasemapProbeResult> {
     result.schemaVersion !== 1 ||
     !ONLINE_BASEMAP_PROBE_STATUSES.has(result.status)
   ) {
-    throw new Error("在线地图连接测试返回了不兼容的结果。");
+    throw new Error(i18n.t("errorMapProbeProtocol"));
   }
   return result;
 }
@@ -782,7 +872,7 @@ export async function bootstrap(): Promise<BootstrapInfo> {
       remainingBytes: PREVIEW_CACHE_CAP,
       capBytes: PREVIEW_CACHE_CAP,
     },
-    internalBuildWarning: "内部测试底图，不得公开发布",
+    internalBuildWarning: i18n.t("internalWarning"),
   };
 }
 
@@ -859,7 +949,7 @@ export async function downloadRegion(point: MapPoint): Promise<DownloadResult> {
       { point },
     );
   }
-  throw new Error("浏览器仅展示下载确认界面；真实数据只能由 Tauri 桌面后端下载。");
+  throw new Error(i18n.t("errorDownloadPreviewOnly"));
 }
 
 export async function cancelDownload(): Promise<void> {
@@ -898,7 +988,7 @@ export async function deleteCacheRegion(regionId: string): Promise<CacheDeleteRe
   if (backendMode() === "validation-server") {
     return validationRequest<CacheDeleteResult>("/api/delete-cache-region", { regionId });
   }
-  throw new Error("缓存删除只在 Tauri 桌面后端中可用。");
+  throw new Error(i18n.t("errorCacheDesktopOnly"));
 }
 
 export async function calculate(
@@ -938,7 +1028,7 @@ export async function calculate(
     );
     return validateCalculationResult(result);
   }
-  throw new Error("浏览器仅用于界面检查；真实传播计算必须在 Tauri 桌面后端中运行。");
+  throw new Error(i18n.t("errorCalculationPreviewOnly"));
 }
 
 export async function cancelCalculation(): Promise<void> {
@@ -949,12 +1039,15 @@ export async function cancelCalculation(): Promise<void> {
   }
 }
 
-export async function exportReport(request: ExportRequest): Promise<ExportResult> {
+export async function exportReport(
+  request: ExportRequest,
+  locale: AppLocale = currentAppLocale(),
+): Promise<ExportResult> {
   if (desktopBackendAvailable())
     return invoke<ExportResult>("export_result", { request });
   if (backendMode() === "validation-server")
-    return exportReportInBrowser(request);
-  throw new Error("文件导出仅在验证平台或 Tauri Windows 桌面应用中可用。");
+    return exportReportInBrowser(request, locale);
+  throw new Error(i18n.getFixedT(locale)("errorExportUnavailable"));
 }
 
 export async function listenCalculationProgress(

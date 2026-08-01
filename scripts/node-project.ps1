@@ -1,3 +1,8 @@
+# Ham Wireless View
+# Project creator and lead developer: Arsenic-er
+# SPDX-FileCopyrightText: 2026 Arsenic-er
+# SPDX-License-Identifier: Apache-2.0
+
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Version = (Get-Content -Raw (Join-Path $ProjectRoot ".node-version")).Trim()

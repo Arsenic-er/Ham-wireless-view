@@ -1,11 +1,18 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import i18n from "../i18n";
 import { buildPdfFromJpeg, exportReportInBrowser } from "./browserExport";
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  await i18n.changeLanguage("zh-CN");
 });
 
 describe("browser report export", () => {
@@ -37,6 +44,38 @@ describe("browser report export", () => {
     expect(() =>
       buildPdfFromJpeg(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), 0, 1),
     ).toThrow("尺寸");
+  });
+
+  it("keeps an asynchronous PDF image error in the locale captured at start", async () => {
+    let triggerImageError: (() => void) | undefined;
+    class PendingImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = 1600;
+      naturalHeight = 1100;
+      width = 1600;
+      height = 1100;
+      set src(_value: string) {
+        triggerImageError = () => this.onerror?.(new Event("error"));
+      }
+    }
+    vi.stubGlobal("Image", PendingImage);
+    await i18n.changeLanguage("ja-JP");
+
+    const exportPromise = exportReportInBrowser(
+      {
+        format: "pdf",
+        suggestedFileName: "coverage.pdf",
+        reportPngDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      },
+      "ja-JP",
+    );
+    await Promise.resolve();
+    await i18n.changeLanguage("en");
+    if (!triggerImageError) throw new Error("pending image was not created");
+    triggerImageError();
+
+    await expect(exportPromise).rejects.toThrow("レポートキャンバス");
   });
 
   it("downloads a PNG locally without using a server export route", async () => {

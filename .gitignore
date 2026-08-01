@@ -19,3 +19,5 @@
 !.env.example
 *.pem
 *.key
+__pycache__/
+*.py[cod]

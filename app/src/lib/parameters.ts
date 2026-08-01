@@ -1,3 +1,9 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
+import i18n from "../i18n";
 import type {
   Band,
   GainUnit,
@@ -94,25 +100,25 @@ export function parameterValidationMessage(parameters: RadioParameters): string 
     Math.abs(parameters.frequencyMhz * 100 - Math.round(parameters.frequencyMhz * 100)) >
       1e-8
   ) {
-    return `频率应为 ${frequencyRange[0].toFixed(2)}–${frequencyRange[1].toFixed(2)} MHz，最多两位小数`;
+    return i18n.t("validationFrequency", { min: frequencyRange[0].toFixed(2), max: frequencyRange[1].toFixed(2) });
   }
   if (!Number.isFinite(powerWatts(parameters)) || powerWatts(parameters) < 0.1 || powerWatts(parameters) > 1000) {
-    return "发射功率应等效于 0.1–1000 W";
+    return i18n.t("validationPower");
   }
   for (const [label, value] of [
-    ["发射天线增益", gainDbi(parameters.txGainValue, parameters.txGainUnit)],
-    ["接收天线增益", gainDbi(parameters.rxGainValue, parameters.rxGainUnit)],
+    [i18n.t("transmitGain"), gainDbi(parameters.txGainValue, parameters.txGainUnit)],
+    [i18n.t("receiveGain"), gainDbi(parameters.rxGainValue, parameters.rxGainUnit)],
   ] as const) {
     if (!Number.isFinite(value) || value < -20 || value > 30) {
-      return `${label}换算后应为 -20–30 dBi`;
+      return i18n.t("validationGain", { label });
     }
   }
   for (const [label, value] of [
-    ["发射天线高度", parameters.txHeightM],
-    ["接收天线高度", parameters.rxHeightM],
+    [i18n.t("transmitHeight"), parameters.txHeightM],
+    [i18n.t("receiveHeight"), parameters.rxHeightM],
   ] as const) {
     if (!Number.isFinite(value) || value < 0.5 || value > 500) {
-      return `${label}应为 0.5–500 m`;
+      return i18n.t("validationHeight", { label });
     }
   }
   if (
@@ -121,7 +127,7 @@ export function parameterValidationMessage(parameters: RadioParameters): string 
       parameters.txGroundElevationOverrideM < -500 ||
       parameters.txGroundElevationOverrideM > 9000)
   ) {
-    return "发射点地面海拔覆盖应为 -500–9000 m AMSL";
+    return i18n.t("validationGround");
   }
   return null;
 }

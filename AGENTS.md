@@ -19,6 +19,9 @@
 - DEM is computation-only. Never add hillshade, contours, terrain colors, slope layers, or 3D terrain to the map.
 - Heatmap pixels are not inspectable. Do not add hover/click dBm probes.
 - Provide light and dark UI themes; default follows Windows system theme.
+- Support application UI locales `en`, `zh-CN`, `zh-TW`, and `ja-JP`; English is the source locale and fallback.
+- Persist explicit locale choice, otherwise follow the Windows/browser locale, and never lose map/session state when changing language.
+- Keep `README.md` as the canonical English project page with complete Simplified Chinese, Traditional Chinese, and Japanese linked translations.
 - All persistent data, including partial downloads, has an immutable decimal 2.5 GB cap: 2,500,000,000 bytes.
 - Every propagation run still has one transmitter. The current app session may retain up to eight completed distinct-site coverage layers; same-site recalculation replaces that site. Do not persist them or interpret overlap as joint/multi-transmitter field strength. No project files, cross-start history, telemetry, or cloud sync in MVP.
 
@@ -72,3 +75,11 @@
 - Data or basemap changes update `docs/03-data-and-map-compliance.md`.
 - Acceptance changes update `docs/04-test-plan.md`.
 
+## Authorship and licensing
+
+- Ham Wireless View was created and is led by Arsenic-er. Keep AUTHORS.md, NOTICE, .github/CODEOWNERS, package metadata, and the four localized README license sections consistent with that attribution.
+- Every first-party source, test, script, workflow, Cargo manifest, HTML, CSS, and original SVG file must keep the syntax-appropriate header containing Ham Wireless View, Project creator and lead developer: Arsenic-er, SPDX-FileCopyrightText: 2026 Arsenic-er, and SPDX-License-Identifier: Apache-2.0.
+- Preserve shebangs, HTML doctypes, and XML declarations before attribution blocks where required by the file format.
+- Never stamp or rewrite third_party/**, lock files, app/src-tauri/gen/**, LICENSE, or third-party attribution content as if Arsenic-er owned it.
+- Run python3 scripts/check-source-attribution.py before handoff. Any missing first-party header, protected-file misattribution, or unclassified tracked/untracked file is a blocking failure.
+- New non-commentable first-party formats must be explicitly classified by the checker and represented in central metadata; do not weaken the gate with a catch-all exclusion.

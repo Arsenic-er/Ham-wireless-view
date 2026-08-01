@@ -1,3 +1,10 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
+import i18n, { currentAppLocale } from "../i18n";
+import type { AppLocale } from "../i18n/locale";
 import type {
   CalculationResult,
   ExportFormat,
@@ -9,7 +16,7 @@ const REPORT_HEIGHT = 1100;
 const MAP_X = 72;
 const MAP_Y = 196;
 const MAP_SIZE = 780;
-const FONT_FAMILY = '"Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif';
+const FONT_FAMILY = '"Segoe UI", "Yu Gothic UI", Meiryo, "Microsoft JhengHei UI", "Microsoft YaHei UI", sans-serif';
 
 export const DBM_COLOR_ANCHORS = [
   { dbm: -60, color: "#ff0000", position: 0 },
@@ -57,39 +64,44 @@ export function buildExportReportModel(
   result: CalculationResult,
   parameters: RadioParameters,
   generatedAt = new Date(),
+  locale: AppLocale = currentAppLocale(),
 ): ExportReportModel {
+  const t = i18n.getFixedT(locale);
+  const integer = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
   const statistics = result.statistics;
   const waterRatio = statistics.validPixelCount
     ? (statistics.waterAffectedPixelCount / statistics.validPixelCount) * 100
     : 0;
   return {
-    title: "HamHeatmap 传播预测报告",
+    title: t("reportTitle"),
     subtitle: `HamHeatmap ALPHA 0.1 · NTIA ITM v1.4 (668e4ab) · ${result.modelVersion} · Copernicus DEM GLO-90 DEM/WBM`,
-    warning: "内部测试，不得公开发布 · 局部等距诊断画布，不含行政边界或未授权底图 · 预测不保证实际通联",
+    warning: t("reportWarning"),
     generatedAt: formatGeneratedAt(generatedAt),
     center: `${result.center.lat.toFixed(5)}°, ${result.center.lon.toFixed(5)}°`,
     parameterRows: [
-      ["场景", parameters.preset === "base-to-handheld" ? "基地台 → 手台" : "手台 → 基地台"],
-      ["频段 / 频率", `${parameters.band === "vhf144" ? "144 MHz" : "430 MHz"} / ${parameters.frequencyMhz.toFixed(2)} MHz`],
-      ["发射功率", displayPower(parameters)],
-      ["发射天线增益", displayGain(parameters.txGainValue, parameters.txGainUnit)],
-      ["发射天线高度", `${parameters.txHeightM.toFixed(1)} m AGL`],
+      [t("reportScenario"), parameters.preset === "base-to-handheld" ? t("baseToHandheld") : t("handheldToBase")],
+      [t("reportBandFrequency"), `${parameters.band === "vhf144" ? "144 MHz" : "430 MHz"} / ${parameters.frequencyMhz.toFixed(2)} MHz`],
+      [t("reportTxPower"), displayPower(parameters)],
+      [t("reportTxGain"), displayGain(parameters.txGainValue, parameters.txGainUnit)],
+      [t("reportTxHeight"), `${parameters.txHeightM.toFixed(1)} m AGL`],
       [
-        "发射点地面海拔",
-        `${result.txGroundElevationM.toFixed(1)} m AMSL（${result.txGroundElevationSource === "manual" ? "手动覆盖" : "DEM 自动"}）`,
+        t("reportTxGround"),
+        locale === "zh-CN" || locale === "zh-TW"
+          ? `${result.txGroundElevationM.toFixed(1)} m AMSL（${result.txGroundElevationSource === "manual" ? t("manualOverride") : t("demAutomatic")}）`
+          : `${result.txGroundElevationM.toFixed(1)} m AMSL (${result.txGroundElevationSource === "manual" ? t("manualOverride") : t("demAutomatic")})`,
       ],
-      ["接收天线增益", displayGain(parameters.rxGainValue, parameters.rxGainUnit)],
-      ["接收天线高度", `${parameters.rxHeightM.toFixed(1)} m AGL`],
-      ["极化", parameters.polarization === "vertical" ? "垂直" : "水平"],
+      [t("reportRxGain"), displayGain(parameters.rxGainValue, parameters.rxGainUnit)],
+      [t("reportRxHeight"), `${parameters.rxHeightM.toFixed(1)} m AGL`],
+      [t("reportPolarization"), parameters.polarization === "vertical" ? t("vertical") : t("horizontal")],
     ],
     statisticRows: [
-      ["有效像素", statistics.validPixelCount.toLocaleString("zh-CN")],
-      ["最大接收功率", `${statistics.maximumDbm.toFixed(1)} dBm`],
-      ["平均接收功率", `${statistics.meanDbm.toFixed(1)} dBm`],
-      ["最小接收功率", `${statistics.minimumDbm.toFixed(1)} dBm`],
-      ["低于 -140 dBm", statistics.belowThresholdPixelCount.toLocaleString("zh-CN")],
-      ["受水体影响路径", `${waterRatio.toFixed(1)}%`],
-      ["计算耗时", `${statistics.totalSeconds.toFixed(1)} s`],
+      [t("reportValidPixels"), integer.format(statistics.validPixelCount)],
+      [t("reportMaximum"), `${statistics.maximumDbm.toFixed(1)} dBm`],
+      [t("reportMean"), `${statistics.meanDbm.toFixed(1)} dBm`],
+      [t("reportMinimum"), `${statistics.minimumDbm.toFixed(1)} dBm`],
+      [t("reportBelow"), integer.format(statistics.belowThresholdPixelCount)],
+      [t("reportWater"), `${waterRatio.toFixed(1)}%`],
+      [t("reportDuration"), `${statistics.totalSeconds.toFixed(1)} s`],
     ],
     cornerLabels: result.imageCorners.map(
       ([lon, lat]) => `≈ ${lat.toFixed(3)}°, ${lon.toFixed(3)}°`,
@@ -108,11 +120,14 @@ export function suggestedExportFileName(
   return `HamHeatmap_${frequency}MHz_${result.center.lat.toFixed(4)}_${result.center.lon.toFixed(4)}_${stamp}.${format}`;
 }
 
-function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+function loadImage(
+  dataUrl: string,
+  t: ReturnType<typeof i18n.getFixedT>,
+): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("无法读取热力图图像，导出已停止。"));
+    image.onerror = () => reject(new Error(t("errorHeatmapRead")));
     image.src = dataUrl;
   });
 }
@@ -166,19 +181,21 @@ export async function createExportReportPngDataUrl(
   result: CalculationResult,
   parameters: RadioParameters,
   generatedAt = new Date(),
+  locale: AppLocale = currentAppLocale(),
 ): Promise<string> {
+  const t = i18n.getFixedT(locale);
   if (!result.heatmapPngDataUrl.startsWith("data:image/png;base64,")) {
-    throw new Error("计算结果不是可导出的 PNG 热力图。请重新计算。");
+    throw new Error(t("errorHeatmapPng"));
   }
   const [image, model] = await Promise.all([
-    loadImage(result.heatmapPngDataUrl),
-    Promise.resolve(buildExportReportModel(result, parameters, generatedAt)),
+    loadImage(result.heatmapPngDataUrl, t),
+    Promise.resolve(buildExportReportModel(result, parameters, generatedAt, locale)),
   ]);
   const canvas = document.createElement("canvas");
   canvas.width = REPORT_WIDTH;
   canvas.height = REPORT_HEIGHT;
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("当前 WebView2 无法创建导出画布。");
+  if (!context) throw new Error(t("errorExportCanvas"));
 
   context.fillStyle = "#f4f7f7";
   context.fillRect(0, 0, REPORT_WIDTH, REPORT_HEIGHT);
@@ -193,7 +210,7 @@ export async function createExportReportPngDataUrl(
   context.font = `17px ${FONT_FAMILY}`;
   context.fillText(model.subtitle, 76, 124, 1050);
   context.textAlign = "right";
-  context.fillText(`生成时间 ${model.generatedAt}`, 1520, 86);
+  context.fillText(t("reportGenerated", { time: model.generatedAt }), 1520, 86);
   context.textAlign = "left";
 
   context.fillStyle = "#fff2d9";
@@ -274,7 +291,7 @@ export async function createExportReportPngDataUrl(
 
   context.fillStyle = "#17242b";
   context.font = `700 24px ${FONT_FAMILY}`;
-  context.fillText("发射点与参数", 956, 230);
+  context.fillText(t("reportParameters"), 956, 230);
   context.fillStyle = "#087f74";
   context.font = `600 23px ${FONT_FAMILY}`;
   context.fillText(model.center, 956, 270);
@@ -284,14 +301,14 @@ export async function createExportReportPngDataUrl(
 
   context.fillStyle = "#17242b";
   context.font = `700 24px ${FONT_FAMILY}`;
-  context.fillText("计算统计", 956, 748);
+  context.fillText(t("reportStatistics"), 956, 748);
   model.statisticRows.forEach(([label, value], index) => {
     drawRow(context, label, value, 956, 790 + index * 35);
   });
 
   context.fillStyle = "#687980";
   context.font = `14px ${FONT_FAMILY}`;
-  context.fillText("限制：不含建筑、植被、城市杂波、外部干扰、实时天气、异常传播、水面反射与馈线损耗。", 956, 1072, 560);
+  context.fillText(t("reportLimitations"), 956, 1072, 560);
   drawLegend(context);
   return canvas.toDataURL("image/png");
 }

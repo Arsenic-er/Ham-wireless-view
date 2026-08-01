@@ -1,4 +1,13 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
+import i18n, { currentAppLocale } from "../i18n";
+import type { AppLocale } from "../i18n/locale";
 import type { ExportRequest, ExportResult } from "./types";
+
+type FixedTranslator = ReturnType<typeof i18n.getFixedT>;
 
 const PNG_PREFIX = "data:image/png;base64,";
 const JPEG_PREFIX = "data:image/jpeg;base64,";
@@ -7,26 +16,30 @@ const PDF_PAGE_WIDTH = 841.89;
 const PDF_PAGE_HEIGHT = 595.28;
 const PDF_MARGIN = 18;
 
-function decodeBase64DataUrl(dataUrl: string, prefix: string): Uint8Array {
+function decodeBase64DataUrl(
+  dataUrl: string,
+  prefix: string,
+  t: FixedTranslator,
+): Uint8Array {
   if (!dataUrl.startsWith(prefix)) {
-    throw new Error("导出报告包含不支持的图像格式。");
+    throw new Error(t("errorUnsupportedImage"));
   }
   let binary: string;
   try {
     binary = atob(dataUrl.slice(prefix.length));
   } catch {
-    throw new Error("导出报告包含无效的 Base64 图像。");
+    throw new Error(t("errorInvalidBase64"));
   }
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function reportPngBytes(dataUrl: string): Uint8Array {
-  const bytes = decodeBase64DataUrl(dataUrl, PNG_PREFIX);
+function reportPngBytes(dataUrl: string, t: FixedTranslator): Uint8Array {
+  const bytes = decodeBase64DataUrl(dataUrl, PNG_PREFIX, t);
   if (
     bytes.length < PNG_SIGNATURE.length ||
     PNG_SIGNATURE.some((expected, index) => bytes[index] !== expected)
   ) {
-    throw new Error("导出报告不是有效的 PNG 图像。");
+    throw new Error(t("errorInvalidPng"));
   }
   return bytes;
 }
@@ -50,9 +63,11 @@ export function buildPdfFromJpeg(
   jpegBytes: Uint8Array,
   imageWidth: number,
   imageHeight: number,
+  locale: AppLocale = currentAppLocale(),
 ): Uint8Array {
+  const t = i18n.getFixedT(locale);
   if (jpegBytes.length < 4 || jpegBytes[0] !== 0xff || jpegBytes[1] !== 0xd8) {
-    throw new Error("PDF 导出没有得到有效的 JPEG 报告画布。");
+    throw new Error(t("errorPdfJpeg"));
   }
   if (
     !Number.isSafeInteger(imageWidth) ||
@@ -60,7 +75,7 @@ export function buildPdfFromJpeg(
     imageWidth <= 0 ||
     imageHeight <= 0
   ) {
-    throw new Error("PDF 导出图像尺寸无效。");
+    throw new Error(t("errorPdfDimensions"));
   }
 
   const scale = Math.min(
@@ -128,31 +143,39 @@ export function buildPdfFromJpeg(
   return concatBytes(parts);
 }
 
-function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+function loadImage(
+  dataUrl: string,
+  t: FixedTranslator,
+): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("无法读取报告画布，PDF 导出已停止。"));
+    image.onerror = () => reject(new Error(t("errorReportRead")));
     image.src = dataUrl;
   });
 }
 
-async function reportPdfBytes(reportPngDataUrl: string): Promise<Uint8Array> {
-  reportPngBytes(reportPngDataUrl);
-  const image = await loadImage(reportPngDataUrl);
+async function reportPdfBytes(
+  reportPngDataUrl: string,
+  locale: AppLocale,
+  t: FixedTranslator,
+): Promise<Uint8Array> {
+  reportPngBytes(reportPngDataUrl, t);
+  const image = await loadImage(reportPngDataUrl, t);
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalWidth || image.width;
   canvas.height = image.naturalHeight || image.height;
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("当前浏览器无法创建 PDF 导出画布。");
+  if (!context) throw new Error(t("errorPdfCanvas"));
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   const jpegBytes = decodeBase64DataUrl(
     canvas.toDataURL("image/jpeg", 0.94),
     JPEG_PREFIX,
+    t,
   );
-  return buildPdfFromJpeg(jpegBytes, canvas.width, canvas.height);
+  return buildPdfFromJpeg(jpegBytes, canvas.width, canvas.height, locale);
 }
 
 function downloadBytes(bytes: Uint8Array, mime: string, fileName: string): void {
@@ -173,19 +196,21 @@ function downloadBytes(bytes: Uint8Array, mime: string, fileName: string): void 
 
 export async function exportReportInBrowser(
   request: ExportRequest,
+  locale: AppLocale = currentAppLocale(),
 ): Promise<ExportResult> {
+  const t = i18n.getFixedT(locale);
   if (!/^[A-Za-z0-9._-]+$/.test(request.suggestedFileName)) {
-    throw new Error("导出文件名包含不安全字符。");
+    throw new Error(t("errorUnsafeFilename"));
   }
   const expectedExtension = `.${request.format}`;
   if (!request.suggestedFileName.toLowerCase().endsWith(expectedExtension)) {
-    throw new Error(`导出文件名必须以 ${expectedExtension} 结尾。`);
+    throw new Error(t("errorFilenameExtension", { extension: expectedExtension }));
   }
 
   const bytes =
     request.format === "png"
-      ? reportPngBytes(request.reportPngDataUrl)
-      : await reportPdfBytes(request.reportPngDataUrl);
+      ? reportPngBytes(request.reportPngDataUrl, t)
+      : await reportPdfBytes(request.reportPngDataUrl, locale, t);
   const mime = request.format === "png" ? "image/png" : "application/pdf";
   downloadBytes(bytes, mime, request.suggestedFileName);
   return {

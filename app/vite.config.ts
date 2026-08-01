@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -18,5 +23,6 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    setupFiles: ["./src/testSetup.ts"],
   },
 });

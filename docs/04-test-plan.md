@@ -795,8 +795,30 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 已缓存完整 DEM/WBM 的区域在无网络、仅 WGS84 网格时仍能计算和导出无底图诊断报告；缺失或损坏计算资产继续阻断。
 - [x] 天地图与 EOxCloudless 瓦片不进入 Rust/浏览器持久缓存、2.5 GB 配额、EXE、安装包、Release 或诊断导出。
 - [x] 移除当前源码、依赖锁、新前端构建和测试构建中的 PMTiles/fflate/Range 路由；当前受管 release 二进制仍待重建，历史许可证据继续可查。
-- [x] TypeScript、13 个前端测试文件/107 项测试、production build、Rust workspace `110 passed / 5 ignored`、rustfmt、严格 Clippy 及 Windows xwin all-target 检查通过。
+- [x] TypeScript、14 个前端测试文件/133 项测试、production build、Rust workspace `110 passed / 5 ignored`、rustfmt、严格 Clippy 及 Windows xwin all-target 检查通过。
 - [ ] 通过受管流程删除服务器约 33 MB PMTiles runtime 资产，记录删除前后路径、字节数和缓存不变性。
 - [ ] 完成受管 stop/build/start、bootstrap/HTTP、真实在线瓦片、浏览器和 Windows 10/11 实机验证。
 
 当前事实：validation 天地图 token 尚未配置，受管运行服务尚未按本节目标重启，约 33 MB PMTiles runtime 资产尚未删除。当前运行中的旧进程因此不能作为纯在线实现的受管验收证据。
+
+## 35. 四语言国际化与 GitHub 介绍页（2026-08-02）
+
+- [x] 支持 `en`、`zh-CN`、`zh-TW`、`ja-JP`，英文为 fallback；无效存储值安全回退，系统语言映射与 `<html lang>` 更新有自动化覆盖。
+- [x] 语言选择写入 `hamheatmap.locale.v1`，切换后无需重启；发射点、参数、最多 8 个热力图、阈值、MapLibre camera 和当前工作流状态不丢失。
+- [x] App、ParameterPanel、MapView、参数校验、前端错误、缓存/下载/导出对话框和诊断 PNG/PDF 的用户可见文本均从四语言资源读取。
+- [x] 四个资源的 key 集完全一致；测试中不存在缺 key、直接显示翻译 key 或依赖测试主机 locale 的结果。
+- [x] 取消识别集中到稳定 helper，优先识别结构化 code，并只为现有 Rust/HTTP 协议保留兼容消息，不在业务组件中匹配界面语言。
+- [x] 地图实例不因语言切换重建；在线瓦片、中文供应方注记、attribution、发射点、范围、比例尺与热力图层级不改变。
+- [x] NSIS 配置包含 English、SimpChinese、TradChinese、Japanese；Windows 交叉配置检查通过，真实安装器四语言仍待 Windows 实机验收。
+- [x] `README.md` 为英文 canonical，`README.zh-Hans.md`、`README.zh-Hant.md`、`README.ja.md` 内容完整且顶部互链。
+- [x] README 事实清单检查 Release tag、资产名/大小/SHA-256、测试计数、关键产品常量、稳定章节和相对链接；GitHub Actions 执行该检查。
+
+## 36. 第一方署名与许可证门禁（2026-08-02）
+
+- [x] 所有第一方源码、测试、脚本、workflow、Cargo manifest、HTML、CSS 与原创 SVG 均包含项目名、创建者/主开发者、SPDX 版权与 Apache-2.0 标识。
+- [x] shebang、HTML doctype 与 XML declaration 保持在语法要求的位置，C/C++、Rust、TypeScript、CSS、Shell、Python、PowerShell、YAML、TOML、HTML 与 SVG 使用各自合法注释语法。
+- [x] third_party/**、所有 lock、app/src-tauri/gen/**、LICENSE 与第三方归属内容没有被批量盖上 Arsenic-er 版权。
+- [x] AUTHORS.md、NOTICE、.github/CODEOWNERS、npm/Cargo/Tauri metadata 与四语言 README 统一记录 Arsenic-er 为项目创建者及主开发者。
+- [x] Tauri bundle 资源包含 AUTHORS.md、NOTICE、LICENSE 与 THIRD_PARTY_LICENSES.md，并保持 English、SimpChinese、TradChinese、Japanese 四语言 NSIS 配置。
+- [x] scripts/check-source-attribution.py 使用 Git tracked + untracked allowlist，漏头、第三方误盖章和未分类文件均 fail closed；GitHub Actions documentation job 执行该检查。
+- [x] 当前前端证据更新为 14 files / 133 tests；README 四语言事实检查必须继续通过。

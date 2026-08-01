@@ -1,4 +1,10 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { FeatureCollection } from "geojson";
 import maplibregl, {
   type CanvasSource,
@@ -324,6 +330,7 @@ export function MapView({
   basemap,
   onlineBasemap,
 }: MapViewProps) {
+  const { t, i18n } = useTranslation();
   const [basemapPresentation, setBasemapPresentation] =
     useState<BasemapPresentation>("map");
   const [satelliteFallback, setSatelliteFallback] = useState(false);
@@ -585,6 +592,18 @@ export function MapView({
   }, []);
 
   useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const zoomIn = container.querySelector<HTMLButtonElement>(".maplibregl-ctrl-zoom-in");
+    const zoomOut = container.querySelector<HTMLButtonElement>(".maplibregl-ctrl-zoom-out");
+    for (const [button, label] of [[zoomIn, t("zoomIn")], [zoomOut, t("zoomOut")]] as const) {
+      if (!button) continue;
+      button.title = label;
+      button.setAttribute("aria-label", label);
+    }
+  }, [i18n.resolvedLanguage, t]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map?.isStyleLoaded()) {
       synchronizeMapStateRef.current?.();
@@ -721,37 +740,37 @@ export function MapView({
       isTrustedTiandituBasemap(basemap) ||
       isTrustedSatelliteBasemap(basemap));
   return (
-    <section className="map-shell" aria-label="发射点选择地图">
+    <section className="map-shell" aria-label={t("mapAria")}>
       <div ref={containerRef} className="map-canvas" />
       <div className="map-warning">
         <span className="map-warning-dot" />
         {onlineMapUnavailable
-          ? "在线地图不可用，已回退 WGS84 坐标网格"
+          ? t("mapUnavailable")
           : usingSatellite
           ? trustedOnlineBasemap
-            ? "天地图卫星影像（联网）· 中文地名"
+            ? t("mapTiandituSatellite")
             : trustedTianditu
-            ? "Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证"
-            : "Sentinel-2 卫星影像（联网）· 内部验证"
+            ? t("mapSentinelLabels")
+            : t("mapSentinel")
           : satelliteFallback
-          ? "卫星影像不可用，已切回在线地图"
+          ? t("mapSatelliteFallback")
           : trustedOnlineBasemap
-          ? "天地图在线矢量底图 · 中文地名"
+          ? t("mapTiandituVector")
           : trustedTianditu
-          ? "天地图在线真实底图 · 内部验证"
-          : "WGS84 内部测试画布 · 未配置真实底图"}
+          ? t("mapValidationVector")
+          : t("mapGrid")}
         {onlineMapUnavailable && (
           <button
             type="button"
             className="map-retry"
             onClick={retryOnlineBasemap}
           >
-            重试
+            {t("retry")}
           </button>
         )}
       </div>
       {satelliteAvailable && (
-        <div className="map-style-switch" role="group" aria-label="底图样式">
+        <div className="map-style-switch" role="group" aria-label={t("basemapStyle")}>
           <button
             type="button"
             className={basemapPresentation === "map" ? "active" : undefined}
@@ -761,7 +780,7 @@ export function MapView({
               setBasemapPresentation("map");
             }}
           >
-            地图
+            {t("map")}
           </button>
           <button
             type="button"
@@ -772,31 +791,31 @@ export function MapView({
               setBasemapPresentation("satellite");
             }}
           >
-            卫星 <small>联网</small>
+            {t("satellite")} <small>{t("online")}</small>
           </button>
         </div>
       )}
       {(trustedOnlineBasemap || trustedLegacyBasemap || usingSatellite) && (
         <div className="map-attribution">
           {trustedOnlineBasemap
-            ? `${onlineBasemap.attribution} · 在线底图`
+            ? `${onlineBasemap.attribution} · ${t("onlineBasemapAttribution")}`
             : usingSatellite
             ? trustedLegacyBasemap
-              ? `${basemap?.satellite?.attribution} · ${trustedLegacyBasemap.attribution} 地名`
-              : `${basemap?.satellite?.attribution} · 在线卫星影像`
-            : `${trustedLegacyBasemap?.attribution} · 在线底图`}
+              ? `${basemap?.satellite?.attribution} · ${trustedLegacyBasemap.attribution} ${t("placeLabelsAttribution")}`
+              : `${basemap?.satellite?.attribution} · ${t("onlineImageryAttribution")}`
+            : `${trustedLegacyBasemap?.attribution} · ${t("onlineBasemapAttribution")}`}
         </div>
       )}
       {!point && (
         <div className="map-empty-state">
           <div className="map-crosshair" aria-hidden="true" />
-          <strong>在地图上单击设置发射点</strong>
-          <span>选择后显示固定 200 km 计算范围</span>
+          <strong>{t("mapEmpty")}</strong>
+          <span>{t("mapEmptyDetail")}</span>
         </div>
       )}
       {point && (
         <div className="map-point-card">
-          <span>发射点</span>
+          <span>{t("transmitter")}</span>
           <strong>
             {point.lat.toFixed(5)}°, {point.lon.toFixed(5)}°
           </strong>

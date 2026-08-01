@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 //! Validated, offline PNG/PDF report encoding and atomic file persistence.
 
 use std::error::Error;

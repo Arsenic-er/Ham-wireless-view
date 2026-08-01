@@ -7,6 +7,8 @@ bill of materials and notice file required before public distribution.
 |---|---|---|---|
 | NTIA ITS Irregular Terrain Model | v1.4 / `668e4ab0b31a7ea1e949e4824272955d63e7c731` | U.S. Government work with worldwide permission and disclaimer | Propagation core |
 | `tiff` | 0.11.3 | MIT | GLO-90 GeoTIFF decoding |
+| `i18next` | 26.3.6 | MIT | Four-locale frontend internationalization runtime |
+| `react-i18next` | 17.0.11 | MIT | React bindings for frontend internationalization |
 | `cc` | Cargo.lock | MIT OR Apache-2.0 | C++ build helper |
 | `geographiclib-rs` | 0.2.7 | MIT | WGS84 receiver endpoint generation |
 | `png` | 0.18.1 | MIT OR Apache-2.0 | Diagnostic RGBA heatmap encoding |

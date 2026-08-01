@@ -1,3 +1,10 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
+import i18n from "../i18n";
+
 import type { CalculationResult } from "./types";
 
 export const MAP_OVERLAY_FILTER_ENCODING = "u8-dbm-floor-v1" as const;
@@ -18,9 +25,7 @@ export function thresholdDbmToBin(thresholdDbm: number): number {
 
 export function decodeMapOverlayFilter(payload: FilterPayload): Uint8Array {
   if (payload.mapOverlayFilterEncoding !== MAP_OVERLAY_FILTER_ENCODING) {
-    throw new Error(
-      `unsupported map overlay filter encoding: ${payload.mapOverlayFilterEncoding}`,
-    );
+    throw new Error(i18n.t("errorFilterEncodingDetail", { encoding: payload.mapOverlayFilterEncoding }));
   }
   if (
     !Number.isSafeInteger(payload.mapOverlayWidth) ||
@@ -28,26 +33,22 @@ export function decodeMapOverlayFilter(payload: FilterPayload): Uint8Array {
     payload.mapOverlayWidth <= 0 ||
     payload.mapOverlayHeight <= 0
   ) {
-    throw new Error("map overlay filter dimensions must be positive integers");
+    throw new Error(i18n.t("errorFilterDimensionsDetail"));
   }
   let binary: string;
   try {
     binary = atob(payload.mapOverlayFilterBase64);
   } catch {
-    throw new Error("map overlay filter contains invalid base64");
+    throw new Error(i18n.t("errorFilterBase64Detail"));
   }
   const expectedLength = payload.mapOverlayWidth * payload.mapOverlayHeight;
   if (binary.length !== expectedLength) {
-    throw new Error(
-      `map overlay filter length ${binary.length} does not match ${expectedLength}`,
-    );
+    throw new Error(i18n.t("errorFilterLengthDetail", { actual: binary.length, expected: expectedLength }));
   }
   const bins = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   const invalidIndex = bins.findIndex((bin) => bin > 81);
   if (invalidIndex !== -1) {
-    throw new Error(
-      `map overlay filter bin ${invalidIndex} is outside the supported 0..81 range`,
-    );
+    throw new Error(i18n.t("errorFilterBinDetail", { index: invalidIndex }));
   }
   return bins;
 }
@@ -59,7 +60,7 @@ export function applyVisibleSignalThreshold(
   thresholdDbm: number,
 ): void {
   if (rgba.length !== filterBins.length * 4 || originalAlpha.length !== filterBins.length) {
-    throw new Error("map overlay filter and RGBA dimensions do not match");
+    throw new Error(i18n.t("errorFilterRgbaDetail"));
   }
   const minimumVisibleBin = thresholdDbmToBin(thresholdDbm);
   for (let index = 0; index < filterBins.length; index += 1) {

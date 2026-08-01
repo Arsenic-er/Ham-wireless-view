@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -80,6 +85,22 @@ describe("export report model", () => {
     expect(model.warning).toContain("内部测试，不得公开发布");
     expect(model.subtitle).toContain("NTIA ITM v1.4 (668e4ab)");
     expect(model.subtitle).toContain("Copernicus DEM GLO-90 DEM/WBM");
+  });
+
+  it.each([
+    ["en", "HamHeatmap Propagation Prediction Report", "Band / frequency"],
+    ["zh-CN", "HamHeatmap 传播预测报告", "频段 / 频率"],
+    ["zh-TW", "HamHeatmap 傳播預測報告", "頻段 / 頻率"],
+    ["ja-JP", "HamHeatmap 伝搬予測レポート", "バンド / 周波数"],
+  ] as const)("uses frozen %s report keys", (locale, title, bandLabel) => {
+    const model = buildExportReportModel(
+      result,
+      parameters,
+      new Date(2026, 6, 16, 12, 34, 56),
+      locale,
+    );
+    expect(model.title).toBe(title);
+    expect(model.parameterRows[1][0]).toBe(bandLabel);
   });
 
   it("keeps the fixed dBm anchors aligned with the Rust color scale", () => {

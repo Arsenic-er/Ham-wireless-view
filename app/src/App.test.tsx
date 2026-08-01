@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +27,9 @@ const backendMocks = vi.hoisted(() => ({
   configureOnlineBasemap: vi.fn(),
   probeOnlineBasemap: vi.fn(),
   clearOnlineBasemap: vi.fn(),
+  exportReport: vi.fn(),
+  isCancellationError: vi.fn(),
+  localizedBackendError: vi.fn(),
   previewHandler: null as ((preview: CalculationPreview) => void) | null,
 }));
 
@@ -43,7 +51,9 @@ vi.mock("./lib/backend", () => ({
   deleteCacheRegion: vi.fn(),
   downloadRegion: vi.fn(),
   estimateDownload: backendMocks.estimateDownload,
-  exportReport: vi.fn(),
+  exportReport: backendMocks.exportReport,
+  isCancellationError: backendMocks.isCancellationError,
+  localizedBackendError: backendMocks.localizedBackendError,
   configureOnlineBasemap: backendMocks.configureOnlineBasemap,
   probeOnlineBasemap: backendMocks.probeOnlineBasemap,
   clearOnlineBasemap: backendMocks.clearOnlineBasemap,
@@ -57,6 +67,16 @@ vi.mock("./lib/backend", () => ({
   ),
   listenCalculationProgress: vi.fn().mockResolvedValue(() => undefined),
   listenDownloadProgress: vi.fn().mockResolvedValue(() => undefined),
+}));
+
+const exportMocks = vi.hoisted(() => ({
+  createReport: vi.fn(),
+  suggestedFileName: vi.fn(),
+}));
+
+vi.mock("./lib/export", () => ({
+  createExportReportPngDataUrl: exportMocks.createReport,
+  suggestedExportFileName: exportMocks.suggestedFileName,
 }));
 
 vi.mock("./components/MapView", () => ({
@@ -116,6 +136,7 @@ vi.mock("./components/ParameterPanel", () => ({
   ),
 }));
 
+import i18n from "./i18n";
 import { App } from "./App";
 
 const cacheUsage = {
@@ -205,6 +226,28 @@ beforeEach(() => {
     status: "reachable",
   });
   backendMocks.clearOnlineBasemap.mockResolvedValue({ ...onlineBasemap, configured: false });
+  backendMocks.exportReport.mockResolvedValue({
+    cancelled: false,
+    path: null,
+    bytesWritten: 8,
+  });
+  backendMocks.isCancellationError.mockImplementation((error: unknown) => {
+    if (error && typeof error === "object" && "code" in error) {
+      return ["operation.cancelled", "cancelled"].includes(
+        String((error as { code?: unknown }).code),
+      );
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return message.toLowerCase().includes("cancel") || message.includes("取消");
+  });
+  backendMocks.localizedBackendError.mockImplementation((error: unknown) =>
+    error instanceof Error ? error.message : String(error),
+  );
+  exportMocks.createReport.mockResolvedValue("data:image/png;base64,iVBORw0KGgo=");
+  exportMocks.suggestedFileName.mockImplementation(
+    (_result: CalculationResult, _parameters: RadioParameters, format: string) =>
+      `coverage.${format}`,
+  );
   backendMocks.bootstrap.mockResolvedValue({
     schemaVersion: 2,
     modelName: "NTIA ITM Point-to-Point",
@@ -251,9 +294,11 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   vi.clearAllMocks();
+  localStorage.removeItem("hamheatmap.locale.v1");
+  await i18n.changeLanguage("zh-CN");
 });
 
 describe("desktop online map settings", () => {
@@ -462,6 +507,39 @@ describe("validation server UI", () => {
     });
   });
 
+  it("freezes report and completion copy to the locale active when export starts", async () => {
+    const pendingReport = deferred<string>();
+    exportMocks.createReport.mockReturnValueOnce(pendingReport.promise);
+    render(<App />);
+
+    await screen.findByText("等待选择发射点");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("数据已就绪");
+    fireEvent.click(screen.getByRole("button", { name: /开始计算/ }));
+    await screen.findByText("覆盖计算完成");
+    fireEvent.click(screen.getByRole("button", { name: /导出/ }));
+    fireEvent.click(screen.getByRole("button", { name: /PNG 图像/ }));
+    await waitFor(() => expect(exportMocks.createReport).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      await i18n.changeLanguage("ja-JP");
+      pendingReport.resolve("data:image/png;base64,iVBORw0KGgo=");
+      await pendingReport.promise;
+    });
+
+    expect(await screen.findByText("已触发 PNG 下载 · 0.0 KB")).toBeTruthy();
+    expect(exportMocks.createReport).toHaveBeenCalledWith(
+      result,
+      expect.objectContaining({ txGroundElevationOverrideM: null }),
+      expect.any(Date),
+      "zh-CN",
+    );
+    expect(backendMocks.exportReport).toHaveBeenCalledWith(
+      expect.objectContaining({ format: "png", suggestedFileName: "coverage.png" }),
+      "zh-CN",
+    );
+  });
+
   it("shows an incompatible calculation-result error without entering success", async () => {
     backendMocks.calculate.mockRejectedValueOnce(
       new Error("\u8ba1\u7b97\u7ed3\u679c\u534f\u8bae\u4e0d\u517c\u5bb9\uff1a\u9700\u8981 schemaVersion 4\u3002"),
@@ -515,6 +593,29 @@ describe("validation server UI", () => {
     expect((calculateButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(calculateButton);
     await waitFor(() => expect(backendMocks.calculate).toHaveBeenCalledTimes(2));
+  });
+
+  it("preserves transmitter, manual parameters, completed heatmaps, and threshold across language changes", async () => {
+    render(<App />);
+
+    await screen.findByText("等待选择发射点");
+    fireEvent.click(screen.getByRole("button", { name: "select-point" }));
+    await screen.findByText("数据已就绪");
+    fireEvent.click(screen.getByRole("button", { name: "set-manual-override" }));
+    fireEvent.click(screen.getByRole("button", { name: /开始计算/ }));
+    await screen.findByText("覆盖计算完成");
+
+    const slider = screen.getByRole("slider", { name: "最弱可见场强" });
+    fireEvent.change(slider, { target: { value: "-120" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "语言" }), {
+      target: { value: "ja-JP" },
+    });
+    await screen.findByRole("combobox", { name: "言語" });
+
+    expect(screen.getByTestId("selected-point").textContent).toBe("30.5,103.5");
+    expect(screen.getByTestId("ground-elevation-override").textContent).toBe("800");
+    expect(screen.getByTestId("heatmap-count").textContent).toBe("1");
+    expect((screen.getByRole("slider", { name: "表示する最低受信電力" }) as HTMLInputElement).value).toBe("-120");
   });
 
   it("keeps different transmitter results until clear is clicked", async () => {
@@ -581,7 +682,7 @@ describe("validation server UI", () => {
           }),
       );
     backendMocks.cancelCalculation.mockImplementationOnce(async () => {
-      rejectCalculation(new Error("calculation cancelled"));
+      rejectCalculation({ code: "operation.cancelled" });
     });
 
     render(<App />);

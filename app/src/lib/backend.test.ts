@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -16,6 +21,8 @@ import {
   estimateDownload,
   exportReport,
   inspectPoint,
+  isCancellationError,
+  localizedBackendError,
   listenCalculationPreview,
   listenCalculationProgress,
   listenDownloadProgress,
@@ -37,6 +44,38 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("localized backend error compatibility", () => {
+  it("recognizes structured cancellation codes", () => {
+    expect(isCancellationError({ code: "operation.cancelled" })).toBe(true);
+    expect(isCancellationError({ code: "cancelled" })).toBe(true);
+  });
+
+  it("recognizes the four legacy language families", () => {
+    expect(isCancellationError(new Error("coverage calculation cancelled"))).toBe(true);
+    expect(isCancellationError(new Error("操作已取消"))).toBe(true);
+    expect(isCancellationError(new Error("運算已取消"))).toBe(true);
+    expect(isCancellationError(new Error("計算をキャンセルしました"))).toBe(true);
+  });
+
+  it("does not classify unrelated failures as cancellation", () => {
+    expect(isCancellationError(new Error("network unavailable"))).toBe(false);
+    expect(isCancellationError({ code: "operation.failed" })).toBe(false);
+  });
+
+  it("maps known legacy backend messages and hides unknown foreign-language text", () => {
+    const cacheError = new Error("持久数据空间不足，请先删除缓存后再配置在线地图");
+    expect(localizedBackendError(cacheError, "en")).toContain("Persistent data space");
+    expect(localizedBackendError(cacheError, "zh-TW")).toContain("持久資料空間不足");
+    expect(localizedBackendError(cacheError, "ja-JP")).toContain("永続データ領域");
+
+    const unknown = new Error("神秘的后端内部错误");
+    expect(localizedBackendError(unknown, "en")).not.toContain("神秘");
+    expect(localizedBackendError(unknown, "zh-TW")).not.toContain("神秘");
+    expect(localizedBackendError(unknown, "ja-JP")).not.toContain("神秘");
+    expect(localizedBackendError({ status: 503 }, "en")).toContain("HTTP 503");
+  });
 });
 
 describe("backend mode", () => {
@@ -1023,7 +1062,7 @@ describe("validation operation protocol", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(calculate(CALCULATION_REQUEST)).rejects.toThrow("invalid operation ticket");
+    await expect(calculate(CALCULATION_REQUEST)).rejects.toThrow("无效的操作票据");
     await cancelCalculation();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -1381,7 +1420,7 @@ describe("validation operation bounded cleanup", () => {
     const calculation = calculate(CALCULATION_REQUEST);
     await flushMicrotasks();
     const cancellationExpectation = expect(cancelCalculation()).rejects.toThrow(
-      "Cancellation timed out",
+      "取消请求超时",
     );
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3_000);
@@ -1602,7 +1641,7 @@ describe("Tauri calculation preview channel", () => {
     [
       "a decoded filter with the wrong length",
       { ...CALCULATION_RESULT, mapOverlayFilterBase64: "UQ==" },
-      "does not match",
+      "与预期的",
     ],
     [
       "a filter bin above 81",
@@ -1612,7 +1651,7 @@ describe("Tauri calculation preview channel", () => {
           "\x52" + "\x51".repeat(401 * 401 - 1),
         ),
       },
-      "0..81",
+      "0–81",
     ],
   ])("rejects %s before returning success", async (_label, payload, message) => {
     mockIPC((command) => {

@@ -642,3 +642,16 @@ Downloading/Calculating → Cancelling → Ready 或 PointSelected
 - 地图禁止添加 hillshade、terrain、contour、slope、elevation raster 或 3D terrain 图层。
 - DEM 只能由 Rust 计算服务读取，前端地图接口不能直接请求或显示 DEM 瓦片。
 - 发射点信息可以显示该点自动读取的海拔；这不构成地图高程可视化。
+
+## 19. 国际化架构
+
+- 应用支持 `en`、`zh-CN`、`zh-TW`、`ja-JP` 四个 BCP 47 语言标识；英文是资源源语言和缺失翻译的唯一 fallback。
+- 初始语言按“已保存的 `hamheatmap.locale.v1` → `navigator.languages`/Windows 系统语言 → 英文”解析。简体中文区域映射到 `zh-CN`，繁体中文区域映射到 `zh-TW`，日语区域映射到 `ja-JP`。
+- React 使用固定版本的 `i18next` 与 `react-i18next`。翻译资源随前端构建打包，不从 CDN、远程翻译服务或服务器动态加载。
+- 初次按系统语言解析时只更新 `<html lang>`，不得写入 `hamheatmap.locale.v1`；只有用户在语言选择器中显式选择后才持久保存。切换不重启应用、不重建 MapLibre 地图实例，也不清除发射点、参数、热力图、视角、缓存状态或运行中状态。
+- 新增用户可见文本必须使用稳定翻译 key。测试强制四个语言资源 key 集完全一致，英文缺失时构建失败，不允许把某个非英文资源当作隐式 fallback。
+- 参数校验与前端自生成错误使用稳定 key/code 与参数再翻译。当前 `localizedBackendError` 是 Rust/Tauri/HTTP 旧字符串协议的集中兼容桥：已知可达消息映射到 catalog key，HTTP 只保留状态码等非敏感技术参数，未知且非当前界面语言的文本降级为本地化通用错误，避免英、繁中或日文界面泄漏简中后端文案。该桥不是长期 IPC 契约；后续协议必须迁移到 `{ schemaVersion, code, params }`，并禁止再以展示字符串判断业务状态。
+- 当前取消兼容层集中识别结构化 `operation.cancelled` 及既有后端消息，业务组件不再散落检查某种自然语言中的“取消”或 `cancel`。
+- 诊断 PNG/PDF 在导出开始时冻结当前 locale、翻译资源和 `Intl` 数字格式；建议文件名继续使用 ASCII，地图服务商名称、署名和模型标识不翻译。
+- MapLibre 应用控件可以本地化，但天地图 `cva/cia` 注记仍由供应方提供中文。UI 四语言支持不代表底图具备英文或日文地名；改变地名语言需要新的地图源、协议与合规决策。
+- NSIS 安装器包含 English、SimpChinese、TradChinese 与 Japanese 语言资源，默认跟随 Windows；安装器语言和应用内语言选择彼此独立。

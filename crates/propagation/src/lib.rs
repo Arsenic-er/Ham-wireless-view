@@ -1,3 +1,8 @@
+// Ham Wireless View
+// Project creator and lead developer: Arsenic-er
+// SPDX-FileCopyrightText: 2026 Arsenic-er
+// SPDX-License-Identifier: Apache-2.0
+
 //! Versioned propagation primitives and the narrow Rust/C++ boundary for NTIA ITM.
 
 use std::error::Error;
