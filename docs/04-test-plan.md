@@ -892,7 +892,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] `scripts/node-project.sh --prefix app test`：17 test files / 151 passed。
 - [x] `scripts/cargo-project.sh test --workspace --all-targets --locked`：133 passed / 5 ignored。
 - [x] Windows xwin workspace check、测试程序 `--no-run` 与严格 Clippy 均通过；这不替代 Windows 实机。
-- [x] 当前源码已受管 stop/build/start，新 PID `3066064` 的 health schema 1；该事实只证明当前二进制已运行。
+- [x] 当前源码已从干净提交 d7bd31a 完成受管 stop/build/start，health schema 1；该事实只证明当前二进制已运行。
 - [ ] 尚无链路 live HTTP、真实缓存或受管浏览器剖面验收，也没有公开部署。
 - [ ] v0.1.0-alpha.2 不含本功能；新的 Windows EXE/NSIS 尚未构建，Windows 10/11 WebView2 实机尚未验收。
 
@@ -904,5 +904,5 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] provider 选择互斥：无 token 拒绝天地图路径；合法 token 存在时保持原天地图 metadata/URL 并拒绝 CARTO 路径；坏 token 文件仍阻止启动。
 - [x] `hamheatmap-validation-server` 26 项测试通过。
 - [x] CARTO base/labels、EOx satellite 与 label/base/satellite source error 已做状态隔离：地名失败不移除健康基础源，普通/卫星互相回退，只有两个基础源都失败才进入 WGS84。
-- [x] 受管服务由旧 PID `3040955` 切换为 `3066064`；health schema 1，bootstrap 为 enabled `carto-voyager base/labels maxZoom=18`。live base 为 HTTP 200 `image/png` 24,798 bytes，labels 为 HTTP 200 `image/png` 8,087 bytes，satellite 为 HTTP 200 `image/jpeg` 17,586 bytes；旧天地图路径 404、query 注入 400、labels `Cache-Control: no-store`。
+- [x] 受管服务已停止旧 PID 3040955，并从干净提交 d7bd31a 重建；health schema 1，bootstrap 为 enabled carto-voyager base/labels maxZoom=18。live base 为 HTTP 200 image/png 24,798 bytes，labels 为 HTTP 200 image/png 8,087 bytes，satellite 为 HTTP 200 image/jpeg 17,586 bytes；旧天地图路径 404、query 注入 400、labels Cache-Control: no-store。
 - [ ] 通过 SSH 隧道人工确认道路、详细地名、热力图层级、卫星切换、WGS84 故障回退和署名可读性。

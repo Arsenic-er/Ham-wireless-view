@@ -16,7 +16,7 @@ HamHeatmap（アマチュア無線伝搬ヒートマップ）は、中国本土�
 ### オンライン検証版
 
 - 非公開の validation サービスはサーバー上で稼働し、`127.0.0.1:1421` のみをリッスンします。アクセスには SSH トンネルが必要です。
-- 現在のソースは、validation に有効な token がある場合は同一オリジンの Tianditu 通常地図を使い、token がない場合は CARTO Voyager base + labels を自動選択します。衛星モードは EOxCloudless と現在のオンライン地名レイヤー（token なしでは CARTO labels）を使います。通常地図、地名、衛星画像の障害は相互に分離され、影響を受けていないレイヤーは利用を継続できます。利用可能な 2 つの表示ベースが両方失われた場合のみ WGS84 座標グリッドへ戻ります。管理下のループバックサービスは PID 3066064 として再ビルド済みで、health schema 1、CARTO base/labels、EOx 衛星、旧 Tianditu の拒否、クエリ注入の拒否、no-store の確認に合格しています。ブラウザー表示は未検証です。
+- 現在のソースは、validation に有効な token がある場合は同一オリジンの Tianditu 通常地図を使い、token がない場合は CARTO Voyager base + labels を自動選択します。衛星モードは EOxCloudless と現在のオンライン地名レイヤー（token なしでは CARTO labels）を使います。通常地図、地名、衛星画像の障害は相互に分離され、影響を受けていないレイヤーは利用を継続できます。利用可能な 2 つの表示ベースが両方失われた場合のみ WGS84 座標グリッドへ戻ります。管理下のループバックサービスは clean commit d7bd31a から再ビルド済みで、health schema 1、CARTO base/labels、EOx 衛星、旧 Tianditu の拒否、クエリ注入の拒否、no-store の確認に合格しています。ブラウザー表示は未検証です。
 - -140..-60 dBm、1 dB 刻みの全体表示しきい値スライダーを実装済みです。弱いピクセルを動的に非表示にしますが、伝搬計算の再実行や統計、本回のエクスポート内容の変更は行いません。現在、フロントエンド 17 files / 151 tests、Rust workspace 133 passed / 5 ignored と、実キャッシュを使う 3 組の HTTP スモークテストに合格しています。8 レイヤー時のサーバー CPU マイクロベンチマークは P95 5.982 ms です。Codex Windows ACL 障害のため管理ブラウザーでのドラッグ操作は未検証で、Windows WebView2 実機試験も未完了です。
 - 旧 4 省 PMTiles ルートは製品対象から外れ、過去の技術証拠としてのみ残しています。EOxCloudless は validation 用のオンライン衛星レイヤーであり、公開 Windows リリース資産には含めません。
 

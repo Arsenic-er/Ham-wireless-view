@@ -16,7 +16,7 @@ HamHeatmap（业余无线电传播热力图）是一个面向中国大陆业余�
 ### 在线验证版
 
 - 私有 validation 服务已在服务器运行，只监听 `127.0.0.1:1421`，需通过 SSH 隧道访问。
-- 当前源码在 validation 存在合法 token 时使用同源天地图普通地图；没有 token 时自动使用 CARTO Voyager base + labels。卫星模式使用 EOxCloudless，并保留当前在线地名层（无 token 时为 CARTO labels）。普通底图、地名和卫星图的失败相互隔离，未受影响的图层可继续使用；只有两个可用视觉底图都失效时才回退 WGS84 坐标网格。受管回环服务已重建为 PID 3066064：health schema 1、CARTO base/labels、EOx 卫星、旧天地图拒绝、查询注入拒绝与 no-store 检查均通过；浏览器视觉仍待验。
+- 当前源码在 validation 存在合法 token 时使用同源天地图普通地图；没有 token 时自动使用 CARTO Voyager base + labels。卫星模式使用 EOxCloudless，并保留当前在线地名层（无 token 时为 CARTO labels）。普通底图、地名和卫星图的失败相互隔离，未受影响的图层可继续使用；只有两个可用视觉底图都失效时才回退 WGS84 坐标网格。受管回环服务已从干净提交 d7bd31a 重建：health schema 1、CARTO base/labels、EOx 卫星、旧天地图拒绝、查询注入拒绝与 no-store 检查均通过；浏览器视觉仍待验。
 - 已实现 -140..-60 dBm、1 dB 步长的全局显示阈值游标；它动态隐藏较弱像素，不重新计算传播结果，也不改变统计与本轮导出内容。当前门禁通过前端 17 files / 151 tests、Rust workspace 133 passed / 5 ignored 和三组真实缓存 HTTP 烟测；8 层服务器 CPU 微基准 P95 为 5.982 ms。受管浏览器拖动因 Codex Windows ACL 故障尚未完成，Windows WebView2 实机仍待验。
 - 四省 PMTiles 已退出当前产品目标，只保留历史工程证据；EOxCloudless 仍是 validation 在线卫星视觉层，不进入公开 Windows 发行资产。
 
