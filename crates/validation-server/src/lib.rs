@@ -267,7 +267,7 @@ impl ValidationServer {
                 Some(self.satellite_basemap_response(path))
             }
             ("GET", path) if path.starts_with("/api/basemap/") => {
-                Some(self.tianditu_basemap_response(path))
+                Some(self.regular_basemap_response(path))
             }
             ("GET", "/api/cache-overview") => {
                 Some(self.with_operation(|_| self.state.service.cache_overview()))
@@ -364,8 +364,8 @@ impl ValidationServer {
         })
     }
 
-    fn tianditu_basemap_response(&self, path: &str) -> Response {
-        match self.state.basemap.fetch_tianditu(path) {
+    fn regular_basemap_response(&self, path: &str) -> Response {
+        match self.state.basemap.fetch_regular(path) {
             Ok(tile) => Response {
                 status: 200,
                 content_type: tile.content_type,
@@ -374,9 +374,6 @@ impl ValidationServer {
                 cache_control: "no-store",
             },
             Err(BasemapError::InvalidPath) => ApiError::not_found().into_response(),
-            Err(BasemapError::Disabled) => {
-                ApiError::unavailable("basemap is disabled").into_response()
-            }
             Err(BasemapError::UpstreamUnavailable) => {
                 ApiError::bad_gateway("basemap upstream is unavailable").into_response()
             }
@@ -395,9 +392,6 @@ impl ValidationServer {
                 cache_control: "no-store",
             },
             Err(BasemapError::InvalidPath) => ApiError::not_found().into_response(),
-            Err(BasemapError::Disabled) => {
-                ApiError::unavailable("satellite basemap is disabled").into_response()
-            }
             Err(BasemapError::UpstreamUnavailable) => {
                 ApiError::bad_gateway("satellite upstream is unavailable").into_response()
             }
@@ -1676,13 +1670,6 @@ impl ApiError {
         }
     }
 
-    fn unavailable(message: impl Into<String>) -> Self {
-        Self {
-            status: 503,
-            message: message.into(),
-        }
-    }
-
     fn service(message: impl Into<String>) -> Self {
         Self {
             status: 422,
@@ -2404,7 +2391,7 @@ mod tests {
             fixture
                 .request("GET", "/api/basemap/tianditu/vec/5/25/12", None, b"")
                 .status,
-            503
+            404
         );
         assert_eq!(
             fixture
@@ -2414,7 +2401,19 @@ mod tests {
         );
         assert_eq!(
             fixture
-                .request("GET", "/api/basemap/tianditu/vec/5/32/12", None, b"")
+                .request("GET", "/api/basemap/carto/evil/5/25/12", None, b"")
+                .status,
+            404
+        );
+        assert_eq!(
+            fixture
+                .request("GET", "/api/basemap/carto/base/19/0/0", None, b"")
+                .status,
+            404
+        );
+        assert_eq!(
+            fixture
+                .request("GET", "/api/basemap/carto/base/5/32/12", None, b"")
                 .status,
             404
         );
@@ -2422,7 +2421,7 @@ mod tests {
             fixture
                 .request(
                     "GET",
-                    "/api/basemap/tianditu/vec/5/25/12?tk=evil",
+                    "/api/basemap/carto/base/5/25/12?source=evil",
                     None,
                     b""
                 )
@@ -2431,7 +2430,7 @@ mod tests {
         );
         assert_eq!(
             fixture
-                .request("POST", "/api/basemap/tianditu/vec/5/25/12", None, b"")
+                .request("POST", "/api/basemap/carto/base/5/25/12", None, b"")
                 .status,
             405
         );
@@ -2471,18 +2470,24 @@ mod tests {
         let bootstrap_json = response_json(&bootstrap);
         assert_eq!(bootstrap_json["coverageRadiusKm"], 200);
         assert_eq!(bootstrap_json["gridSize"], 401);
-        assert_eq!(bootstrap_json["basemap"]["enabled"], false);
-        assert_eq!(bootstrap_json["basemap"]["providerId"], "tianditu");
-        assert_eq!(bootstrap_json["basemap"]["displayName"], "天地图");
-        assert_eq!(bootstrap_json["basemap"]["attribution"], "天地图");
+        assert_eq!(bootstrap_json["basemap"]["enabled"], true);
+        assert_eq!(bootstrap_json["basemap"]["providerId"], "carto-voyager");
+        assert_eq!(
+            bootstrap_json["basemap"]["displayName"],
+            "CARTO Voyager / OpenStreetMap"
+        );
+        assert_eq!(
+            bootstrap_json["basemap"]["attribution"],
+            "© OpenStreetMap contributors © CARTO"
+        );
         assert_eq!(bootstrap_json["basemap"]["mode"], "same-origin-proxy");
         assert_eq!(bootstrap_json["basemap"]["maxZoom"], 18);
         assert_eq!(
             bootstrap_json["basemap"]["tilePathTemplate"],
-            "/api/basemap/tianditu/{layer}/{z}/{x}/{y}"
+            "/api/basemap/carto/{layer}/{z}/{x}/{y}"
         );
-        assert_eq!(bootstrap_json["basemap"]["layers"][0]["id"], "vec");
-        assert_eq!(bootstrap_json["basemap"]["layers"][1]["id"], "cva");
+        assert_eq!(bootstrap_json["basemap"]["layers"][0]["id"], "base");
+        assert_eq!(bootstrap_json["basemap"]["layers"][1]["id"], "labels");
         assert_eq!(
             bootstrap_json["basemap"]["satellite"]["providerId"],
             "eoxcloudless"
@@ -2499,6 +2504,7 @@ mod tests {
         let encoded_bootstrap = String::from_utf8(bootstrap.body.clone()).unwrap();
         assert!(!encoded_bootstrap.contains("token"));
         assert!(!encoded_bootstrap.contains("t0.tianditu.gov.cn"));
+        assert!(!encoded_bootstrap.contains("a.basemaps.cartocdn.com"));
         assert!(!encoded_bootstrap.contains("tiles.maps.eox.at"));
 
         let point_body = br#"{"point":{"lat":30.5,"lon":103.5}}"#;

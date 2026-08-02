@@ -19,6 +19,8 @@ import {
   maidenheadLocator,
 } from "../lib/geodesy";
 import {
+  CARTO_BASE_SOURCE_ID,
+  CARTO_LABEL_SOURCE_ID,
   SATELLITE_SOURCE_ID,
   TIANDITU_IMAGERY_LABEL_SOURCE_ID,
   TIANDITU_IMAGERY_SOURCE_ID,
@@ -26,6 +28,7 @@ import {
   TIANDITU_VECTOR_SOURCE_ID,
   firstBasemapLabelLayerId,
   isTrustedBasemap,
+  isTrustedCartoBasemap,
   isTrustedOnlineBasemap,
   isTrustedSatelliteBasemap,
   isTrustedTiandituBasemap,
@@ -62,11 +65,20 @@ interface MapViewProps {
   onlineBasemap?: OnlineBasemapInfo | null;
 }
 
-const ONLINE_BASEMAP_SOURCE_IDS = new Set([
-  TIANDITU_VECTOR_SOURCE_ID,
+const BASEMAP_LABEL_SOURCE_IDS = new Set([
+  CARTO_LABEL_SOURCE_ID,
   TIANDITU_LABEL_SOURCE_ID,
-  TIANDITU_IMAGERY_SOURCE_ID,
   TIANDITU_IMAGERY_LABEL_SOURCE_ID,
+]);
+
+const ORDINARY_BASEMAP_SOURCE_IDS = new Set([
+  CARTO_BASE_SOURCE_ID,
+  TIANDITU_VECTOR_SOURCE_ID,
+]);
+
+const SATELLITE_BASEMAP_SOURCE_IDS = new Set([
+  SATELLITE_SOURCE_ID,
+  TIANDITU_IMAGERY_SOURCE_ID,
 ]);
 
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
@@ -392,7 +404,11 @@ export function MapView({
   const [basemapPresentation, setBasemapPresentation] =
     useState<BasemapPresentation>("map");
   const [satelliteFallback, setSatelliteFallback] = useState(false);
+  const [ordinaryMapFallback, setOrdinaryMapFallback] = useState(false);
   const [onlineBasemapFailed, setOnlineBasemapFailed] = useState(false);
+  const [unavailableSourceIds, setUnavailableSourceIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const synchronizeMapStateRef = useRef<(() => void) | null>(null);
@@ -422,6 +438,8 @@ export function MapView({
   const basemapRef = useRef(basemap);
   const onlineBasemapRef = useRef(onlineBasemap);
   const onlineBasemapFailedRef = useRef(onlineBasemapFailed);
+  const unavailableSourceIdsRef =
+    useRef<ReadonlySet<string>>(unavailableSourceIds);
   const basemapPresentationRef = useRef(basemapPresentation);
   themeRef.current = theme;
   pointRef.current = point;
@@ -438,6 +456,7 @@ export function MapView({
   basemapPresentationRef.current = basemapPresentation;
   onlineBasemapRef.current = onlineBasemap;
   onlineBasemapFailedRef.current = onlineBasemapFailed;
+  unavailableSourceIdsRef.current = unavailableSourceIds;
 
   useEffect(() => {
     if (!containerRef.current || !heatmapCanvasLeasesRef.current || !previewBlobUrlsRef.current) return;
@@ -492,6 +511,7 @@ export function MapView({
         themeRef.current,
         basemapPresentationRef.current,
         failed ? null : onlineBasemapRef.current,
+        unavailableSourceIdsRef.current,
       );
       updateSelection(
         map,
@@ -670,35 +690,80 @@ export function MapView({
     });
     map.on("error", (event) => {
       const sourceId = (event as { sourceId?: string }).sourceId;
-      const trustedCustom = isTrustedOnlineBasemap(onlineBasemapRef.current);
-      const trustedSameOrigin = isTrustedTiandituBasemap(basemapRef.current);
-      const trustedSatellite = isTrustedSatelliteBasemap(basemapRef.current);
       if (!sourceId || !map.getSource(sourceId)) return;
 
-      const customImageryFailed =
-        trustedCustom &&
-        (sourceId === TIANDITU_IMAGERY_SOURCE_ID ||
-          sourceId === TIANDITU_IMAGERY_LABEL_SOURCE_ID);
-      const validationSatelliteFailed =
-        sourceId === SATELLITE_SOURCE_ID && trustedSatellite;
-      if (
-        customImageryFailed ||
-        (validationSatelliteFailed && trustedSameOrigin)
-      ) {
-        setSatelliteFallback(true);
-        setBasemapPresentation("map");
+      const trustedCustom = isTrustedOnlineBasemap(onlineBasemapRef.current);
+      const trustedSameOrigin = isTrustedTiandituBasemap(basemapRef.current);
+      const trustedCarto = isTrustedCartoBasemap(basemapRef.current);
+      const trustedSatellite = isTrustedSatelliteBasemap(basemapRef.current);
+      const ordinarySourceId =
+        trustedCustom || trustedSameOrigin
+          ? TIANDITU_VECTOR_SOURCE_ID
+          : trustedCarto
+            ? CARTO_BASE_SOURCE_ID
+            : null;
+      const satelliteSourceId = trustedCustom
+        ? TIANDITU_IMAGERY_SOURCE_ID
+        : trustedSatellite
+          ? SATELLITE_SOURCE_ID
+          : null;
+      const ordinaryAvailable =
+        ordinarySourceId !== null &&
+        !unavailableSourceIdsRef.current.has(ordinarySourceId);
+      const satelliteAvailable =
+        satelliteSourceId !== null &&
+        !unavailableSourceIdsRef.current.has(satelliteSourceId);
+      const markUnavailable = () => {
+        const next = new Set(unavailableSourceIdsRef.current);
+        next.add(sourceId);
+        unavailableSourceIdsRef.current = next;
+        setUnavailableSourceIds(next);
+      };
+      const failAllOnlineSources = () => {
+        setSatelliteFallback(false);
+        setOrdinaryMapFallback(false);
+        onlineBasemapFailedRef.current = true;
+        setOnlineBasemapFailed(true);
+        synchronizeDesiredMapState();
+      };
+
+      if (BASEMAP_LABEL_SOURCE_IDS.has(sourceId)) {
+        markUnavailable();
+        synchronizeDesiredMapState();
         return;
       }
 
       if (
-        (ONLINE_BASEMAP_SOURCE_IDS.has(sourceId) &&
-          (trustedCustom || trustedSameOrigin)) ||
-        validationSatelliteFailed
+        SATELLITE_BASEMAP_SOURCE_IDS.has(sourceId) &&
+        satelliteAvailable
       ) {
-        setSatelliteFallback(false);
-        onlineBasemapFailedRef.current = true;
-        setOnlineBasemapFailed(true);
-        synchronizeDesiredMapState();
+        markUnavailable();
+        if (ordinaryAvailable) {
+          setOrdinaryMapFallback(false);
+          setSatelliteFallback(true);
+          basemapPresentationRef.current = "map";
+          setBasemapPresentation("map");
+          synchronizeDesiredMapState();
+        } else {
+          failAllOnlineSources();
+        }
+        return;
+      }
+
+      if (
+        ORDINARY_BASEMAP_SOURCE_IDS.has(sourceId) &&
+        ordinaryAvailable
+      ) {
+        markUnavailable();
+        if (satelliteAvailable) {
+          setSatelliteFallback(false);
+          setOrdinaryMapFallback(true);
+          basemapPresentationRef.current = "satellite";
+          setBasemapPresentation("satellite");
+          synchronizeDesiredMapState();
+        } else {
+          failAllOnlineSources();
+        }
       }
     });
     return () => {
@@ -761,12 +826,22 @@ export function MapView({
       return;
     }
     synchronizeMapStateRef.current?.();
-  }, [basemap, onlineBasemap, onlineBasemapFailed, basemapPresentation]);
+  }, [
+    basemap,
+    onlineBasemap,
+    onlineBasemapFailed,
+    basemapPresentation,
+    unavailableSourceIds,
+  ]);
 
   useEffect(() => {
+    const available = new Set<string>();
+    unavailableSourceIdsRef.current = available;
+    setUnavailableSourceIds(available);
     onlineBasemapFailedRef.current = false;
     setOnlineBasemapFailed(false);
     setSatelliteFallback(false);
+    setOrdinaryMapFallback(false);
     synchronizeMapStateRef.current?.();
   }, [basemap, onlineBasemap]);
   useEffect(() => {
@@ -816,13 +891,18 @@ export function MapView({
     if (
       !isTrustedOnlineBasemap(onlineBasemapRef.current) &&
       !isTrustedTiandituBasemap(basemapRef.current) &&
+      !isTrustedCartoBasemap(basemapRef.current) &&
       !isTrustedSatelliteBasemap(basemapRef.current)
     ) {
       return;
     }
+    const available = new Set<string>();
+    unavailableSourceIdsRef.current = available;
+    setUnavailableSourceIds(available);
     onlineBasemapFailedRef.current = false;
     setOnlineBasemapFailed(false);
     setSatelliteFallback(false);
+    setOrdinaryMapFallback(false);
     synchronizeMapStateRef.current?.();
   };
 
@@ -831,9 +911,11 @@ export function MapView({
       if (
         isTrustedOnlineBasemap(onlineBasemapRef.current) ||
         isTrustedTiandituBasemap(basemapRef.current) ||
+        isTrustedCartoBasemap(basemapRef.current) ||
         isTrustedSatelliteBasemap(basemapRef.current)
       ) {
         setSatelliteFallback(false);
+        setOrdinaryMapFallback(false);
         onlineBasemapFailedRef.current = true;
         setOnlineBasemapFailed(true);
         synchronizeMapStateRef.current?.();
@@ -849,6 +931,8 @@ export function MapView({
 
   const trustedTianditu =
     !onlineBasemapFailed && isTrustedTiandituBasemap(basemap);
+  const trustedCarto =
+    !onlineBasemapFailed && isTrustedCartoBasemap(basemap);
   const trustedLegacyBasemap =
     !onlineBasemapFailed && isTrustedBasemap(basemap) ? basemap : null;
   const trustedOnlineBasemap =
@@ -857,10 +941,23 @@ export function MapView({
     !onlineBasemapFailed && isTrustedSatelliteBasemap(basemap);
   const satelliteAvailable = trustedOnlineBasemap || trustedSatelliteBasemap;
   const usingSatellite = satelliteAvailable && basemapPresentation === "satellite";
+  const activeLabelSourceId = trustedOnlineBasemap
+    ? usingSatellite
+      ? TIANDITU_IMAGERY_LABEL_SOURCE_ID
+      : TIANDITU_LABEL_SOURCE_ID
+    : trustedCarto
+      ? CARTO_LABEL_SOURCE_ID
+      : trustedTianditu
+        ? TIANDITU_LABEL_SOURCE_ID
+        : null;
+  const activeLabelsUnavailable =
+    activeLabelSourceId !== null &&
+    unavailableSourceIds.has(activeLabelSourceId);
   const onlineMapUnavailable =
     onlineBasemapFailed &&
     (isTrustedOnlineBasemap(onlineBasemap) ||
       isTrustedTiandituBasemap(basemap) ||
+      isTrustedCartoBasemap(basemap) ||
       isTrustedSatelliteBasemap(basemap));
   return (
     <section className="map-shell" aria-label={t("mapAria")}>
@@ -869,20 +966,31 @@ export function MapView({
         <span className="map-warning-dot" />
         {onlineMapUnavailable
           ? t("mapUnavailable")
-          : usingSatellite
-          ? trustedOnlineBasemap
-            ? t("mapTiandituSatellite")
-            : trustedTianditu
-            ? t("mapSentinelLabels")
-            : t("mapSentinel")
-          : satelliteFallback
-          ? t("mapSatelliteFallback")
-          : trustedOnlineBasemap
-          ? t("mapTiandituVector")
-          : trustedTianditu
-          ? t("mapValidationVector")
-          : t("mapGrid")}
-        {onlineMapUnavailable && (
+          : ordinaryMapFallback
+            ? t("mapOrdinaryFallback")
+            : satelliteFallback
+              ? t("mapSatelliteFallback")
+              : activeLabelsUnavailable
+                ? t("mapLabelsUnavailable")
+                : usingSatellite
+                  ? trustedOnlineBasemap
+                    ? t("mapTiandituSatellite")
+                    : trustedCarto
+                      ? t("mapCartoSatellite")
+                      : trustedTianditu
+                        ? t("mapSentinelLabels")
+                        : t("mapSentinel")
+                  : trustedOnlineBasemap
+                    ? t("mapTiandituVector")
+                    : trustedCarto
+                      ? t("mapCartoVector")
+                      : trustedTianditu
+                        ? t("mapValidationVector")
+                        : t("mapGrid")}
+        {(onlineMapUnavailable ||
+          ordinaryMapFallback ||
+          satelliteFallback ||
+          activeLabelsUnavailable) && (
           <button
             type="button"
             className="map-retry"
@@ -899,7 +1007,8 @@ export function MapView({
             className={basemapPresentation === "map" ? "active" : undefined}
             aria-pressed={basemapPresentation === "map"}
             onClick={() => {
-              setSatelliteFallback(false);
+              retryOnlineBasemap();
+              basemapPresentationRef.current = "map";
               setBasemapPresentation("map");
             }}
           >
@@ -910,7 +1019,8 @@ export function MapView({
             className={basemapPresentation === "satellite" ? "active" : undefined}
             aria-pressed={basemapPresentation === "satellite"}
             onClick={() => {
-              setSatelliteFallback(false);
+              retryOnlineBasemap();
+              basemapPresentationRef.current = "satellite";
               setBasemapPresentation("satellite");
             }}
           >
@@ -923,10 +1033,10 @@ export function MapView({
           {trustedOnlineBasemap
             ? `${onlineBasemap.attribution} · ${t("onlineBasemapAttribution")}`
             : usingSatellite
-            ? trustedLegacyBasemap
-              ? `${basemap?.satellite?.attribution} · ${trustedLegacyBasemap.attribution} ${t("placeLabelsAttribution")}`
-              : `${basemap?.satellite?.attribution} · ${t("onlineImageryAttribution")}`
-            : `${trustedLegacyBasemap?.attribution} · ${t("onlineBasemapAttribution")}`}
+              ? trustedLegacyBasemap && !activeLabelsUnavailable
+                ? `${basemap?.satellite?.attribution} · ${trustedLegacyBasemap.attribution} ${t("placeLabelsAttribution")}`
+                : `${basemap?.satellite?.attribution} · ${t("onlineImageryAttribution")}`
+              : `${trustedLegacyBasemap?.attribution} · ${t("onlineBasemapAttribution")}`}
         </div>
       )}
       {analysisMode === "coverage" && !point && (

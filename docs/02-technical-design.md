@@ -14,7 +14,7 @@
 
 - 桌面框架：Tauri 2.11.5。
 - 前端：React 19.2.7 + TypeScript 7.0.2 + Vite 8.1.4。
-- 地图：MapLibre GL JS 5.24.0；Windows/Tauri 通过原生 `tianditu:` 协议显示天地图 `vec/cva` 或 `img/cia`；私有 validation 普通地图使用同源天地图代理，卫星图使用同源 EOxCloudless 代理。桌面与 validation 的密钥和网络路径彼此隔离。
+- 地图：MapLibre GL JS 5.24.0；Windows/Tauri 通过原生 `tianditu:` 协议显示天地图 `vec/cva` 或 `img/cia`；私有 validation 有 token 时使用同源天地图普通地图，无 token 时使用同源 CARTO Voyager / OpenStreetMap `base/labels` 回退，卫星图使用同源 EOxCloudless。桌面与 validation 的密钥和网络路径彼此隔离。
 - WGS84 坐标网格是所有在线底图不可用时的唯一视觉降级，不属于离线底图资产，并继续承载发射点、范围、比例尺和热力图。
 - PMTiles JavaScript、fflate 与四省归档只保留为历史 validation 证据，不再属于当前产品架构。
 - 前端工具链：项目内固定 Node.js 24.18.0，不依赖 JAIST 主机全局 Node。
@@ -198,15 +198,17 @@ POST /api/operation-preview
 
 React 分开保存当前临时 `preview`、当前可导出的权威 `result`，以及最多 8 项的 `sessionResults`。开始新计算、取消、错误、选择新点、参数变化和清空都会抑制或清除旧预览；选择新点或取消重算只撤销当前导出身份，不删除 `sessionResults` 中已完成的其他覆盖层。成功响应冻结本次 `RadioParameters`，按精确中心坐标替换同点旧项或追加新项，并把最新项放在最上层；超过 8 项时移除最早项。已完成结果使用独立 MapLibre CanvasSource/layer；预览仍使用既有 image source/Blob URL。清空与卸载时逐项释放画布、图像和 Blob URL；历史站点使用独立 GeoJSON source。导出始终只读取当前最新的 `result` 及其冻结参数，不做多层合成，也不读取显示阈值。预览决策见 ADR 0016，会话层决策见 ADR 0019，显示筛选决策见 ADR 0021。
 
-### 4.2.4 validation 在线天地图主路径与地图状态
+### 4.2.4 validation 在线普通地图选择与地图状态
 
-validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu.token` 读取可选天地图 token。token 只保留在服务器进程；bootstrap 返回不含凭据和上游主机的 `BasemapInfo`，浏览器只请求固定同源模板 `/api/basemap/tianditu/{layer}/{z}/{x}/{y}`。代理只允许 `vec/cva`、规范十进制 `z/x/y` 和 `z<=18`，固定访问 `https://t0.tianditu.gov.cn`，禁止重定向，并对超时、2 MiB 上限、MIME 和图片签名 fail closed。响应为 `no-store`，不进入 2.5 GB DEM/WBM 与计算缓存。
+validation server 可从项目内 `.runtime/validation-platform/secrets/tianditu.token` 读取可选天地图 token。合法 token 存在时，bootstrap 返回原 `tianditu + vec/cva` 契约，浏览器请求 `/api/basemap/tianditu/{layer}/{z}/{x}/{y}`。token 文件不存在时，bootstrap 改为启用的 `carto-voyager + base/labels` 契约，浏览器只请求 `/api/basemap/carto/{layer}/{z}/{x}/{y}`。前者固定访问 `https://t0.tianditu.gov.cn`；后者固定访问 `https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels|voyager_only_labels`。两种状态互斥解析路径，有 token 时 CARTO 路径无效，无 token 时天地图路径无效。
 
-前端只有在 provider、模式、模板、缩放和 `vec/cva` 元数据全部匹配固定契约时才增加 raster source。普通地图位于经纬网和分析层下方，在线中文注记位于热力图上方，发射点标记保持最上层。token 缺失或在线请求失败时 `enabled=false`，MapView 继续显示 WGS84 内部测试画布。
+普通底图代理只允许当前 provider 的两个图层、规范十进制 `z/x/y`、矩阵边界和 `z<=18`。它使用 HTTPS-only、零重定向、固定连接/接收/总超时、2 MiB 响应上限、HTTP 200、MIME 与图片签名校验，并统一返回 `no-store`。bootstrap 不返回 token 或任何上游主机。CARTO 模式署名固定为 `© OpenStreetMap contributors © CARTO`，且只属于私有 validation 开发回退，不代表 Windows 发行或中国大陆地图合规。
 
-MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最大宽度，随 move 事件自动更新。MapView 以 refs 保存最新 basemap、point、`sessionResults`、active ID、preview 和 stale 状态；若 style 暂不可操作，同步标记为 pending，并在 load 后或 `styledata/idle` 恢复时重放。这样清空 props 不会因一次 `isStyleLoaded=false` 而丢失，恢复时会删除全部不再需要的 heatmap layer/source 并逐项释放 Blob URL。验证记录见 `20-tianditu-basemap-proxy.md`。
+前端只有在 provider、模式、模板、缩放和图层元数据全部匹配对应固定契约时才增加 raster source。无 token 时分别加载无文字底图和 labels-only 图层，以保持热力图位于地表之上、在线地名位于热力图之上；卫星模式继续保留当前 provider 的 labels。label source 失败只移除地名，普通 base 失败时若卫星仍可用则切到 EOxCloudless，卫星失败时若普通 base 仍可用则切回普通地图；只有普通与卫星两个基础源都不可用时才进入 WGS84 网格。失败源集合、重试与 desired-state 重放相互隔离，不能因一个图层失败删除仍健康的底图或分析层。
 
-该代理用于回环 validation 在线验证。Windows 使用 ADR-0020 的原生天地图协议；两者都不授权离线缓存、再分发或把在线瓦片嵌入诊断导出。
+MapLibre 原生 `ScaleControl` 位于右下，使用 metric 单位和 120 px 最大宽度，随 move 事件自动更新。MapView 以 refs 保存最新 basemap、point、`sessionResults`、active ID、preview 和 stale 状态；若 style 暂不可操作，同步标记为 pending，并在 load 后或 `styledata/idle` 恢复时重放。这样清空 props 不会因一次 `isStyleLoaded=false` 而丢失，恢复时会删除全部不再需要的 heatmap layer/source 并逐项释放 Blob URL。验证记录见 `20-tianditu-basemap-proxy.md` 和 ADR-0025。
+
+这些代理只用于回环 validation 在线验证。Windows 使用 ADR-0020 的原生天地图协议；所有路径都不授权离线缓存、再分发或把在线瓦片嵌入诊断导出。
 
 ### 4.2.5 历史：私有区域 PMTiles 主验证底图
 
@@ -469,6 +471,8 @@ margin_db = rx_dbm - receiver_threshold_dbm
 
 SVG 只消费冻结的 `LinkAnalysisResult.profile`。X 轴固定覆盖 `0..D`，按可视宽度把目标密度限制在 5–9，再从 `1/2/5 × 10^n` 选择步长并始终单独绘制 0 和 D；小于 10 km 的路径标签使用 m，其余使用 km。Y 轴为 m AMSL，纵向自动范围必须显示“纵向比例放大”提示。游标二分查找最近的完整样本，图形降采样不得改变游标数值、最严重净空点或分类。
 
+链路成功完成后自动打开 `aria-modal=false` 的非模态浮动剖面弹窗，不创建 backdrop，也不阻断地图指针事件。document capture 阶段只观察 pointerdown：点击弹窗外把其 opacity 降到 `0.42`，底层地图点击仍继续；点回弹窗恢复完全不透明。关闭按钮与 `Escape` 只关闭展示状态，不删除冻结结果，结果卡可重新打开同一剖面。
+
 ## 8. 并行与性能
 
 ### 8.1 首版算法
@@ -535,7 +539,7 @@ Phase 2 桌面服务使用相同成都缓存和用户输入契约运行单场景
 - Phase 1 实现以整个应用数据根目录的实际文件长度为准，而不是只相信 SQLite 记账；索引、锁文件、未登记文件和 `.partial` 都计入 2.5 GB。下载另保留最多 16 MB 的索引/事务安全余量，用户不可配置。
 - 配额不足与文件系统可用空间不足分别返回错误；不自动淘汰旧区域。
 
-- 不为视觉底图预留配额；天地图与 EOxCloudless 瓦片统一 `no-store`，不得产生浏览器或 Rust 持久副本。
+- 不为视觉底图预留配额；天地图、CARTO Voyager/OSM 与 EOxCloudless 瓦片统一 `no-store`，不得产生浏览器或 Rust 持久副本。
 - 已缓存完整 DEM/WBM 的区域可在无网状态下继续计算；地图视觉降级为 WGS84 网格，不用在线或卫星像素替代计算资产。
 - 服务器当前约 33 MB 的四省 PMTiles 是尚未删除的历史 runtime 资产，不是现行缓存类别；删除必须作为独立受管清理任务执行并记录。
 

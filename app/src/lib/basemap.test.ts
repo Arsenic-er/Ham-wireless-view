@@ -6,6 +6,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CARTO_ATTRIBUTION,
+  CARTO_BASE_LAYER_ID,
+  CARTO_BASE_SOURCE_ID,
+  CARTO_LABEL_LAYER_ID,
+  CARTO_LABEL_SOURCE_ID,
+  CARTO_TILE_PATH_TEMPLATE,
   SATELLITE_ATTRIBUTION,
   SATELLITE_LAYER_ID,
   SATELLITE_SOURCE_ID,
@@ -24,6 +30,7 @@ import {
   TIANDITU_VECTOR_LAYER_ID,
   TIANDITU_VECTOR_SOURCE_ID,
   firstBasemapLabelLayerId,
+  isTrustedCartoBasemap,
   isTrustedOnlineBasemap,
   isTrustedSatelliteBasemap,
   isTrustedTiandituBasemap,
@@ -53,6 +60,21 @@ const configuredTianditu: BasemapInfo = {
     { id: "cva", displayName: "中文注记" },
   ],
   tilePathTemplate: TIANDITU_TILE_PATH_TEMPLATE,
+  satellite: configuredSatellite,
+};
+
+const configuredCarto: BasemapInfo = {
+  enabled: true,
+  providerId: "carto-voyager",
+  displayName: "CARTO Voyager / OpenStreetMap",
+  attribution: CARTO_ATTRIBUTION,
+  mode: "same-origin-proxy",
+  maxZoom: 18,
+  layers: [
+    { id: "base", displayName: "Map" },
+    { id: "labels", displayName: "Place labels" },
+  ],
+  tilePathTemplate: CARTO_TILE_PATH_TEMPLATE,
   satellite: configuredSatellite,
 };
 
@@ -111,6 +133,85 @@ describe("trusted online basemap contracts", () => {
         satellite: { ...configuredSatellite, tilePathTemplate: "https://example.invalid" },
       }),
     ).toBe(false);
+  });
+
+  it("accepts only the exact same-origin CARTO fallback contract", () => {
+    expect(isTrustedCartoBasemap(configuredCarto)).toBe(true);
+    for (const untrusted of [
+      { ...configuredCarto, enabled: false },
+      { ...configuredCarto, providerId: "carto" },
+      { ...configuredCarto, attribution: "CARTO" },
+      { ...configuredCarto, maxZoom: 17 },
+      {
+        ...configuredCarto,
+        tilePathTemplate: "https://example.invalid/{z}/{x}/{y}",
+      },
+      {
+        ...configuredCarto,
+        layers: [{ id: "base" as const, displayName: "Map" }],
+      },
+      {
+        ...configuredCarto,
+        layers: [
+          { id: "base" as const, displayName: "Map" },
+          { id: "labels" as const, displayName: "Labels" },
+          { id: "labels" as const, displayName: "Duplicate" },
+        ],
+      },
+    ]) {
+      expect(isTrustedCartoBasemap(untrusted)).toBe(false);
+    }
+  });
+
+  it("uses CARTO base and labels for maps and retains its labels over satellite", () => {
+    const map = mapDouble();
+    synchronizeBasemap(map as never, configuredCarto, "light", "map");
+
+    expect(map.addSource).toHaveBeenCalledWith(
+      CARTO_BASE_SOURCE_ID,
+      expect.objectContaining({
+        tiles: ["/api/basemap/carto/base/{z}/{x}/{y}"],
+        maxzoom: 18,
+        attribution: CARTO_ATTRIBUTION,
+      }),
+    );
+    expect(map.addSource).toHaveBeenCalledWith(
+      CARTO_LABEL_SOURCE_ID,
+      expect.objectContaining({
+        tiles: ["/api/basemap/carto/labels/{z}/{x}/{y}"],
+      }),
+    );
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: CARTO_BASE_LAYER_ID }),
+      "graticule-lines",
+    );
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: CARTO_LABEL_LAYER_ID }),
+      "completed-point-halo",
+    );
+    expect(firstBasemapLabelLayerId(map as never)).toBe(CARTO_LABEL_LAYER_ID);
+
+    synchronizeBasemap(map as never, configuredCarto, "dark", "satellite");
+    expect(map.getSource(SATELLITE_SOURCE_ID)).toBeDefined();
+    expect(map.getSource(CARTO_LABEL_SOURCE_ID)).toBeDefined();
+    expect(map.setLayoutProperty).toHaveBeenCalledWith(
+      CARTO_BASE_LAYER_ID,
+      "visibility",
+      "none",
+    );
+
+    synchronizeBasemap(
+      map as never,
+      configuredCarto,
+      "dark",
+      "satellite",
+      null,
+      new Set([CARTO_LABEL_SOURCE_ID]),
+    );
+    expect(map.removeLayer).toHaveBeenCalledWith(CARTO_LABEL_LAYER_ID);
+    expect(map.removeSource).toHaveBeenCalledWith(CARTO_LABEL_SOURCE_ID);
+    expect(map.getSource(CARTO_BASE_SOURCE_ID)).toBeDefined();
+    expect(map.getSource(SATELLITE_SOURCE_ID)).toBeDefined();
   });
 
   it("switches same-origin vec/cva and EOX satellite while retaining labels", () => {

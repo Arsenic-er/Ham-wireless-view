@@ -67,7 +67,7 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 - 可以使用 Natural Earth 或无边界坐标画布进行内部功能诊断。
 - 开发构建必须显示“内部测试底图，不得公开发布”。
 - 不制作含未经确认国界的宣传截图或公开演示包。
-- 私有 validation 平台通过同源代理在线显示天地图 `vec/cva` 以验证地图交互；必须保留来源和内部验证标记。在线服务可访问不等于已经取得桌面应用、热力图叠加或 PNG/PDF 导出授权，也不自动关闭审图门槛。
+- 私有 validation 平台有 token 时通过同源代理显示天地图 `vec/cva`；无 token 时通过固定同源代理显示 CARTO Voyager / OpenStreetMap `base/labels` 作为内部开发回退。两者都必须保留来源和内部验证标记。在线服务可访问不等于已经取得桌面应用、热力图叠加或 PNG/PDF 导出授权，也不自动关闭审图门槛。
 - 私有 validation 可测试 EOxCloudless 在线卫星视觉层，但必须显著署名、保持 `no-store`、不作离线预取，并把非商业许可与商业授权状态作为独立未关闭项。
 
 ### 5.2 历史：私有四省 PMTiles 验证
@@ -118,8 +118,8 @@ WBM 只用于计算，不作为可见水系底图。可见水系由合规底图�
 ### 5.6 纯在线底图与无网边界
 
 - 当前产品不规划离线视觉底图、离线地图包、批量瓦片下载、地图导入或地图缓存管理。
-- 天地图与 EOxCloudless 响应统一 `no-store`，不得进入 EXE、安装包、Release、Rust 数据根、SQLite、Service Worker 或浏览器持久存储。
-- 在线普通/卫星底图失败时只降级到 WGS84 坐标网格，不静默切换 PMTiles、未知供应商或其他坐标系。
+- 天地图、CARTO Voyager/OSM 与 EOxCloudless 响应统一 `no-store`，不得进入 EXE、安装包、Release、Rust 数据根、SQLite、Service Worker 或浏览器持久存储。
+- Windows/Tauri 在线普通/卫星底图失败时只降级到 WGS84 坐标网格；私有 validation 的无 token 状态可以显式选择并署名固定 CARTO Voyager/OSM provider。任何环境都不静默切换 PMTiles、未知供应商或其他坐标系。
 - 已缓存完整 DEM/WBM 的区域仍可在无网络时运行 ITM、显示分析层并导出无底图诊断 PNG/PDF；未缓存或损坏的计算资产继续阻断计算。
 - 四省 PMTiles 必须排除在公开发行物之外；服务器约 33 MB 历史 runtime 资产尚未删除，后续须通过独立受管清理记录实际释放空间。
 - 取消离线底图不改变 DEM/WBM、partial、索引和计算缓存的十进制 2.5 GB 硬上限。
@@ -140,9 +140,9 @@ CompliantBasemapProvider
 └─ service_capabilities
 ```
 
-私有 validation 的 `BasemapInfo` 只是在线验证元数据子集：enabled、provider、署名、同源模式、最大缩放、`vec/cva` 和路径模板。它刻意不伪造 `review_number`、在线叠加/导出授权或覆盖多边形，因此不能被当作 `CompliantBasemapProvider`。当前 token 未配置，真实天地图瓦片尚未完成烟雾验证。
+私有 validation 的 `BasemapInfo` 只是在线验证元数据子集：enabled、provider、署名、同源模式、最大缩放、provider 对应的 `vec/cva` 或 `base/labels` 和路径模板。它刻意不伪造 `review_number`、在线叠加/导出授权或覆盖多边形，因此不能被当作 `CompliantBasemapProvider`。当前 token 未配置，天地图真实瓦片未验证；CARTO 回退的受管重建和 live 烟雾也尚未执行。
 
-私有 PMTiles bootstrap 元数据、相对 Range URL、bbox、zoom、大小与 SHA-256 只属于历史 validation 证据。现行 bootstrap 必须把在线天地图、EOxCloudless 和 WGS84 降级能力明确区分。
+私有 PMTiles bootstrap 元数据、相对 Range URL、bbox、zoom、大小与 SHA-256 只属于历史 validation 证据。现行 bootstrap 必须把当前普通 provider（有 token 的天地图或无 token 的 CARTO Voyager/OSM）、EOxCloudless 和 WGS84 降级能力明确区分，不得把 CARTO 元数据伪称为天地图。
 
 token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0600` 普通非符号链接文件管理；bootstrap、浏览器、日志和文档不得包含 token。浏览器只访问同源路径，上游固定 HTTPS 请求由回环 validation server 代发。该设计降低凭据暴露，不改变地图内容和使用方式的许可/审核义务。
 
@@ -162,7 +162,7 @@ token 只能保存在 Git 忽略的项目运行目录，通过静默交互和 `0
 - 缓存页只显示区域覆盖和大小，不显示 DEM 高程预览。
 - 删除数据前明确告知哪些离线区域将失效。
 
-- 天地图与 EOxCloudless 在线瓦片必须为 `no-store`，不得进入持久缓存、缓存配额统计或离线预取；十进制 2,500,000,000 字节上限不因地图模式改变。
+- 天地图、CARTO Voyager/OSM 与 EOxCloudless 在线瓦片必须为 `no-store`，不得进入持久缓存、缓存配额统计或离线预取；十进制 2,500,000,000 字节上限不因地图模式改变。
 - 四省 PMTiles 只作为尚未清理的历史 runtime 资产记录；它不属于现行预算，且公开 Release 检查必须确认未被误打包。
 
 ## 8. 署名与导出

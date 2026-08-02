@@ -218,6 +218,21 @@ const configuredSatelliteOnly: BasemapInfo = {
   enabled: false,
 };
 
+const configuredCarto: BasemapInfo = {
+  enabled: true,
+  providerId: "carto-voyager",
+  displayName: "CARTO Voyager / OpenStreetMap",
+  attribution: "© OpenStreetMap contributors © CARTO",
+  mode: "same-origin-proxy",
+  maxZoom: 18,
+  layers: [
+    { id: "base", displayName: "Map" },
+    { id: "labels", displayName: "Place labels" },
+  ],
+  tilePathTemplate: "/api/basemap/carto/{layer}/{z}/{x}/{y}",
+  satellite: configuredTianditu.satellite,
+};
+
 const configuredOnlineBasemap: OnlineBasemapInfo = {
   configured: true,
   provider: "Tianditu",
@@ -370,13 +385,142 @@ describe("MapView controls and desired-state replay", () => {
     act(() => {
       maplibreMocks.emit("error", { sourceId: "basemap-tianditu-label" });
     });
-    expect(getByText("在线地图不可用，已回退 WGS84 坐标网格")).toBeDefined();
+    expect(
+      getByText("地名图层暂不可用；底图与分析仍可使用。"),
+    ).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-tianditu-label")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("basemap-tianditu-vector")).toBeDefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+
+    fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(maplibreMocks.map.getSource("basemap-tianditu-label")).toBeDefined();
+    expect(getByText("天地图在线真实底图 · 内部验证")).toBeDefined();
     expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(18);
     expect(maplibreMocks.map.setZoom).not.toHaveBeenCalled();
 
     unmount();
   });
 
+
+  it("uses CARTO without a TianDiTu token and keeps labels over satellite", () => {
+    const { getByRole, getByText, unmount } = render(
+      <MapView
+        theme="dark"
+        point={null}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+        preview={null}
+        heatmapStale={false}
+        onPointSelect={vi.fn()}
+        basemap={configuredCarto}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    expect(
+      getByText("CARTO Voyager 在线地图 · 地名 · 内部验证"),
+    ).toBeDefined();
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-carto-base",
+      expect.objectContaining({
+        tiles: ["/api/basemap/carto/base/{z}/{x}/{y}"],
+      }),
+    );
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-carto-labels",
+      expect.objectContaining({
+        tiles: ["/api/basemap/carto/labels/{z}/{x}/{y}"],
+      }),
+    );
+    expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "coverage-heatmap-layer-coverage-1" }),
+      "basemap-carto-labels-layer",
+    );
+
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(
+      getByText("Sentinel-2 卫星影像（联网）· CARTO 地名 · 内部验证"),
+    ).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-carto-labels")).toBeDefined();
+
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-carto-labels" });
+    });
+    expect(
+      getByText("地名图层暂不可用；底图与分析仍可使用。"),
+    ).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-carto-labels")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+
+    fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(maplibreMocks.map.getSource("basemap-carto-labels")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
+
+    fireEvent.click(getByRole("button", { name: "地图" }));
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-carto-base" });
+    });
+    expect(
+      getByText("普通在线地图不可用，已切换到卫星影像。"),
+    ).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-carto-base")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-carto-labels")).toBeDefined();
+
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-satellite" });
+    });
+    expect(
+      getByText("在线地图不可用，已回退 WGS84 坐标网格"),
+    ).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-carto-base")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+
+    unmount();
+  });
+
+  it("falls back from CARTO satellite to map once, then uses WGS84 if map also fails", () => {
+    const { getByRole, getByText, unmount } = render(
+      <MapView
+        theme="dark"
+        point={null}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+        preview={null}
+        heatmapStale={false}
+        onPointSelect={vi.fn()}
+        basemap={configuredCarto}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
+
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-satellite" });
+    });
+    expect(getByText("卫星影像不可用，已切回在线地图")).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("basemap-carto-base")).toBeDefined();
+
+    act(() => {
+      maplibreMocks.emit("error", { sourceId: "basemap-carto-base" });
+    });
+    expect(
+      getByText("在线地图不可用，已回退 WGS84 坐标网格"),
+    ).toBeDefined();
+    expect(maplibreMocks.map.getSource("basemap-carto-base")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("basemap-satellite")).toBeUndefined();
+    expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
+
+    unmount();
+  });
 
   it("uses a trusted satellite when the ordinary validation map is disabled", () => {
     const { getByRole, getByText, unmount } = render(

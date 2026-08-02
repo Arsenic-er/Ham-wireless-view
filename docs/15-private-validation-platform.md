@@ -4,13 +4,13 @@
 - 恢复切片更新：2026-07-27
 - operation 协议切片更新：2026-07-27
 - 渐进覆盖预览更新：2026-07-27
-- 在线底图与地图控件更新：2026-07-31
+- 在线底图与地图控件更新：2026-07-31；无 token CARTO Voyager/OSM 回退更新：2026-08-02
 - 四省 PMTiles 历史底图切片：2026-07-31（既有自动化、Range、SSH 与受管运行证据保留；2026-08-02 起退出当前目标）
 - 会话覆盖层与浏览器诊断导出更新：2026-08-01（自动化、推送、受管部署与隧道健康已通过；浏览器交互待用户验收）
 - 主机：`gpu-273312`（`ubuntu@150.65.181.202`）
 - 工作区：`/home/ubuntu/hamheatmap`
 - 对应决策：`decisions/0012-private-server-validation-platform.md`、`decisions/0013-operation-identity-and-polled-progress.md`、`decisions/0016-progressive-coverage-preview-transport.md`、`decisions/0019-session-coverage-layers-and-browser-export.md`
-- 状态：历史构建保留为分节证据；现行目标是同源天地图普通地图 + EOxCloudless 卫星图，失败回退 WGS84 网格。当前未配置天地图 token，受管服务尚未按 ADR-0022 重启，真实瓦片与浏览器视觉尚未执行。
+- 状态：历史构建保留为分节证据；现行源码在有 token 时使用同源天地图普通地图，无 token 时使用同源 CARTO Voyager/OSM 普通地图，卫星图为 EOxCloudless，失败回退 WGS84 网格。当前受管服务尚未重建，CARTO live 瓦片与浏览器视觉尚未记录。
 
 四省 PMTiles 已退出当前产品目标，但约 33 MB runtime 资产尚未删除；PMTiles 相关内容只作历史证据。目标改变不代表代码切换、受管部署或磁盘清理已经完成。
 
@@ -47,7 +47,7 @@ gpu-273312 127.0.0.1:1421
 
 HTTP 层只做协议适配。频段、单位换算、坐标校验、固定数据源、缓存完整性、配额、DEM/WBM 读取、ITM 和覆盖层仍由共享 Rust 服务执行。
 
-现行普通地图目标走只读在线路径：浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`，validation server 从私密文件读取 token 并访问固定天地图 HTTPS WMTS。token、上游 URL 和文件路径不进入 bootstrap 或浏览器。该路径不写底图缓存，也不进入诊断报告。
+现行普通地图走互斥的只读在线路径：合法天地图 token 存在时，浏览器请求同源 `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}`；token 文件不存在时，bootstrap 明确返回 `carto-voyager`，浏览器请求 `/api/basemap/carto/{base|labels}/{z}/{x}/{y}`。服务器只访问各自固定 HTTPS 上游，token、上游 URL 和文件路径不进入 bootstrap 或浏览器。两条路径均不写底图缓存，也不进入诊断报告。
 
 EOxCloudless 继续作为同源在线卫星路径；普通/卫星都失败时 MapView 使用 WGS84 坐标网格。PMTiles Range 路径、固定归档校验和本地 places 属于待移除实现，完成前不得描述为已经删除。
 
@@ -68,6 +68,7 @@ Tauri 始终优先于 Vite 标志。validation 模式显示单独横幅，说明
 | GET | `/healthz` | 进程健康与 schema 版本 |
 | GET | `/api/bootstrap` | 模型、网格、缓存配额和无凭据底图元数据 |
 | GET | `/api/basemap/tianditu/{vec|cva}/{z}/{x}/{y}` | 可选在线瓦片同源代理 |
+| GET | `/api/basemap/carto/{base|labels}/{z}/{x}/{y}` | 未配置天地图 token 时启用的 CARTO Voyager/OSM 同源代理 |
 | GET | /api/basemap/pmtiles/four-provinces.pmtiles | 固定归档的单段 HTTP Range 响应 |
 | HEAD | /api/basemap/pmtiles/four-provinces.pmtiles | 固定长度、类型与 Range 能力 |
 | GET | `/api/cache-overview` | 实际缓存用量与区域列表 |
@@ -146,7 +147,7 @@ scripts/validation-platform.sh basemap-token set
 scripts/validation-platform.sh basemap-token clear
 ```
 
-`set/clear` 后按提示通过受管 `stop`、`start` 应用。当前 token 未配置，不得把 disabled bootstrap 或 WGS84 占位画布记录为真实瓦片成功。
+`set/clear` 后按提示通过受管 `stop`、`start` 应用。未配置 token 时普通地图选择 CARTO Voyager/OSM；配置合法 token 后选择天地图。源码或自动化通过不能冒充受管进程已经重建或真实瓦片已经可见。
 
 Windows PowerShell：
 

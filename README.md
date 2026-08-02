@@ -8,17 +8,17 @@
 HamHeatmap is an open-source Windows desktop application for amateur-radio operators in mainland China. Select one transmitter location on the map and the application uses frequency, power, antenna gain, height, polarization, terrain, and land/water parameters to predict received power on a fixed 200 km radius, 1 km grid.
 
 <!-- section:current-status -->
-<!-- synchronized-tests: frontend=145 rust=131 ignored=5 -->
+<!-- synchronized-tests: frontend-files=17 frontend=151 rust=133 ignored=5 -->
 ## Current status
 
 ### Online validation build
 
 - The private validation service runs on the server, listens only on `127.0.0.1:1421`, and is accessed through an SSH tunnel.
-- The current product target uses online visual basemaps only. The validation build supports a same-origin proxy for the Tianditu vector map and the EOxCloudless satellite layer; if online basemaps are unavailable, it falls back to a WGS84 coordinate grid. Real DEM/WBM + ITM calculations, up to 8 session coverage layers, the dynamic scale, and browser-local diagnostic PNG/PDF export remain available.
-- A global -140..-60 dBm display-threshold slider with 1 dB steps dynamically hides weaker pixels without recalculating propagation or changing statistics and the current export. Current gates pass 145 frontend tests and 131 Rust workspace tests, with 5 environment-dependent tests ignored, plus three real-cache HTTP smoke suites. The 8-layer server CPU microbenchmark has a P95 of 5.982 ms. Managed-browser dragging is still unverified because of a Codex Windows ACL failure, and Windows WebView2 hardware testing is also pending.
+- The current source uses the same-origin Tianditu vector map when validation has a valid token and automatically selects CARTO Voyager base + labels when no token exists. Satellite mode uses EOxCloudless with the active online labels, including CARTO labels in no-token mode. Base, label, and satellite failures are isolated so an unaffected layer can remain usable; only loss of both usable visual bases falls back to the WGS84 coordinate grid. The managed loopback service has been rebuilt as PID 3066064: health schema 1, CARTO base/labels, EOx satellite, old-Tianditu rejection, query rejection, and no-store checks pass; browser visuals remain pending.
+- A global -140..-60 dBm display-threshold slider with 1 dB steps dynamically hides weaker pixels without recalculating propagation or changing statistics and the current export. Current gates pass 17 frontend test files / 151 tests and Rust workspace 133 passed / 5 ignored, plus three real-cache HTTP smoke suites. The 8-layer server CPU microbenchmark has a P95 of 5.982 ms. Managed-browser dragging is still unverified because of a Codex Windows ACL failure, and Windows WebView2 hardware testing is also pending.
 - The former four-province PMTiles path is no longer a product target and remains only as historical engineering evidence. EOxCloudless is an online satellite layer for validation and is not included in the public Windows release assets.
 
-- The current source implements a separate online point-to-point TX/RX link-analysis mode for 1–200 km paths. Users select TX and RX on the map; the result includes a terrain/Fresnel profile and a planning classification. The managed validation process has not yet been rebuilt or restarted with this code, and no public service is deployed.
+- The current source implements a separate online point-to-point TX/RX link-analysis mode for 1–200 km paths. Completion automatically opens a non-modal floating terrain/Fresnel profile: clicking outside dims it to 42% while the map stays interactive, clicking it restores full opacity, close/Escape dismisses it, and the completed result can reopen it. The managed process now contains this source, but live link-analysis/profile-dialog and browser acceptance remain pending; no public service is deployed.
 
 ### Windows Alpha
 

@@ -1668,7 +1668,7 @@ fieldset {
 }
 
 .workspace.link-mode .map-column {
-  grid-template-rows: minmax(180px, 1fr) 380px;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .link-selection-actions {
@@ -1692,30 +1692,101 @@ fieldset {
   font-weight: 700;
 }
 
+.link-selection-actions .link-profile-open-action {
+  grid-column: 1 / -1;
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: var(--accent-soft);
+}
+
 .link-point-card {
   grid-template-columns: auto minmax(180px, auto);
   row-gap: 2px;
 }
 
-.link-profile-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-height: 0;
-  border-top: 1px solid var(--border);
-  color: var(--text-muted);
-  background: var(--surface);
-}
-
-.link-profile-placeholder strong {
+.link-profile-dialog {
+  position: fixed;
+  top: 50%;
+  right: 404px;
+  left: 24px;
+  z-index: 90;
+  width: auto;
+  max-width: 920px;
+  height: min(560px, calc(100vh - 96px));
+  max-height: calc(100vh - 48px);
+  min-height: 360px;
+  margin-inline: auto;
+  overflow: hidden;
+  transform: translateY(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
   color: var(--text);
-  font-size: 13px;
+  background: color-mix(in srgb, var(--surface) 98%, transparent);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.34);
+  opacity: 1;
+  transition: opacity 160ms ease, box-shadow 160ms ease;
 }
 
-.link-profile-placeholder span {
-  font-size: 10px;
+.link-profile-dialog.is-dimmed {
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+  opacity: 0.42;
+}
+
+.link-profile-dialog:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.link-profile-dialog-heading {
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 14px 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 97%, transparent);
+}
+
+.link-profile-dialog-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+
+.link-profile-dialog-heading p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.link-profile-dialog-heading button {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--surface-muted);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.link-profile-dialog-heading button:hover {
+  border-color: var(--accent);
+}
+
+.link-profile-dialog-body {
+  height: calc(100% - 66px);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.link-profile-dialog .link-profile-panel {
+  min-height: 430px;
+  height: 100%;
+  border-top: 0;
 }
 
 .link-profile-panel {
@@ -1982,6 +2053,10 @@ fieldset {
 }
 
 @media (max-width: 1180px) {
+  .link-profile-dialog {
+    right: 364px;
+  }
+
   .workspace {
     grid-template-columns: minmax(0, 1fr) 340px;
   }
@@ -1995,5 +2070,19 @@ fieldset {
     grid-template-columns: 98px minmax(0, 1fr) minmax(148px, max-content);
     gap: 12px;
     padding: 0 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .link-profile-dialog {
+    right: 16px;
+    left: 16px;
+    height: min(560px, calc(100vh - 48px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-profile-dialog {
+    transition: none;
   }
 }

@@ -839,11 +839,11 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] AUTHORS.md、NOTICE、.github/CODEOWNERS、npm/Cargo/Tauri metadata 与四语言 README 统一记录 Arsenic-er 为项目创建者及主开发者。
 - [x] Tauri bundle 资源包含 AUTHORS.md、NOTICE、LICENSE 与 THIRD_PARTY_LICENSES.md，并保持 English、SimpChinese、TradChinese、Japanese 四语言 NSIS 配置。
 - [x] scripts/check-source-attribution.py 使用 Git tracked + untracked allowlist，漏头、第三方误盖章和未分类文件均 fail closed；GitHub Actions documentation job 执行该检查。
-- [x] 当前前端证据更新为 16 files / 145 tests；README 四语言事实检查必须继续通过。
+- [x] 当前前端证据更新为 17 files / 151 tests；README 四语言事实检查必须继续通过。
 
-## 37. 双点链路通视分析（2026-08-02，源码与自动化已通过；受管运行、Windows 与性能待验）
+## 37. 双点链路通视分析（2026-08-02，源码/自动化与受管进程重建已通过；链路实跑、浏览器、Windows 与性能待验）
 
-本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面；本次最终门禁确认为前端 16 files / 145 tests 与 Rust workspace 131 passed / 5 ignored。以下勾选只代表代码与自动化证据，不代表受管 validation 进程已经重建/重启、公开服务已经部署、真实 200 km 缓存链路已经跑通，或 Windows 实机已经验收。
+本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面浮动弹窗；本次最终门禁确认为前端 17 files / 151 passed 与 Rust workspace 133 passed / 5 ignored。受管 validation 已重建并健康运行，但尚未执行真实 200 km 缓存链路、剖面弹窗浏览器验收或 Windows 实机验收，也没有公开服务。
 
 ### 37.1 请求、路径与数据完整性
 
@@ -881,13 +881,28 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 游标二分查找最近的完整权威样本，不重算分类或 ITM。
 - [ ] SVG 游标、resize、主题和语言本身不调用后端；地图/卫星切换、运行中取消与所有组合的零调用门禁仍待补齐。
 - [x] “清空链路”不清热力图/阈值/覆盖点；模式与语言切换保留链路端点、参数、结果和覆盖状态。
-- [x] `en`、`zh-CN`、`zh-TW`、`ja-JP` 资源保持 363-key parity。
+- [x] 链路完成后自动打开 `aria-modal=false` 非模态浮动剖面；点击窗外不吞掉地图事件并把弹窗降至 42%，点回恢复。
+- [x] 关闭按钮和 `Escape` 可收起弹窗而不删除结果；结果卡可重新打开剖面。
+- [x] `en`、`zh-CN`、`zh-TW`、`ja-JP` 资源保持完全 key parity。
 - [ ] 浅/深主题、1080×700、Windows DPI 缩放和 validation 浏览器视觉仍待验收。
 - [ ] 已缓存 200 km 单链路 2 秒目标与真实 DEM/WBM/ITM 分阶段耗时尚未取得运行证据。
 
 ### 37.5 本轮执行证据与发布边界
 
-- [x] `scripts/node-project.sh --prefix app test`：16 test files / 145 passed。
-- [x] `scripts/cargo-project.sh test --workspace --all-targets --locked`：131 passed / 5 ignored。
-- [ ] 受管 validation 进程尚未按链路源码 stop/build/start；没有链路 live HTTP、真实缓存或受管浏览器验收，也没有公开部署。
+- [x] `scripts/node-project.sh --prefix app test`：17 test files / 151 passed。
+- [x] `scripts/cargo-project.sh test --workspace --all-targets --locked`：133 passed / 5 ignored。
+- [x] Windows xwin workspace check、测试程序 `--no-run` 与严格 Clippy 均通过；这不替代 Windows 实机。
+- [x] 当前源码已受管 stop/build/start，新 PID `3066064` 的 health schema 1；该事实只证明当前二进制已运行。
+- [ ] 尚无链路 live HTTP、真实缓存或受管浏览器剖面验收，也没有公开部署。
 - [ ] v0.1.0-alpha.2 不含本功能；新的 Windows EXE/NSIS 尚未构建，Windows 10/11 WebView2 实机尚未验收。
+
+## 38. validation 无 token CARTO Voyager / OSM 普通地图回退（2026-08-02）
+
+- [x] 无 token bootstrap 返回 `enabled=true`、`providerId=carto-voyager`、`base/labels`、`maxZoom=18`、固定同源 CARTO 模板和准确 CARTO/OSM 署名，不伪称天地图。
+- [x] Rust 严格解析覆盖 z0/z18、矩阵边界、非法图层/provider、z19、越界 x/y、前导零、负数、缺段、多段和查询注入。
+- [x] 上游 URL 只可能是固定 HTTPS `a.basemaps.cartocdn.com` 的 `voyager_nolabels` 或 `voyager_only_labels`，继续使用零重定向、超时、2 MiB、MIME/图片签名和 `no-store`。
+- [x] provider 选择互斥：无 token 拒绝天地图路径；合法 token 存在时保持原天地图 metadata/URL 并拒绝 CARTO 路径；坏 token 文件仍阻止启动。
+- [x] `hamheatmap-validation-server` 26 项测试通过。
+- [x] CARTO base/labels、EOx satellite 与 label/base/satellite source error 已做状态隔离：地名失败不移除健康基础源，普通/卫星互相回退，只有两个基础源都失败才进入 WGS84。
+- [x] 受管服务由旧 PID `3040955` 切换为 `3066064`；health schema 1，bootstrap 为 enabled `carto-voyager base/labels maxZoom=18`。live base 为 HTTP 200 `image/png` 24,798 bytes，labels 为 HTTP 200 `image/png` 8,087 bytes，satellite 为 HTTP 200 `image/jpeg` 17,586 bytes；旧天地图路径 404、query 注入 400、labels `Cache-Control: no-store`。
+- [ ] 通过 SSH 隧道人工确认道路、详细地名、热力图层级、卫星切换、WGS84 故障回退和署名可读性。

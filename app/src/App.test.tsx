@@ -1246,6 +1246,22 @@ describe("link analysis workspace", () => {
     );
     expect(screen.getByTestId("link-profile").textContent).toBe("direct-los");
 
+    const profileDialog = screen.getByRole("dialog", { name: "链路剖面分析" });
+    expect(profileDialog.getAttribute("aria-modal")).toBe("false");
+    expect(profileDialog.closest(".modal-backdrop")).toBeNull();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "select-extra-point" }));
+    expect(profileDialog.classList.contains("is-dimmed")).toBe(true);
+    expect(screen.getByRole("dialog", { name: "链路剖面分析" })).toBeTruthy();
+
+    fireEvent.pointerDown(profileDialog);
+    expect(profileDialog.classList.contains("is-dimmed")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭链路剖面" }));
+    expect(screen.queryByRole("dialog", { name: "链路剖面分析" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "查看链路剖面" }));
+    expect(screen.getByRole("dialog", { name: "链路剖面分析" })).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: "清空链路" }));
     expect(screen.getByTestId("link-tx").textContent).toBe("none");
     expect(screen.getByTestId("link-rx").textContent).toBe("none");

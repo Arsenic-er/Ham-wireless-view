@@ -1,8 +1,8 @@
-# 天地图同源底图代理：validation 在线普通地图主路径
+# validation 在线普通地图代理：天地图主路径与 CARTO 无 token 回退
 
 - 日期：2026-07-31
 - 范围：私有 validation server 在线底图、MapLibre 动态比例尺和覆盖层状态重放
-- 状态：既有代码级回归和无 token 受管部署已通过；当前未配置天地图 token，受管服务尚未按 ADR-0022 重启，也未执行真实瓦片或浏览器视觉烟雾
+- 状态：既有天地图禁用态历史证据保留；2026-08-02 已完成无 token CARTO Voyager/OSM 回退源码和 Rust 自动化，受管重建、live 瓦片与浏览器视觉待执行
 - 当前角色：ADR-0022 将天地图设为 validation 在线普通地图主路径；代码切换和部署完成前不得把目标写成运行现状
 - 发布结论：不构成中国大陆公开地图合规、审图号、在线叠加授权或导出授权证明
 
@@ -159,3 +159,16 @@ Windows/Tauri 设置界面增加“保存并测试”和“测试连接”。保
 validation 卫星图继续使用同源 EOxCloudless。卫星失败可先回退在线天地图普通地图；普通地图也不可用时进入 WGS84 网格。所有在线响应保持 `no-store`，不进入 2.5 GB DEM/WBM 与计算缓存。
 
 当前受管服务尚未按上述目标重启，本节不能作为运行验证证据。
+
+## 11. 2026-08-02：无 token CARTO Voyager / OSM 回退
+
+ADR-0025 取代本文件中“token 缺失时 `enabled=false`”的现行行为，但不改写第 8 节已经发生的历史部署证据。validation server 启动时选择一个且仅一个普通地图 provider：
+
+- token 文件合法存在：保持 `tianditu`、`vec/cva` 和 `/api/basemap/tianditu/{layer}/{z}/{x}/{y}`。
+- token 文件不存在：返回启用的 `carto-voyager`、`base/labels`、`maxZoom=18` 和 `/api/basemap/carto/{layer}/{z}/{x}/{y}`。
+- `base` 只访问固定 `https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/`；`labels` 只访问同主机 `rastertiles/voyager_only_labels`。两者末尾只能是已校验的规范 `z/x/y.png`。
+- CARTO 模式 bootstrap 显示 `CARTO Voyager / OpenStreetMap` 与 `© OpenStreetMap contributors © CARTO`，不得继续显示“天地图”名称或图层。
+- 两个 provider 复用 HTTPS-only、零重定向、8 秒全局/3 秒连接/5 秒接收超时、2 MiB、MIME/签名和 `no-store` 门禁；bootstrap 不暴露任何上游主机。
+- 当前 provider 的 parser 排斥另一个 provider 的路径，因此无 token 请求天地图或有 token 请求 CARTO 都是 404，不会落入错误上游。
+
+Rust 专项已通过 26/26，覆盖 CARTO `base/labels` 严格路径、z0/z18、矩阵边界、非规范十进制、查询/额外分段、固定 URL、无 token 元数据、有 token 天地图保留、MIME/签名与 HTTP 路由。受管服务尚未重建或重启，因此本节不声明 live HTTP 200、地图可见或中国大陆网络可达。

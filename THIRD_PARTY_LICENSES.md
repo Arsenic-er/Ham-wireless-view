@@ -19,6 +19,7 @@ bill of materials and notice file required before public distribution.
 | `printpdf` | 0.11.1 | MIT | Offline single-page PDF report encoding |
 | `zeroize` | 1.8.2 | MIT OR Apache-2.0 | Clears desktop online-map credential buffers |
 | Tianditu online WMTS | User-supplied account key / current service | Provider service terms apply; no tiles or key bundled | Transient Windows map and imagery display only |
+| CARTO Voyager raster tiles / OpenStreetMap data | Current online service; no tiles bundled | CARTO service terms and OpenStreetMap ODbL attribution requirements apply | Transient private-validation ordinary-map fallback when no Tianditu token is configured; no persistence or export |
 | EOxCloudless Sentinel-2 Cloudless 2025 WMTS | Current online service | CC BY-NC-SA 4.0 for the recorded non-commercial 2025 service; commercial use requires applicable EOX authorization | Transient private-validation satellite display only; no tiles bundled or persisted |
 | `tauri-plugin-dialog` | 2.7.1 | Apache-2.0 OR MIT | Native Windows save dialog |
 | `fs4` | 1.1.0 | MIT OR Apache-2.0 | Cross-platform disk-space inspection |

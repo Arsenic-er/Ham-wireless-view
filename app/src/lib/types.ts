@@ -115,7 +115,7 @@ export interface SatelliteBasemapInfo {
 }
 
 export interface BasemapLayer {
-  id: "vec" | "cva";
+  id: "vec" | "cva" | "base" | "labels";
   displayName: string;
 }
 

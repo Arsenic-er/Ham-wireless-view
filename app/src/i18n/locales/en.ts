@@ -324,6 +324,11 @@ export const en = {
   linkClassUnavailable: "Predicted unavailable",
   linkProfileWaiting: "Terrain profile will appear here",
   linkProfileWaitingDetail: "Select TX and RX, then run link analysis",
+  linkProfileDialogEyebrow: "Terrain & clearance",
+  linkProfileDialogTitle: "Link profile analysis",
+  linkProfileDialogHint: "Click outside to fade this panel; the map remains interactive.",
+  openLinkProfile: "View link profile",
+  closeLinkProfile: "Close link profile",
   startLinkAnalysis: "Analyze link",
   reanalyzeLink: "Analyze again",
   cancelLinkAnalysis: "Cancel link analysis",
@@ -371,6 +376,10 @@ export const en = {
   errorLinkResultProtocol: "Invalid link-analysis result protocol.",
   errorLinkResultProfile: "Invalid link-analysis terrain profile.",
   errorLinkAnalysisPreviewOnly: "Real link analysis requires the validation server or Tauri desktop backend.",
+  mapCartoVector: "CARTO Voyager online map · place labels · internal validation",
+  mapCartoSatellite: "Sentinel-2 satellite imagery (online) · CARTO place labels · internal validation",
+  mapLabelsUnavailable: "Place labels are temporarily unavailable; the basemap and analysis remain usable.",
+  mapOrdinaryFallback: "Online map unavailable; switched to satellite imagery.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

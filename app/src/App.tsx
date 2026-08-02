@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { LinkParameterPanel } from "./components/LinkParameterPanel";
-import { LinkProfileChart } from "./components/LinkProfileChart";
+import { LinkProfileDialog } from "./components/LinkProfileDialog";
 import { MapView } from "./components/MapView";
 import { ParameterPanel } from "./components/ParameterPanel";
 import {
@@ -222,6 +222,8 @@ export function App() {
   const [linkWorkflow, setLinkWorkflow] = useState<LinkWorkflow>("selecting");
   const [linkResult, setLinkResult] = useState<LinkAnalysisResult | null>(null);
   const [linkResultStale, setLinkResultStale] = useState(false);
+  const [linkProfileOpen, setLinkProfileOpen] = useState(false);
+  const [linkProfileDimmed, setLinkProfileDimmed] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [linkInspection, setLinkInspection] = useState<PointInspection | null>(null);
   const [linkInspectionLoading, setLinkInspectionLoading] = useState(false);
@@ -1111,6 +1113,8 @@ export function App() {
     }
     setLinkResult(null);
     setLinkResultStale(false);
+    setLinkProfileOpen(false);
+    setLinkProfileDimmed(false);
     setLinkError(null);
   }
 
@@ -1130,6 +1134,8 @@ export function App() {
     setLinkRx(null);
     setLinkResult(null);
     setLinkResultStale(false);
+    setLinkProfileOpen(false);
+    setLinkProfileDimmed(false);
     setLinkError(null);
     setLinkSelectionStage("tx");
     setLinkWorkflow("selecting");
@@ -1140,6 +1146,8 @@ export function App() {
     setLinkRx(null);
     setLinkResult(null);
     setLinkResultStale(false);
+    setLinkProfileOpen(false);
+    setLinkProfileDimmed(false);
     setLinkError(null);
     setLinkSelectionStage("rx");
     setLinkWorkflow("selecting");
@@ -1156,6 +1164,8 @@ export function App() {
     setProgress(null);
     setLinkResult(null);
     setLinkResultStale(false);
+    setLinkProfileOpen(false);
+    setLinkProfileDimmed(false);
     setLinkError(null);
     try {
       const value = await analyzeLink(
@@ -1163,6 +1173,8 @@ export function App() {
       );
       setLinkResult(value);
       setProgress(null);
+      setLinkProfileOpen(true);
+      setLinkProfileDimmed(false);
       setLinkWorkflow("completed");
     } catch (error) {
       setProgress(null);
@@ -1494,14 +1506,7 @@ export function App() {
               <div className="legend-note">{t("colorDisclaimer")}</div>
             </div>
           </div>
-          ) : linkResult ? (
-            <LinkProfileChart result={linkResult} />
-          ) : (
-            <div className="link-profile-placeholder">
-              <strong>{t("linkProfileWaiting")}</strong>
-              <span>{t("linkProfileWaitingDetail")}</span>
-            </div>
-          )}
+          ) : null}
         </div>
 
         <aside className="sidebar">
@@ -1530,6 +1535,18 @@ export function App() {
                   >
                     {t("reselectLinkRx")}
                   </button>
+                  {linkResult && (
+                    <button
+                      type="button"
+                      className="link-profile-open-action"
+                      onClick={() => {
+                        setLinkProfileOpen(true);
+                        setLinkProfileDimmed(false);
+                      }}
+                    >
+                      {t("openLinkProfile")}
+                    </button>
+                  )}
                 </div>
                 <LinkParameterPanel
                   parameters={linkParameters}
@@ -1673,6 +1690,19 @@ export function App() {
           </div>
         </aside>
       </main>
+
+      {analysisMode === "link" && linkResult && linkProfileOpen && (
+        <LinkProfileDialog
+          result={linkResult}
+          dimmed={linkProfileDimmed}
+          onActivate={() => setLinkProfileDimmed(false)}
+          onInteractOutside={() => setLinkProfileDimmed(true)}
+          onClose={() => {
+            setLinkProfileOpen(false);
+            setLinkProfileDimmed(false);
+          }}
+        />
+      )}
 
       {mapSettingsOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={closeMapSettings}>

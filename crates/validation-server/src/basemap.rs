@@ -16,7 +16,10 @@ use serde::Serialize;
 use ureq::Agent;
 
 const TIANDITU_PROVIDER_ID: &str = "tianditu";
-const TILE_PATH_TEMPLATE: &str = "/api/basemap/tianditu/{layer}/{z}/{x}/{y}";
+const TIANDITU_TILE_PATH_TEMPLATE: &str = "/api/basemap/tianditu/{layer}/{z}/{x}/{y}";
+const CARTO_PROVIDER_ID: &str = "carto-voyager";
+const CARTO_TILE_PATH_TEMPLATE: &str = "/api/basemap/carto/{layer}/{z}/{x}/{y}";
+const CARTO_UPSTREAM_ORIGIN: &str = "https://a.basemaps.cartocdn.com";
 const MAX_ZOOM: u8 = 18;
 pub(crate) const SATELLITE_TILE_PATH_PREFIX: &str = "/api/basemap/satellite/";
 const SATELLITE_TILE_PATH_TEMPLATE: &str = "/api/basemap/satellite/{z}/{x}/{y}";
@@ -40,10 +43,20 @@ const TIANDITU_LAYERS: [BasemapLayerMetadata; 2] = [
         display_name: "Labels",
     },
 ];
+const CARTO_LAYERS: [BasemapLayerMetadata; 2] = [
+    BasemapLayerMetadata {
+        id: "base",
+        display_name: "Base map",
+    },
+    BasemapLayerMetadata {
+        id: "labels",
+        display_name: "Place labels",
+    },
+];
 
 #[derive(Clone)]
 pub(crate) struct Basemap {
-    tianditu: BasemapProxy,
+    proxy: BasemapProxy,
 }
 
 #[derive(Clone)]
@@ -71,6 +84,29 @@ impl Layer {
         match self {
             Self::Vector => "vec",
             Self::Annotation => "cva",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CartoLayer {
+    Base,
+    Labels,
+}
+
+impl CartoLayer {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "base" => Some(Self::Base),
+            "labels" => Some(Self::Labels),
+            _ => None,
+        }
+    }
+
+    fn upstream_path(self) -> &'static str {
+        match self {
+            Self::Base => "rastertiles/voyager_nolabels",
+            Self::Labels => "rastertiles/voyager_only_labels",
         }
     }
 }
@@ -123,6 +159,58 @@ impl TileRequest {
         )
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CartoTileRequest {
+    layer: CartoLayer,
+    zoom: u8,
+    x: u32,
+    y: u32,
+}
+
+impl CartoTileRequest {
+    fn parse(path: &str) -> Result<Self, BasemapError> {
+        let mut parts = path.split('/');
+        if parts.next() != Some("")
+            || parts.next() != Some("api")
+            || parts.next() != Some("basemap")
+            || parts.next() != Some("carto")
+        {
+            return Err(BasemapError::InvalidPath);
+        }
+        let layer = parts
+            .next()
+            .and_then(CartoLayer::parse)
+            .ok_or(BasemapError::InvalidPath)?;
+        let zoom = parse_decimal(parts.next()).ok_or(BasemapError::InvalidPath)?;
+        let x = parse_decimal(parts.next()).ok_or(BasemapError::InvalidPath)?;
+        let y = parse_decimal(parts.next()).ok_or(BasemapError::InvalidPath)?;
+        if parts.next().is_some() || zoom > u32::from(MAX_ZOOM) {
+            return Err(BasemapError::InvalidPath);
+        }
+        let matrix_size = 1_u32.checked_shl(zoom).ok_or(BasemapError::InvalidPath)?;
+        if x >= matrix_size || y >= matrix_size {
+            return Err(BasemapError::InvalidPath);
+        }
+        Ok(Self {
+            layer,
+            zoom: zoom as u8,
+            x,
+            y,
+        })
+    }
+
+    fn upstream_url(self) -> String {
+        format!(
+            "{CARTO_UPSTREAM_ORIGIN}/{}/{}/{}/{}.png",
+            self.layer.upstream_path(),
+            self.zoom,
+            self.x,
+            self.y
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SatelliteTileRequest {
     zoom: u8,
@@ -179,7 +267,6 @@ fn parse_decimal(value: Option<&str>) -> Option<u32> {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum BasemapError {
     InvalidPath,
-    Disabled,
     UpstreamUnavailable,
     InvalidUpstreamResponse,
 }
@@ -235,19 +322,20 @@ struct BasemapLayerMetadata {
 impl Basemap {
     pub(crate) fn load(token_file: &Path) -> Result<Self, String> {
         Ok(Self {
-            tianditu: BasemapProxy::load(token_file)?,
+            proxy: BasemapProxy::load(token_file)?,
         })
     }
 
     pub(crate) fn metadata(&self) -> BasemapMetadata {
-        self.tianditu.metadata()
+        self.proxy.metadata()
     }
 
-    pub(crate) fn fetch_tianditu(&self, path: &str) -> Result<BasemapTile, BasemapError> {
-        self.tianditu.fetch(path)
+    pub(crate) fn fetch_regular(&self, path: &str) -> Result<BasemapTile, BasemapError> {
+        self.proxy.fetch_regular(path)
     }
+
     pub(crate) fn fetch_satellite(&self, path: &str) -> Result<BasemapTile, BasemapError> {
-        self.tianditu.fetch_satellite(path)
+        self.proxy.fetch_satellite(path)
     }
 }
 
@@ -266,23 +354,41 @@ impl BasemapProxy {
     }
 
     fn metadata(&self) -> BasemapMetadata {
-        BasemapMetadata {
-            enabled: self.token.is_some(),
-            provider_id: TIANDITU_PROVIDER_ID,
-            display_name: "天地图",
-            attribution: "天地图",
-            mode: "same-origin-proxy",
-            max_zoom: MAX_ZOOM,
-            layers: &TIANDITU_LAYERS,
-            tile_path_template: Some(TILE_PATH_TEMPLATE),
-            satellite: SATELLITE_METADATA,
+        match self.token {
+            Some(_) => BasemapMetadata {
+                enabled: true,
+                provider_id: TIANDITU_PROVIDER_ID,
+                display_name: "天地图",
+                attribution: "天地图",
+                mode: "same-origin-proxy",
+                max_zoom: MAX_ZOOM,
+                layers: &TIANDITU_LAYERS,
+                tile_path_template: Some(TIANDITU_TILE_PATH_TEMPLATE),
+                satellite: SATELLITE_METADATA,
+            },
+            None => BasemapMetadata {
+                enabled: true,
+                provider_id: CARTO_PROVIDER_ID,
+                display_name: "CARTO Voyager / OpenStreetMap",
+                attribution: "© OpenStreetMap contributors © CARTO",
+                mode: "same-origin-proxy",
+                max_zoom: MAX_ZOOM,
+                layers: &CARTO_LAYERS,
+                tile_path_template: Some(CARTO_TILE_PATH_TEMPLATE),
+                satellite: SATELLITE_METADATA,
+            },
         }
     }
 
-    fn fetch(&self, path: &str) -> Result<BasemapTile, BasemapError> {
-        let request = TileRequest::parse(path)?;
-        let token = self.token.as_deref().ok_or(BasemapError::Disabled)?;
-        let url = request.upstream_url(token);
+    fn regular_upstream_url(&self, path: &str) -> Result<String, BasemapError> {
+        match self.token.as_deref() {
+            Some(token) => Ok(TileRequest::parse(path)?.upstream_url(token)),
+            None => Ok(CartoTileRequest::parse(path)?.upstream_url()),
+        }
+    }
+
+    fn fetch_regular(&self, path: &str) -> Result<BasemapTile, BasemapError> {
+        let url = self.regular_upstream_url(path)?;
         self.fetch_url(&url)
     }
 
@@ -450,6 +556,43 @@ mod tests {
     }
 
     #[test]
+    fn carto_tile_paths_are_strict_and_bounded() {
+        assert_eq!(
+            CartoTileRequest::parse("/api/basemap/carto/base/18/262143/262143").unwrap(),
+            CartoTileRequest {
+                layer: CartoLayer::Base,
+                zoom: 18,
+                x: 262_143,
+                y: 262_143,
+            }
+        );
+        assert_eq!(
+            CartoTileRequest::parse("/api/basemap/carto/labels/0/0/0")
+                .unwrap()
+                .layer,
+            CartoLayer::Labels
+        );
+        for invalid in [
+            "/api/basemap/carto/vec/1/0/0",
+            "/api/basemap/other/base/1/0/0",
+            "/api/basemap/tianditu/base/1/0/0",
+            "/api/basemap/carto/base/19/0/0",
+            "/api/basemap/carto/base/2/4/0",
+            "/api/basemap/carto/base/2/0/4",
+            "/api/basemap/carto/base/02/0/0",
+            "/api/basemap/carto/base/2/-1/0",
+            "/api/basemap/carto/base/2/0/0/extra",
+            "/api/basemap/carto/base/2/0",
+            "/api/basemap/carto/base/2/0/0?source=evil",
+        ] {
+            assert_eq!(
+                CartoTileRequest::parse(invalid),
+                Err(BasemapError::InvalidPath)
+            );
+        }
+    }
+
+    #[test]
     fn satellite_tile_paths_are_strict_and_reorder_wmts_coordinates() {
         let request = SatelliteTileRequest::parse("/api/basemap/satellite/14/16383/0").unwrap();
         assert_eq!(
@@ -492,9 +635,58 @@ mod tests {
     }
 
     #[test]
+    fn carto_upstream_urls_are_fixed_and_separate_base_from_labels() {
+        assert_eq!(
+            CartoTileRequest::parse("/api/basemap/carto/base/8/201/99")
+                .unwrap()
+                .upstream_url(),
+            "https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/8/201/99.png"
+        );
+        assert_eq!(
+            CartoTileRequest::parse("/api/basemap/carto/labels/8/201/99")
+                .unwrap()
+                .upstream_url(),
+            "https://a.basemaps.cartocdn.com/rastertiles/voyager_only_labels/8/201/99.png"
+        );
+    }
+
+    #[test]
     fn token_file_is_optional_but_present_files_are_fail_closed() {
         let missing = temp_path("missing");
         assert_eq!(load_token(&missing).unwrap(), None);
+        let fallback = BasemapProxy::load(&missing).unwrap();
+        let fallback_metadata = serde_json::to_value(fallback.metadata()).unwrap();
+        assert_eq!(fallback_metadata["enabled"], true);
+        assert_eq!(fallback_metadata["providerId"], "carto-voyager");
+        assert_eq!(
+            fallback_metadata["displayName"],
+            "CARTO Voyager / OpenStreetMap"
+        );
+        assert_eq!(
+            fallback_metadata["attribution"],
+            "© OpenStreetMap contributors © CARTO"
+        );
+        assert_eq!(fallback_metadata["maxZoom"], 18);
+        assert_eq!(fallback_metadata["layers"][0]["id"], "base");
+        assert_eq!(fallback_metadata["layers"][1]["id"], "labels");
+        assert_eq!(
+            fallback_metadata["tilePathTemplate"],
+            "/api/basemap/carto/{layer}/{z}/{x}/{y}"
+        );
+        let fallback_encoded = serde_json::to_string(&fallback_metadata).unwrap();
+        assert!(!fallback_encoded.contains("a.basemaps.cartocdn.com"));
+        assert!(!fallback_encoded.contains("t0.tianditu.gov.cn"));
+        assert!(
+            fallback
+                .regular_upstream_url("/api/basemap/tianditu/vec/1/0/0")
+                .is_err()
+        );
+        assert_eq!(
+            fallback
+                .regular_upstream_url("/api/basemap/carto/base/1/0/0")
+                .unwrap(),
+            "https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/1/0/0.png"
+        );
 
         let valid = temp_path("valid");
         fs::write(&valid, b"0123456789abcdef\n").unwrap();
@@ -508,6 +700,23 @@ mod tests {
         let metadata = serde_json::to_value(proxy.metadata()).unwrap();
         assert_eq!(metadata["enabled"], true);
         assert_eq!(metadata["providerId"], "tianditu");
+        assert_eq!(metadata["layers"][0]["id"], "vec");
+        assert_eq!(metadata["layers"][1]["id"], "cva");
+        assert_eq!(
+            metadata["tilePathTemplate"],
+            "/api/basemap/tianditu/{layer}/{z}/{x}/{y}"
+        );
+        assert!(
+            proxy
+                .regular_upstream_url("/api/basemap/carto/base/1/0/0")
+                .is_err()
+        );
+        assert!(
+            proxy
+                .regular_upstream_url("/api/basemap/tianditu/vec/1/0/0")
+                .unwrap()
+                .starts_with("https://t0.tianditu.gov.cn/vec_w/wmts?")
+        );
         let encoded = serde_json::to_string(&metadata).unwrap();
         assert!(!encoded.contains("0123456789abcdef"));
         assert!(!encoded.contains("t0.tianditu.gov.cn"));
