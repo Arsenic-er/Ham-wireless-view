@@ -32,6 +32,7 @@ PROTECTED_PREFIXES = ("third_party/", "app/src-tauri/gen/")
 INLINE_EXACT = {
     ".github/CODEOWNERS",
     ".github/workflows/core.yml",
+    "design-qa.md",
     "Cargo.toml",
     "app/index.html",
     "app/src-tauri/Cargo.toml",
@@ -99,7 +100,7 @@ def comment_style(path: str) -> str:
         return "slash"
     if suffix == ".css":
         return "css"
-    if suffix in {".html", ".svg"}:
+    if suffix in {".html", ".svg"} or path == "design-qa.md":
         return "markup"
     return "hash"
 

@@ -1040,17 +1040,21 @@ export function MapView({
         </div>
       )}
       {analysisMode === "coverage" && !point && (
-        <div className="map-empty-state">
+        <div className="map-empty-state" role="status" aria-live="polite">
           <div className="map-crosshair" aria-hidden="true" />
-          <strong>{t("mapEmpty")}</strong>
-          <span>{t("mapEmptyDetail")}</span>
+          <div className="map-empty-copy">
+            <strong>{t("mapEmpty")}</strong>
+            <span>{t("mapEmptyDetail")}</span>
+          </div>
         </div>
       )}
       {analysisMode === "link" && (!linkTx || !linkRx) && (
-        <div className="map-empty-state">
+        <div className="map-empty-state" role="status" aria-live="polite">
           <div className="map-crosshair" aria-hidden="true" />
-          <strong>{linkTx ? t("selectLinkRx") : t("selectLinkTx")}</strong>
-          <span>{linkTx ? t("selectLinkRxDetail") : t("selectLinkTxDetail")}</span>
+          <div className="map-empty-copy">
+            <strong>{linkTx ? t("selectLinkRx") : t("selectLinkTx")}</strong>
+            <span>{linkTx ? t("selectLinkRxDetail") : t("selectLinkTxDetail")}</span>
+          </div>
         </div>
       )}
       {analysisMode === "coverage" && point && (

@@ -304,6 +304,74 @@ describe("MapView controls and desired-state replay", () => {
   });
 
 
+  it("keeps coverage and link selection guidance compact at the top of the map", () => {
+    const commonProps = {
+      theme: "dark" as const,
+      heatmaps: [],
+      activeHeatmapId: null,
+      preview: null,
+      heatmapStale: false,
+      onPointSelect: vi.fn(),
+    };
+    const { container, getByRole, queryByRole, rerender, unmount } = render(
+      <MapView {...commonProps} point={null} analysisMode="coverage" />,
+    );
+
+    let hint = getByRole("status");
+    expect(hint.classList.contains("map-empty-state")).toBe(true);
+    expect(hint.getAttribute("aria-live")).toBe("polite");
+    expect(hint.querySelector(".map-empty-copy")).not.toBeNull();
+    expect(hint.textContent).toContain(i18n.t("mapEmpty"));
+
+    rerender(
+      <MapView
+        {...commonProps}
+        point={{ lat: 30.5, lon: 103.5 }}
+        analysisMode="coverage"
+      />,
+    );
+    expect(queryByRole("status")).toBeNull();
+
+    rerender(
+      <MapView
+        {...commonProps}
+        point={null}
+        analysisMode="link"
+        linkTx={null}
+        linkRx={null}
+      />,
+    );
+    hint = getByRole("status");
+    expect(hint.textContent).toContain(i18n.t("selectLinkTx"));
+
+    rerender(
+      <MapView
+        {...commonProps}
+        point={null}
+        analysisMode="link"
+        linkTx={{ lat: 30.5, lon: 103.5 }}
+        linkRx={null}
+      />,
+    );
+    hint = getByRole("status");
+    expect(hint.textContent).toContain(i18n.t("selectLinkRx"));
+    expect(container.querySelectorAll(".map-empty-state")).toHaveLength(1);
+
+    rerender(
+      <MapView
+        {...commonProps}
+        point={null}
+        analysisMode="link"
+        linkTx={{ lat: 30.5, lon: 103.5 }}
+        linkRx={{ lat: 30.8, lon: 104.1 }}
+      />,
+    );
+    expect(queryByRole("status")).toBeNull();
+
+    unmount();
+  });
+
+
   it("updates localized controls without reconstructing MapLibre", async () => {
     const { container, unmount } = render(
       <MapView

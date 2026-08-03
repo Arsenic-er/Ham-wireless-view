@@ -839,11 +839,11 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] AUTHORS.md、NOTICE、.github/CODEOWNERS、npm/Cargo/Tauri metadata 与四语言 README 统一记录 Arsenic-er 为项目创建者及主开发者。
 - [x] Tauri bundle 资源包含 AUTHORS.md、NOTICE、LICENSE 与 THIRD_PARTY_LICENSES.md，并保持 English、SimpChinese、TradChinese、Japanese 四语言 NSIS 配置。
 - [x] scripts/check-source-attribution.py 使用 Git tracked + untracked allowlist，漏头、第三方误盖章和未分类文件均 fail closed；GitHub Actions documentation job 执行该检查。
-- [x] 当前前端证据更新为 17 files / 151 tests；README 四语言事实检查必须继续通过。
+- [x] 当前前端证据更新为 17 files / 152 tests；README 四语言事实检查必须继续通过。
 
 ## 37. 双点链路通视分析（2026-08-02，源码/自动化与受管进程重建已通过；链路实跑、浏览器、Windows 与性能待验）
 
-本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面浮动弹窗；本次最终门禁确认为前端 17 files / 151 passed 与 Rust workspace 133 passed / 5 ignored。受管 validation 已重建并健康运行，但尚未执行真实 200 km 缓存链路、剖面弹窗浏览器验收或 Windows 实机验收，也没有公开服务。
+本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面浮动弹窗；本次最终门禁确认为前端 17 files / 152 passed 与 Rust workspace 133 passed / 5 ignored。受管 validation 已重建并健康运行，但尚未执行真实 200 km 缓存链路、剖面弹窗浏览器验收或 Windows 实机验收，也没有公开服务。
 
 ### 37.1 请求、路径与数据完整性
 
@@ -882,6 +882,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [ ] SVG 游标、resize、主题和语言本身不调用后端；地图/卫星切换、运行中取消与所有组合的零调用门禁仍待补齐。
 - [x] “清空链路”不清热力图/阈值/覆盖点；模式与语言切换保留链路端点、参数、结果和覆盖状态。
 - [x] 链路完成后自动打开 `aria-modal=false` 非模态浮动剖面；点击窗外不吞掉地图事件并把弹窗降至 42%，点回恢复。
+- [x] 覆盖模式 TX 与链路模式 TX/RX 的初始选点提示均为地图顶部紧凑状态条；提示不拦截指针事件，地图选点保持可点击。
 - [x] 关闭按钮和 `Escape` 可收起弹窗而不删除结果；结果卡可重新打开剖面。
 - [x] `en`、`zh-CN`、`zh-TW`、`ja-JP` 资源保持完全 key parity。
 - [ ] 浅/深主题、1080×700、Windows DPI 缩放和 validation 浏览器视觉仍待验收。
@@ -889,7 +890,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 ### 37.5 本轮执行证据与发布边界
 
-- [x] `scripts/node-project.sh --prefix app test`：17 test files / 151 passed。
+- [x] `scripts/node-project.sh --prefix app test`：17 test files / 152 passed。
 - [x] `scripts/cargo-project.sh test --workspace --all-targets --locked`：133 passed / 5 ignored。
 - [x] Windows xwin workspace check、测试程序 `--no-run` 与严格 Clippy 均通过；这不替代 Windows 实机。
 - [x] 当前源码已从干净提交 d7bd31a 完成受管 stop/build/start，health schema 1；该事实只证明当前二进制已运行。

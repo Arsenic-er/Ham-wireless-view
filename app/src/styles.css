@@ -485,35 +485,47 @@ select:focus-visible {
 
 .map-empty-state {
   position: absolute;
+  z-index: 1;
+  top: 62px;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(420px, calc(100% - 190px));
+  min-height: 48px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 24px 30px;
+  gap: 10px;
+  padding: 8px 13px;
   border: 1px solid var(--border);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  box-shadow: var(--shadow);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  box-shadow: 0 9px 26px rgba(34, 55, 64, 0.16);
   pointer-events: none;
 }
 
+.map-empty-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .map-empty-state strong {
-  margin-top: 5px;
-  font-size: 14px;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .map-empty-state span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 9px;
+  line-height: 1.35;
 }
 
 .map-crosshair {
-  width: 36px;
-  height: 36px;
   position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
   border: 1.5px solid var(--accent);
   border-radius: 50%;
 }
@@ -526,17 +538,17 @@ select:focus-visible {
 }
 
 .map-crosshair::before {
-  width: 48px;
+  width: 30px;
   height: 1px;
-  left: -7px;
-  top: 17px;
+  left: -5px;
+  top: 10px;
 }
 
 .map-crosshair::after {
   width: 1px;
-  height: 48px;
-  left: 17px;
-  top: -7px;
+  height: 30px;
+  left: 10px;
+  top: -5px;
 }
 
 .map-point-card {
@@ -2074,6 +2086,11 @@ fieldset {
 }
 
 @media (max-width: 760px) {
+  .map-empty-state {
+    top: 64px;
+    max-width: calc(100% - 24px);
+  }
+
   .link-profile-dialog {
     right: 16px;
     left: 16px;
