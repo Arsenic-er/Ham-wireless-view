@@ -122,7 +122,7 @@ echo "NSIS archive listing:"
 "$seven_zip" x -y "-o$verify_dir" "$nsis_exe" >/dev/null
 
 actual_files="$(find "$verify_dir" -type f -printf '%P\n' | LC_ALL=C sort)"
-expected_files=$'$PLUGINSDIR/StartMenu.dll\n$PLUGINSDIR/System.dll\n$PLUGINSDIR/modern-wizard.bmp\n$PLUGINSDIR/nsDialogs.dll\n$PLUGINSDIR/nsis_tauri_utils.dll\n$TEMP/MicrosoftEdgeWebView2RuntimeInstaller.exe\nHamHeatmap.exe\nTHIRD_PARTY_LICENSES.md'
+expected_files=$'$PLUGINSDIR/StartMenu.dll\n$PLUGINSDIR/System.dll\n$PLUGINSDIR/modern-wizard.bmp\n$PLUGINSDIR/nsDialogs.dll\n$PLUGINSDIR/nsis_tauri_utils.dll\n$TEMP/MicrosoftEdgeWebView2RuntimeInstaller.exe\nAUTHORS.md\nHamHeatmap.exe\nNOTICE\nTHIRD_PARTY_LICENSES.md'
 if [[ "$actual_files" != "$expected_files" ]]; then
     printf 'Expected NSIS files:\n%s\nActual NSIS files:\n%s\n' \
         "$expected_files" "$actual_files" >&2
@@ -131,11 +131,19 @@ fi
 
 embedded_app="$verify_dir/HamHeatmap.exe"
 embedded_license="$verify_dir/THIRD_PARTY_LICENSES.md"
+embedded_authors="$verify_dir/AUTHORS.md"
+embedded_notice="$verify_dir/NOTICE"
 embedded_webview="$verify_dir/\$TEMP/MicrosoftEdgeWebView2RuntimeInstaller.exe"
 embedded_nsis_utils="$verify_dir/\$PLUGINSDIR/nsis_tauri_utils.dll"
-for artifact in "$embedded_app" "$embedded_license" "$embedded_webview" "$embedded_nsis_utils"; do
+for artifact in "$embedded_app" "$embedded_license" "$embedded_authors" "$embedded_notice" \
+    "$embedded_webview" "$embedded_nsis_utils"; do
     [[ -s "$artifact" ]] || fail "embedded artifact is missing or empty: $artifact"
 done
+
+cmp -s "$project_root/AUTHORS.md" "$embedded_authors" ||
+    fail "embedded AUTHORS.md differs from project source"
+cmp -s "$project_root/NOTICE" "$embedded_notice" ||
+    fail "embedded NOTICE differs from project source"
 
 embedded_webview_sha="$(sha_of "$embedded_webview")"
 matching_webview_candidates=()
