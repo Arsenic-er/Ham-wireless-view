@@ -23,8 +23,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost",
-      "devCsp": "default-src 'self'; img-src 'self' data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost"
+      "csp": "default-src 'self'; img-src 'self' data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost basemap: http://basemap.localhost https://basemap.localhost; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost basemap: http://basemap.localhost https://basemap.localhost",
+      "devCsp": "default-src 'self'; img-src 'self' data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost basemap: http://basemap.localhost https://basemap.localhost; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 data: blob: tianditu: http://tianditu.localhost https://tianditu.localhost basemap: http://basemap.localhost https://basemap.localhost"
     }
   },
   "bundle": {

@@ -11,7 +11,7 @@
 
 所有源码、依赖、工具链和构建缓存均留在服务器。Windows 电脑只接收最终 standalone EXE 或 NSIS 安装包，不复制源码、`node_modules`、Rust target 或 SDK。
 
-该构建用于内部 Alpha 验证。它尚未完成代码签名、Windows 10/11 双系统安装测试、有效个人天地图 `tk` 实测和中国大陆真实 ISP 可达性验证，因此不能据此宣称桌面或中国大陆网络已经验收。
+该构建用于内部 Alpha 验证。它尚未完成代码签名、Windows 10/11 双系统安装测试、默认 CARTO/EOX 公共底图、可选个人天地图 `tk` 和中国大陆真实 ISP 可达性实测，因此不能据此宣称桌面或中国大陆网络已经验收。
 
 ## 一条命令构建
 
@@ -47,9 +47,11 @@ app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/HamHeatmap_0.1.0
 
 ## Windows 在线地图能力
 
-该构建包含天地图在线普通地图 `vec+cva` 和卫星图 `img+cia`。用户在应用内输入个人 `tk`；前端只获得固定 `tianditu:` 模板和配置状态，Windows Rust 后端使用当前用户 DPAPI 加密后保存到应用本地数据目录。
+当前源码构建出的 Windows/Tauri 应用默认使用 CARTO Voyager `base+labels` 与 EOxCloudless Sentinel-2 卫星影像，不要求天地图 `tk`。前端只接受固定 `basemap:` 模板；Windows Rust 后端代理固定 HTTPS 上游，并对路径、坐标、大小、MIME 与图片签名执行严格检查。
 
-瓦片代理固定请求天地图 HTTPS Web Mercator 服务，执行路径、坐标、大小、MIME 与图片签名检查，响应为 `no-store`。瓦片不会持久缓存，不计入 2.5 GB DEM/WBM 配额，也不进入诊断 PNG/PDF。上述能力已经自动化和交叉编译验证，但尚未使用有效 `tk` 在 Windows 实机或中国大陆真实 ISP 上验收。
+个人天地图 `tk` 是可选覆盖：设置后由当前用户 DPAPI 加密保存，固定 `tianditu:` 普通/卫星模板优先；清除后继续使用 CARTO/EOX。所有在线瓦片响应均为 `no-store`，不会持久缓存、不计入 2.5 GB DEM/WBM 配额，也不进入诊断 PNG/PDF。
+
+本节上方与 Alpha 2 小节记录的 2026-08-01 哈希是历史产物；必须重新执行交叉构建，才会把当前默认公共底图行为纳入新的 EXE/NSIS。当前前端自动化为 `17 files / 154 tests`，但 Windows 实机和中国大陆真实 ISP 仍待验收。
 
 ## 运行库策略
 
@@ -110,7 +112,8 @@ bash -n scripts/cargo-xwin-static.sh scripts/makensis-project.sh scripts/tauri-w
 
 - [ ] 在 Windows 10 和 Windows 11 分别启动 standalone EXE，验证主题、参数、缓存、计算、导出和第二实例聚焦。
 - [ ] 在 Windows 10 和 Windows 11 分别验证当前用户 NSIS 的离线 WebView2 安装、启动和卸载，以及 SmartScreen/未签名提示。
-- [ ] 使用用户自己的有效天地图 `tk` 验证 `vec+cva`、`img+cia`、中文注记、动态比例尺、替换/清除和重启后 DPAPI 恢复。
+- [ ] 不配置 `tk`，验证 CARTO Voyager 地图/地名、EOxCloudless 卫星切换、动态比例尺、断网回退与重启。
+- [ ] 使用用户自己的有效天地图 `tk` 验证可选覆盖、`vec+cva`、`img+cia`、中文注记、替换/清除和重启后 DPAPI 恢复。
 - [ ] 验证断网、弱网、无效 `tk`、配额错误、取消、Range 续传、缓存删除失败回滚、接近 2.5 GB 上限和离线传播计算。
 - [ ] 从至少一个中国大陆家庭或移动网络验证瓦片可达；不得从服务器或其他地区的请求结果外推。
 - [ ] 在实机检查 DevTools、日志、崩溃信息、bootstrap 和导出文件不含 `tk`，并确认诊断 PNG/PDF 不包含在线底图。

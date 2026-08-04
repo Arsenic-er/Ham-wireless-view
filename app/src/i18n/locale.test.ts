@@ -37,7 +37,7 @@ describe("application locales", () => {
 
   it("keeps every locale in exact key parity with English", () => {
     const reference = Object.keys(resources.en.translation).sort();
-    expect(reference).toHaveLength(376);
+    expect(reference).toHaveLength(377);
     expect(Object.keys(resources)).toEqual(APP_LOCALES);
     for (const locale of APP_LOCALES) {
       expect(Object.keys(resources[locale].translation).sort()).toEqual(reference);

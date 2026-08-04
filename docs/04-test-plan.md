@@ -839,11 +839,11 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] AUTHORS.md、NOTICE、.github/CODEOWNERS、npm/Cargo/Tauri metadata 与四语言 README 统一记录 Arsenic-er 为项目创建者及主开发者。
 - [x] Tauri bundle 资源包含 AUTHORS.md、NOTICE、LICENSE 与 THIRD_PARTY_LICENSES.md，并保持 English、SimpChinese、TradChinese、Japanese 四语言 NSIS 配置。
 - [x] scripts/check-source-attribution.py 使用 Git tracked + untracked allowlist，漏头、第三方误盖章和未分类文件均 fail closed；GitHub Actions documentation job 执行该检查。
-- [x] 当前前端证据更新为 17 files / 152 tests；README 四语言事实检查必须继续通过。
+- [x] 当前前端证据更新为 17 files / 154 tests；README 四语言事实检查必须继续通过。
 
 ## 37. 双点链路通视分析（2026-08-02，源码/自动化与受管进程重建已通过；链路实跑、浏览器、Windows 与性能待验）
 
-本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面浮动弹窗；本次最终门禁确认为前端 17 files / 152 passed 与 Rust workspace 133 passed / 5 ignored。受管 validation 已重建并健康运行，但尚未执行真实 200 km 缓存链路、剖面弹窗浏览器验收或 Windows 实机验收，也没有公开服务。
+本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面浮动弹窗；本次最终门禁确认为前端 17 files / 154 passed 与 Rust workspace 133 passed / 5 ignored。受管 validation 已重建并健康运行，但尚未执行真实 200 km 缓存链路、剖面弹窗浏览器验收或 Windows 实机验收，也没有公开服务。
 
 ### 37.1 请求、路径与数据完整性
 
@@ -890,7 +890,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 ### 37.5 本轮执行证据与发布边界
 
-- [x] `scripts/node-project.sh --prefix app test`：17 test files / 152 passed。
+- [x] `scripts/node-project.sh --prefix app test`：17 test files / 154 passed。
 - [x] `scripts/cargo-project.sh test --workspace --all-targets --locked`：133 passed / 5 ignored。
 - [x] Windows xwin workspace check、测试程序 `--no-run` 与严格 Clippy 均通过；这不替代 Windows 实机。
 - [x] 当前源码已从干净提交 d7bd31a 完成受管 stop/build/start，health schema 1；该事实只证明当前二进制已运行。
@@ -907,3 +907,12 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] CARTO base/labels、EOx satellite 与 label/base/satellite source error 已做状态隔离：地名失败不移除健康基础源，普通/卫星互相回退，只有两个基础源都失败才进入 WGS84。
 - [x] 受管服务已停止旧 PID 3040955，并从干净提交 d7bd31a 重建；health schema 1，bootstrap 为 enabled carto-voyager base/labels maxZoom=18。live base 为 HTTP 200 image/png 24,798 bytes，labels 为 HTTP 200 image/png 8,087 bytes，satellite 为 HTTP 200 image/jpeg 17,586 bytes；旧天地图路径 404、query 注入 400、labels Cache-Control: no-store。
 - [ ] 通过 SSH 隧道人工确认道路、详细地名、热力图层级、卫星切换、WGS84 故障回退和署名可读性。
+
+## 39. Windows 默认公共在线底图（2026-08-04，源码与自动化通过；新产物实机待验）
+
+- [x] Windows/Tauri 在没有天地图 `tk` 时从 `get_public_basemap` 获得固定 CARTO Voyager base/labels 与 EOxCloudless Sentinel-2 元数据。
+- [x] WebView 只信任固定 `desktop-protocol-proxy`、`basemap://localhost/carto/{layer}/{z}/{x}/{y}` 与 `basemap://localhost/eox/satellite/{z}/{x}/{y}` 契约。
+- [x] 有效个人天地图 `tk` 是可选覆盖并保持优先；清除配置后继续使用 CARTO/EOX，不回退为空白坐标网格。
+- [x] 两类在线瓦片均保持固定 HTTPS 上游、严格路径/MIME/签名检查和 `no-store`，不进入 2.5 GB DEM/WBM 缓存或诊断导出。
+- [x] TypeScript check、production build 与前端全量 `17 files / 154 tests` 通过。
+- [ ] 重新构建并审计包含该源码的 Windows EXE/NSIS；在 Windows 10/11 和中国大陆真实网络分别验证默认公共底图、卫星切换、可选天地图覆盖与清除回退。

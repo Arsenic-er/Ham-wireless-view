@@ -97,6 +97,8 @@ vi.mock("./components/MapView", () => ({
     linkTx,
     linkRx,
     linkResult,
+    basemap,
+    onlineBasemap,
     onPointSelect,
   }: {
     point: { lat: number; lon: number } | null;
@@ -105,6 +107,8 @@ vi.mock("./components/MapView", () => ({
     linkTx?: { lat: number; lon: number } | null;
     linkRx?: { lat: number; lon: number } | null;
     linkResult?: LinkAnalysisResult | null;
+    basemap?: BasemapInfo | null;
+    onlineBasemap?: OnlineBasemapInfo | null;
     onPointSelect: (point: { lat: number; lon: number }) => void;
   }) => (
     <div>
@@ -124,6 +128,12 @@ vi.mock("./components/MapView", () => ({
       <span data-testid="link-tx">{linkTx ? `${linkTx.lat},${linkTx.lon}` : "none"}</span>
       <span data-testid="link-rx">{linkRx ? `${linkRx.lat},${linkRx.lon}` : "none"}</span>
       <span data-testid="link-result">{linkResult ? linkResult.classification : "none"}</span>
+      <span data-testid="map-basemap">
+        {basemap?.providerId ?? "none"}
+      </span>
+      <span data-testid="map-online-basemap">
+        {onlineBasemap?.configured ? "configured" : "not-configured"}
+      </span>
     </div>
   ),
 }));
@@ -239,6 +249,31 @@ const tiandituBasemap: BasemapInfo = {
   tilePathTemplate: "/api/basemap/tianditu/{layer}/{z}/{x}/{y}",
 };
 
+
+const publicDesktopBasemap: BasemapInfo = {
+  enabled: true,
+  providerId: "carto-voyager",
+  displayName: "CARTO Voyager / OpenStreetMap",
+  attribution: "\u00a9 OpenStreetMap contributors \u00a9 CARTO",
+  mode: "desktop-protocol-proxy",
+  maxZoom: 18,
+  layers: [
+    { id: "base", displayName: "Map" },
+    { id: "labels", displayName: "Place labels" },
+  ],
+  tilePathTemplate: "basemap://localhost/carto/{layer}/{z}/{x}/{y}",
+  satellite: {
+    enabled: true,
+    providerId: "eoxcloudless",
+    displayName: "Sentinel-2 Cloudless 2025",
+    attribution:
+      "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)",
+    mode: "desktop-protocol-proxy",
+    maxZoom: 14,
+    tilePathTemplate:
+      "basemap://localhost/eox/satellite/{z}/{x}/{y}",
+  },
+};
 
 const onlineBasemap: OnlineBasemapInfo = {
   configured: true,
@@ -437,6 +472,7 @@ describe("desktop online map settings", () => {
       gridSize: 401,
       cacheUsage,
       internalBuildWarning: "internal",
+      basemap: publicDesktopBasemap,
       onlineBasemap: { ...onlineBasemap, configured },
     });
   }
@@ -460,6 +496,10 @@ describe("desktop online map settings", () => {
     expect(input.type).toBe("password");
     expect(input.value).toBe("");
     expect(screen.getByText("尚未测试")).toBeTruthy();
+    expect(await screen.findByText(i18n.t("basemapPublicConnected"))).toBeTruthy();
+    expect(screen.getByTestId("map-basemap").textContent).toBe("carto-voyager");
+    expect(screen.getByTestId("map-online-basemap").textContent).toBe("not-configured");
+
 
     const secret = "temporary-secret-token";
     fireEvent.change(input, { target: { value: secret } });
@@ -475,11 +515,15 @@ describe("desktop online map settings", () => {
     expect(screen.getByText("配置已保存。")).toBeTruthy();
     expect(screen.getByText("连接测试通过")).toBeTruthy();
 
+    expect(screen.getByTestId("map-basemap").textContent).toBe("carto-voyager");
+    expect(screen.getByTestId("map-online-basemap").textContent).toBe("configured");
     fireEvent.click(screen.getByRole("button", { name: "清除配置" }));
     await waitFor(() => expect(backendMocks.clearOnlineBasemap).toHaveBeenCalledOnce());
-    expect(screen.getByText("已清除在线地图配置，当前使用 WGS84 坐标网格。")).toBeTruthy();
+    expect(screen.getByText(i18n.t("configurationCleared"))).toBeTruthy();
     expect(screen.getByText("尚未测试")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /测试连接/ })).toBeNull();
+    expect(screen.getByTestId("map-basemap").textContent).toBe("carto-voyager");
+    expect(screen.getByTestId("map-online-basemap").textContent).toBe("not-configured");
   });
 
   it("retains a saved configuration when the immediate probe fails", async () => {

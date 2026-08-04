@@ -14,6 +14,7 @@ import {
   MAP_OVERLAY_FILTER_ENCODING,
 } from "./coverageVisibility";
 import type {
+  BasemapInfo,
   BootstrapInfo,
   CacheDeleteResult,
   CacheOverview,
@@ -896,6 +897,11 @@ async function cancelValidationOperation(
   }
 }
 
+export async function getPublicBasemap(): Promise<BasemapInfo | null> {
+  if (!desktopBackendAvailable()) return null;
+  return invoke<BasemapInfo | null>("get_public_basemap");
+}
+
 export async function getOnlineBasemap(): Promise<OnlineBasemapInfo | null> {
   if (!desktopBackendAvailable()) return null;
   return invoke<OnlineBasemapInfo | null>("get_online_basemap");
@@ -944,21 +950,15 @@ export async function probeOnlineBasemap(): Promise<OnlineBasemapProbeResult> {
 export async function bootstrap(): Promise<BootstrapInfo> {
   if (desktopBackendAvailable()) {
     const value = await invoke<BootstrapInfo>("bootstrap");
-    try {
-      const onlineBasemap = await getOnlineBasemap();
-      return {
-        ...value,
-        onlineBasemap: onlineBasemap ?? undefined,
-      };
-    } catch {
-      // Propagation features remain available when online map metadata cannot
-      // be loaded. The map will show the local WGS84 grid instead.
-      return {
-        ...value,
-        basemap: undefined,
-        onlineBasemap: undefined,
-      };
-    }
+    const [basemap, onlineBasemap] = await Promise.all([
+      getPublicBasemap().catch(() => null),
+      getOnlineBasemap().catch(() => null),
+    ]);
+    return {
+      ...value,
+      basemap: basemap ?? undefined,
+      onlineBasemap: onlineBasemap ?? undefined,
+    };
   }
   if (backendMode() === "validation-server") {
     return validationRequest<BootstrapInfo>("/api/bootstrap");

@@ -29,6 +29,8 @@ export const TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE =
 
 export const CARTO_TILE_PATH_TEMPLATE =
   "/api/basemap/carto/{layer}/{z}/{x}/{y}";
+export const TAURI_CARTO_TILE_PATH_TEMPLATE =
+  "basemap://localhost/carto/{layer}/{z}/{x}/{y}";
 export const CARTO_ATTRIBUTION =
   "\u00a9 OpenStreetMap contributors \u00a9 CARTO";
 export const CARTO_BASE_SOURCE_ID = "basemap-carto-base";
@@ -38,6 +40,8 @@ export const CARTO_LABEL_LAYER_ID = "basemap-carto-labels-layer";
 
 export const SATELLITE_TILE_PATH_TEMPLATE =
   "/api/basemap/satellite/{z}/{x}/{y}";
+export const TAURI_SATELLITE_TILE_PATH_TEMPLATE =
+  "basemap://localhost/eox/satellite/{z}/{x}/{y}";
 export const SATELLITE_SOURCE_ID = "basemap-satellite";
 export const SATELLITE_LAYER_ID = "basemap-satellite-layer";
 export const SATELLITE_ATTRIBUTION =
@@ -75,11 +79,15 @@ export function isTrustedTiandituBasemap(
 export function isTrustedCartoBasemap(
   basemap: BasemapInfo | null | undefined,
 ): basemap is BasemapInfo {
+  const trustedTransport =
+    (basemap?.mode === "same-origin-proxy" &&
+      basemap.tilePathTemplate === CARTO_TILE_PATH_TEMPLATE) ||
+    (basemap?.mode === "desktop-protocol-proxy" &&
+      basemap.tilePathTemplate === TAURI_CARTO_TILE_PATH_TEMPLATE);
   return Boolean(
     basemap?.enabled &&
       basemap.providerId === "carto-voyager" &&
-      basemap.mode === "same-origin-proxy" &&
-      basemap.tilePathTemplate === CARTO_TILE_PATH_TEMPLATE &&
+      trustedTransport &&
       basemap.maxZoom === 18 &&
       basemap.attribution === CARTO_ATTRIBUTION &&
       hasExactlyLayers(basemap, ["base", "labels"]),
@@ -109,11 +117,15 @@ export function isTrustedSatelliteBasemap(
   basemap: BasemapInfo | null | undefined,
 ): boolean {
   const satellite = basemap?.satellite;
+  const trustedTransport =
+    (satellite?.mode === "same-origin-proxy" &&
+      satellite.tilePathTemplate === SATELLITE_TILE_PATH_TEMPLATE) ||
+    (satellite?.mode === "desktop-protocol-proxy" &&
+      satellite.tilePathTemplate === TAURI_SATELLITE_TILE_PATH_TEMPLATE);
   return (
     satellite?.enabled === true &&
     satellite.providerId === "eoxcloudless" &&
-    satellite.mode === "same-origin-proxy" &&
-    satellite.tilePathTemplate === SATELLITE_TILE_PATH_TEMPLATE &&
+    trustedTransport &&
     satellite.maxZoom === 14 &&
     satellite.attribution === SATELLITE_ATTRIBUTION
   );
@@ -299,7 +311,7 @@ function synchronizeCartoBasemap(
     {
       sourceId: CARTO_BASE_SOURCE_ID,
       layerId: CARTO_BASE_LAYER_ID,
-      template: tilePath(CARTO_TILE_PATH_TEMPLATE, "base"),
+      template: tilePath(basemap.tilePathTemplate!, "base"),
       minZoom: 0,
       maxZoom: basemap.maxZoom,
       attribution: basemap.attribution,
@@ -312,7 +324,7 @@ function synchronizeCartoBasemap(
     {
       sourceId: CARTO_LABEL_SOURCE_ID,
       layerId: CARTO_LABEL_LAYER_ID,
-      template: tilePath(CARTO_TILE_PATH_TEMPLATE, "labels"),
+      template: tilePath(basemap.tilePathTemplate!, "labels"),
       minZoom: 0,
       maxZoom: basemap.maxZoom,
       attribution: basemap.attribution,

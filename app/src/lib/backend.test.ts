@@ -17,6 +17,7 @@ import {
   clearOnlineBasemap,
   configureOnlineBasemap,
   getOnlineBasemap,
+  getPublicBasemap,
   downloadRegion,
   estimateDownload,
   exportReport,
@@ -122,7 +123,7 @@ describe("backend mode", () => {
     expect(backendCapabilities().canConfigureOnlineBasemap).toBe(true);
   });
 
-  it("merges desktop online metadata and uses dedicated configure and clear commands", async () => {
+  it("merges desktop public and optional Tianditu metadata", async () => {
     const onlineBasemap = {
       configured: true,
       provider: "Tianditu",
@@ -134,6 +135,30 @@ describe("backend mode", () => {
       attribution: "天地图",
       minZoom: 1,
       maxZoom: 18,
+    };
+    const publicBasemap = {
+      enabled: true,
+      providerId: "carto-voyager",
+      displayName: "CARTO Voyager / OpenStreetMap",
+      attribution: "\u00a9 OpenStreetMap contributors \u00a9 CARTO",
+      mode: "desktop-protocol-proxy",
+      maxZoom: 18,
+      layers: [
+        { id: "base", displayName: "Map" },
+        { id: "labels", displayName: "Place labels" },
+      ],
+      tilePathTemplate: "basemap://localhost/carto/{layer}/{z}/{x}/{y}",
+      satellite: {
+        enabled: true,
+        providerId: "eoxcloudless",
+        displayName: "Sentinel-2 Cloudless 2025",
+        attribution:
+          "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)",
+        mode: "desktop-protocol-proxy",
+        maxZoom: 14,
+        tilePathTemplate:
+          "basemap://localhost/eox/satellite/{z}/{x}/{y}",
+      },
     };
     const desktopBootstrap = {
       schemaVersion: 2,
@@ -154,6 +179,7 @@ describe("backend mode", () => {
     };
     const invokeMock = vi.fn((command: string) => {
       if (command === "bootstrap") return Promise.resolve(desktopBootstrap);
+      if (command === "get_public_basemap") return Promise.resolve(publicBasemap);
       if (command === "get_online_basemap") return Promise.resolve(onlineBasemap);
       if (command === "configure_online_basemap") return Promise.resolve(onlineBasemap);
       if (command === "clear_online_basemap") {
@@ -172,11 +198,13 @@ describe("backend mode", () => {
     await expect(bootstrap()).resolves.toEqual({
       ...desktopBootstrap,
       onlineBasemap,
+      basemap: publicBasemap,
     });
     await expect(getOnlineBasemap()).resolves.toEqual(onlineBasemap);
     await expect(configureOnlineBasemap("  secret-token  ")).resolves.toEqual(
       onlineBasemap,
     );
+    await expect(getPublicBasemap()).resolves.toEqual(publicBasemap);
     await expect(clearOnlineBasemap()).resolves.toEqual({
       ...onlineBasemap,
       configured: false,
@@ -193,9 +221,11 @@ describe("backend mode", () => {
     );
     expect(invokeMock.mock.calls.flatMap(([command]) => [command])).toEqual([
       "bootstrap",
+      "get_public_basemap",
       "get_online_basemap",
       "get_online_basemap",
       "configure_online_basemap",
+      "get_public_basemap",
       "clear_online_basemap",
       "probe_online_basemap",
     ]);

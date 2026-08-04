@@ -36,6 +36,7 @@ import i18n, { currentAppLocale, setAppLocale } from "./i18n";
 import { APP_LOCALES, LOCALE_NATIVE_NAMES, type AppLocale } from "./i18n/locale";
 import {
   isTrustedOnlineBasemap,
+  isTrustedCartoBasemap,
   isTrustedTiandituBasemap,
 } from "./lib/basemap";
 import { MAX_VISIBLE_DBM, MIN_VISIBLE_DBM } from "./lib/coverageVisibility";
@@ -1243,7 +1244,7 @@ export function App() {
       const onlineBasemap = await configureOnlineBasemap(mapToken);
       setBootstrapInfo((current) =>
         current
-          ? { ...current, basemap: undefined, onlineBasemap }
+          ? { ...current, onlineBasemap }
           : current,
       );
       setMapToken("");
@@ -1274,7 +1275,7 @@ export function App() {
       const onlineBasemap = await clearOnlineBasemap();
       setBootstrapInfo((current) =>
         current
-          ? { ...current, basemap: undefined, onlineBasemap }
+          ? { ...current, onlineBasemap }
           : current,
       );
       setMapSettingsMessage(t("configurationCleared"));
@@ -1311,9 +1312,12 @@ export function App() {
   const mapProbePresentation = mapProbeResult
     ? describeOnlineBasemapProbe(mapProbeResult.status)
     : null;
-  const basemapStatus = trustedOnlineBasemap || isTrustedTiandituBasemap(bootstrapInfo?.basemap)
-    ? t("basemapConnected")
-    : t("basemapUnconfigured");
+  const basemapStatus =
+    trustedOnlineBasemap || isTrustedTiandituBasemap(bootstrapInfo?.basemap)
+      ? t("basemapConnected")
+      : isTrustedCartoBasemap(bootstrapInfo?.basemap)
+        ? t("basemapPublicConnected")
+        : t("basemapUnconfigured");
   const cachePercent = cacheUsage
     ? Math.min(100, (cacheUsage.totalBytes / cacheUsage.capBytes) * 100)
     : 0;
@@ -1453,7 +1457,7 @@ export function App() {
             heatmapStale={resultStale}
             visibleSignalThresholdDbm={visibleSignalThresholdDbm}
             onPointSelect={handleMapPointSelect}
-            basemap={desktopMode ? null : (bootstrapInfo?.basemap ?? null)}
+            basemap={bootstrapInfo?.basemap ?? null}
             onlineBasemap={desktopMode ? (bootstrapInfo?.onlineBasemap ?? null) : null}
           />
           {analysisMode === "coverage" ? (

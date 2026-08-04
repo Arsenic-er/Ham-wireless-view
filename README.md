@@ -8,21 +8,21 @@
 HamHeatmap is an open-source Windows desktop application for amateur-radio operators in mainland China. Select one transmitter location on the map and the application uses frequency, power, antenna gain, height, polarization, terrain, and land/water parameters to predict received power on a fixed 200 km radius, 1 km grid.
 
 <!-- section:current-status -->
-<!-- synchronized-tests: frontend-files=17 frontend=152 rust=133 ignored=5 -->
+<!-- synchronized-tests: frontend-files=17 frontend=154 rust=133 ignored=5 -->
 ## Current status
 
 ### Online validation build
 
 - The private validation service runs on the server, listens only on `127.0.0.1:1421`, and is accessed through an SSH tunnel.
 - The current source uses the same-origin Tianditu vector map when validation has a valid token and automatically selects CARTO Voyager base + labels when no token exists. Satellite mode uses EOxCloudless with the active online labels, including CARTO labels in no-token mode. Base, label, and satellite failures are isolated so an unaffected layer can remain usable; only loss of both usable visual bases falls back to the WGS84 coordinate grid. The managed loopback service has been rebuilt from clean commit d7bd31a: health schema 1, CARTO base/labels, EOx satellite, old-Tianditu rejection, query rejection, and no-store checks pass; browser visuals remain pending.
-- A global -140..-60 dBm display-threshold slider with 1 dB steps dynamically hides weaker pixels without recalculating propagation or changing statistics and the current export. Current gates pass 17 frontend test files / 152 tests and Rust workspace 133 passed / 5 ignored, plus three real-cache HTTP smoke suites. The 8-layer server CPU microbenchmark has a P95 of 5.982 ms. Managed-browser dragging is still unverified because of a Codex Windows ACL failure, and Windows WebView2 hardware testing is also pending.
-- The former four-province PMTiles path is no longer a product target and remains only as historical engineering evidence. EOxCloudless is an online satellite layer for validation and is not included in the public Windows release assets.
+- A global -140..-60 dBm display-threshold slider with 1 dB steps dynamically hides weaker pixels without recalculating propagation or changing statistics and the current export. Current gates pass 17 frontend test files / 154 tests and Rust workspace 133 passed / 5 ignored, plus three real-cache HTTP smoke suites. The 8-layer server CPU microbenchmark has a P95 of 5.982 ms. Managed-browser dragging is still unverified because of a Codex Windows ACL failure, and Windows WebView2 hardware testing is also pending.
+- The former four-province PMTiles path is no longer a product target and remains only as historical engineering evidence. EOxCloudless is an online satellite layer for validation and the current Windows source; its imagery is not bundled into Windows release assets.
 
 - The current source implements a separate online point-to-point TX/RX link-analysis mode for 1–200 km paths. Completion automatically opens a non-modal floating terrain/Fresnel profile: clicking outside dims it to 42% while the map stays interactive, clicking it restores full opacity, close/Escape dismisses it, and the completed result can reopen it. The managed process now contains this source, but live link-analysis/profile-dialog and browser acceptance remain pending; no public service is deployed. Initial site guidance for coverage TX and link TX/RX is now a compact status strip at the top of the map that does not intercept map clicks.
 
 ### Windows Alpha
 
-- Windows/Tauri supports online Tianditu vector and satellite maps. The user supplies a personal `tk`, which Windows encrypts with current-user DPAPI. Online tiles do not enter the 2.5 GB cache or diagnostic exports. Alpha 2 adds an explicit connection check that distinguishes “configuration saved” from “online map reachable”, and the probe never writes a tile cache.
+- The current Windows/Tauri source defaults to online CARTO Voyager maps with place labels and EOxCloudless Sentinel-2 imagery; no Tianditu `tk` is required. A personal Tianditu `tk` is an optional override and is encrypted with current-user DPAPI when configured. Online tiles do not enter the 2.5 GB cache or diagnostic exports. Alpha 2 introduced the explicit Tianditu connection check; the current public basemap path remains available after that optional configuration is cleared.
 - v0.1.0-alpha.2 was cross-built from commit 9b0fb79 and uploaded to GitHub Releases: the standalone EXE is 16,174,080 bytes and the NSIS installer with the offline WebView2 component is 217,265,419 bytes.
 - The Release also includes `SHA256SUMS.txt`. Both Windows artifacts are unsigned; Windows 10/11 hardware testing, SmartScreen, installation/uninstallation, and real mainland-China network testing remain pending.
 - The Windows product uses online visual basemaps only and does not plan or distribute an offline map package. Online tiles are never persisted. DEM/WBM, partial files, indexes, and calculation caches remain subject to the immutable decimal 2.5 GB cap; cached regions can still be calculated without a network connection and displayed on the WGS84 coordinate grid.
@@ -59,7 +59,7 @@ SHA-256: `HamHeatmap.exe` is a1968a48bca419d58680adca31759284f7971d36c5905034512
 - Fixed 200 km circular radius, 1 km output grid, and fixed dBm color scale.
 - Terrain is used only in hidden calculations and is not rendered on the basemap.
 - Light and dark UI themes.
-- Online Tianditu vector/satellite maps on Windows desktop; a personal `tk` is DPAPI-encrypted, and tiles are neither persisted nor included in exports.
+- Windows desktop defaults to online CARTO Voyager maps/place labels and EOxCloudless satellite imagery without a `tk`; an optional personal Tianditu `tk` is DPAPI-encrypted and overrides the default while valid. Tiles are neither persisted nor included in exports.
 - Regional data caching and offline calculation, with a hard 2.5 GB limit on all persistent data.
 - Internal diagnostic PNG/PDF exports with a mandatory watermark; formally compliant map export still requires basemap authorization and a map review number.
 - Windows 10/11 64-bit.

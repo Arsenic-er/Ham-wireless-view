@@ -16,6 +16,8 @@ import {
   SATELLITE_LAYER_ID,
   SATELLITE_SOURCE_ID,
   SATELLITE_TILE_PATH_TEMPLATE,
+  TAURI_CARTO_TILE_PATH_TEMPLATE,
+  TAURI_SATELLITE_TILE_PATH_TEMPLATE,
   TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE,
   TAURI_TIANDITU_IMAGERY_TEMPLATE,
   TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE,
@@ -77,6 +79,17 @@ const configuredCarto: BasemapInfo = {
   tilePathTemplate: CARTO_TILE_PATH_TEMPLATE,
   satellite: configuredSatellite,
 };
+const configuredDesktopCarto: BasemapInfo = {
+  ...configuredCarto,
+  mode: "desktop-protocol-proxy",
+  tilePathTemplate: TAURI_CARTO_TILE_PATH_TEMPLATE,
+  satellite: {
+    ...configuredSatellite,
+    mode: "desktop-protocol-proxy",
+    tilePathTemplate: TAURI_SATELLITE_TILE_PATH_TEMPLATE,
+  },
+};
+
 
 const configuredOnlineBasemap: OnlineBasemapInfo = {
   configured: true,
@@ -135,8 +148,25 @@ describe("trusted online basemap contracts", () => {
     ).toBe(false);
   });
 
-  it("accepts only the exact same-origin CARTO fallback contract", () => {
+  it("accepts only the exact same-origin or desktop CARTO contracts", () => {
     expect(isTrustedCartoBasemap(configuredCarto)).toBe(true);
+    expect(isTrustedCartoBasemap(configuredDesktopCarto)).toBe(true);
+    expect(isTrustedSatelliteBasemap(configuredDesktopCarto)).toBe(true);
+    expect(
+      isTrustedCartoBasemap({
+        ...configuredDesktopCarto,
+        tilePathTemplate: CARTO_TILE_PATH_TEMPLATE,
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedSatelliteBasemap({
+        ...configuredDesktopCarto,
+        satellite: {
+          ...configuredDesktopCarto.satellite!,
+          tilePathTemplate: SATELLITE_TILE_PATH_TEMPLATE,
+        },
+      }),
+    ).toBe(false);
     for (const untrusted of [
       { ...configuredCarto, enabled: false },
       { ...configuredCarto, providerId: "carto" },
@@ -214,7 +244,38 @@ describe("trusted online basemap contracts", () => {
     expect(map.getSource(SATELLITE_SOURCE_ID)).toBeDefined();
   });
 
+  it("uses the fixed desktop protocol for public map and satellite tiles", () => {
+    const map = mapDouble();
+    synchronizeBasemap(map as never, configuredDesktopCarto, "light", "map");
+
+    expect(map.addSource).toHaveBeenCalledWith(
+      CARTO_BASE_SOURCE_ID,
+      expect.objectContaining({
+        tiles: ["basemap://localhost/carto/base/{z}/{x}/{y}"],
+      }),
+    );
+    expect(map.addSource).toHaveBeenCalledWith(
+      CARTO_LABEL_SOURCE_ID,
+      expect.objectContaining({
+        tiles: ["basemap://localhost/carto/labels/{z}/{x}/{y}"],
+      }),
+    );
+
+    synchronizeBasemap(
+      map as never,
+      configuredDesktopCarto,
+      "dark",
+      "satellite",
+    );
+    expect(map.addSource).toHaveBeenCalledWith(
+      SATELLITE_SOURCE_ID,
+      expect.objectContaining({
+        tiles: ["basemap://localhost/eox/satellite/{z}/{x}/{y}"],
+      }),
+    );
+  });
   it("switches same-origin vec/cva and EOX satellite while retaining labels", () => {
+
     const map = mapDouble();
     synchronizeBasemap(map as never, configuredTianditu, "light", "map");
 

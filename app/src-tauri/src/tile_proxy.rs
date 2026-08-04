@@ -9,16 +9,35 @@ use tauri::http::{Method, Request, Response, StatusCode, header};
 use zeroize::Zeroizing;
 
 pub(crate) const TILE_PROTOCOL_SCHEME: &str = "tianditu";
+pub(crate) const PUBLIC_TILE_PROTOCOL_SCHEME: &str = "basemap";
 const TILE_HOST: &str = "t0.tianditu.gov.cn";
+const CARTO_ORIGIN: &str = "https://a.basemaps.cartocdn.com";
+const EOX_ORIGIN: &str = "https://tiles.maps.eox.at";
+const EOX_TILE_PREFIX: &str = "/wmts/1.0.0/s2cloudless-2025_3857/default/g";
 const TOKEN_FILE_NAME: &str = "tianditu-token.dpapi";
 const MIN_ZOOM: u8 = 1;
 const MAX_ZOOM: u8 = 18;
+const PUBLIC_MIN_ZOOM: u8 = 0;
+const SATELLITE_MAX_ZOOM: u8 = 14;
 const MAX_TILE_BYTES: usize = 2 * 1024 * 1024;
 const BASEMAP_PROBE_SCHEMA_VERSION: u8 = 1;
 const PROBE_LAYER: &str = "vec";
 const PROBE_ZOOM: u8 = 8;
 const PROBE_COLUMN: u32 = 215;
 const PROBE_ROW: u32 = 106;
+const CARTO_ATTRIBUTION: &str = "© OpenStreetMap contributors © CARTO";
+const SATELLITE_ATTRIBUTION: &str = "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)";
+
+const PUBLIC_BASEMAP_LAYERS: [PublicBasemapLayer; 2] = [
+    PublicBasemapLayer {
+        id: "base",
+        display_name: "Base map",
+    },
+    PublicBasemapLayer {
+        id: "labels",
+        display_name: "Place labels",
+    },
+];
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +70,62 @@ impl BasemapInfo {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PublicBasemapInfo {
+    enabled: bool,
+    provider_id: &'static str,
+    display_name: &'static str,
+    attribution: &'static str,
+    mode: &'static str,
+    max_zoom: u8,
+    layers: &'static [PublicBasemapLayer],
+    tile_path_template: &'static str,
+    satellite: PublicSatelliteInfo,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicBasemapLayer {
+    id: &'static str,
+    display_name: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicSatelliteInfo {
+    enabled: bool,
+    provider_id: &'static str,
+    display_name: &'static str,
+    attribution: &'static str,
+    mode: &'static str,
+    max_zoom: u8,
+    tile_path_template: &'static str,
+}
+
+impl PublicBasemapInfo {
+    pub(crate) const fn new() -> Self {
+        Self {
+            enabled: true,
+            provider_id: "carto-voyager",
+            display_name: "CARTO Voyager / OpenStreetMap",
+            attribution: CARTO_ATTRIBUTION,
+            mode: "desktop-protocol-proxy",
+            max_zoom: MAX_ZOOM,
+            layers: &PUBLIC_BASEMAP_LAYERS,
+            tile_path_template: "basemap://localhost/carto/{layer}/{z}/{x}/{y}",
+            satellite: PublicSatelliteInfo {
+                enabled: true,
+                provider_id: "eoxcloudless",
+                display_name: "Sentinel-2 Cloudless 2025",
+                attribution: SATELLITE_ATTRIBUTION,
+                mode: "desktop-protocol-proxy",
+                max_zoom: SATELLITE_MAX_ZOOM,
+                tile_path_template: "basemap://localhost/eox/satellite/{z}/{x}/{y}",
+            },
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum BasemapProbeStatus {
@@ -87,6 +162,53 @@ struct TileRequest<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicTileLayer {
+    CartoBase,
+    CartoLabels,
+    EoxSatellite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PublicTileRequest {
+    layer: PublicTileLayer,
+    z: u8,
+    x: u32,
+    y: u32,
+}
+
+impl PublicTileRequest {
+    fn upstream_url(self) -> String {
+        match self.layer {
+            PublicTileLayer::CartoBase | PublicTileLayer::CartoLabels => {
+                let path = match self.layer {
+                    PublicTileLayer::CartoBase => "rastertiles/voyager_nolabels",
+                    PublicTileLayer::CartoLabels => "rastertiles/voyager_only_labels",
+                    PublicTileLayer::EoxSatellite => unreachable!(),
+                };
+                format!("{CARTO_ORIGIN}/{path}/{}/{}/{}.png", self.z, self.x, self.y)
+            }
+            PublicTileLayer::EoxSatellite => format!(
+                "{EOX_ORIGIN}{EOX_TILE_PREFIX}/{}/{}/{}.jpg",
+                self.z, self.y, self.x
+            ),
+        }
+    }
+
+    fn accept_header(self) -> &'static str {
+        match self.layer {
+            PublicTileLayer::CartoBase | PublicTileLayer::CartoLabels => "image/png",
+            PublicTileLayer::EoxSatellite => "image/jpeg",
+        }
+    }
+
+    fn expected_mime(self) -> &'static str {
+        match self.layer {
+            PublicTileLayer::CartoBase | PublicTileLayer::CartoLabels => "image/png",
+            PublicTileLayer::EoxSatellite => "image/jpeg",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TileFetchFailure {
     Network,
     Timeout,
@@ -110,7 +232,7 @@ impl TileProxy {
             .max_redirects(0)
             .timeout_global(Some(Duration::from_secs(12)))
             .timeout_connect(Some(Duration::from_secs(4)))
-            .user_agent("HamHeatmap/0.1 TiandituTileProxy")
+            .user_agent("HamHeatmap/0.1 DesktopTileProxy")
             .build();
         Self {
             token: RwLock::new(token),
@@ -153,9 +275,7 @@ impl TileProxy {
             .as_ref()
             .cloned();
         let Some(token) = token else {
-            return Ok(BasemapProbeResult::new(
-                BasemapProbeStatus::NotConfigured,
-            ));
+            return Ok(BasemapProbeResult::new(BasemapProbeStatus::NotConfigured));
         };
         let tile = TileRequest {
             layer: PROBE_LAYER,
@@ -205,6 +325,33 @@ impl TileProxy {
             ),
         }
     }
+    pub(crate) fn handle_public(&self, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+        if request.method() != Method::GET || !request.body().is_empty() {
+            return reply(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "text/plain; charset=utf-8",
+                b"only GET is allowed".to_vec(),
+            );
+        }
+        let tile = match parse_public_tile_request(request.uri()) {
+            Ok(tile) => tile,
+            Err(message) => {
+                return reply(
+                    StatusCode::BAD_REQUEST,
+                    "text/plain; charset=utf-8",
+                    message.as_bytes().to_vec(),
+                );
+            }
+        };
+        match self.fetch_public_tile(tile) {
+            Ok((mime, body)) => reply(StatusCode::OK, mime, body),
+            Err(status) => reply(
+                status,
+                "text/plain; charset=utf-8",
+                b"public map tile request failed".to_vec(),
+            ),
+        }
+    }
     fn fetch_tile(
         &self,
         tile: TileRequest<'_>,
@@ -214,6 +361,60 @@ impl TileProxy {
             .map_err(TileFetchFailure::protocol_status)
     }
 
+    fn fetch_public_tile(
+        &self,
+        tile: PublicTileRequest,
+    ) -> Result<(&'static str, Vec<u8>), StatusCode> {
+        self.fetch_public_tile_checked(tile)
+            .map_err(TileFetchFailure::protocol_status)
+    }
+
+    fn fetch_public_tile_checked(
+        &self,
+        tile: PublicTileRequest,
+    ) -> Result<(&'static str, Vec<u8>), TileFetchFailure> {
+        let url = tile.upstream_url();
+        let mut response = self
+            .http
+            .get(url.as_str())
+            .header("Accept", tile.accept_header())
+            .header("Accept-Encoding", "identity")
+            .call()
+            .map_err(|error| classify_request_error(&error))?;
+        if response.status() != StatusCode::OK {
+            return Err(TileFetchFailure::UpstreamOrCredential);
+        }
+        if let Some(value) = response.headers().get(header::CONTENT_LENGTH) {
+            let size = value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .ok_or(TileFetchFailure::InvalidContent)?;
+            if size > MAX_TILE_BYTES {
+                return Err(TileFetchFailure::PayloadTooLarge);
+            }
+        }
+        let mime = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(normalize_mime)
+            .filter(|mime| *mime == tile.expected_mime())
+            .ok_or(TileFetchFailure::InvalidContent)?;
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit((MAX_TILE_BYTES + 1) as u64)
+            .read_to_vec()
+            .map_err(|error| classify_request_error(&error))?;
+        if body.len() > MAX_TILE_BYTES {
+            return Err(TileFetchFailure::PayloadTooLarge);
+        }
+        if !valid_signature(mime, &body) {
+            return Err(TileFetchFailure::InvalidContent);
+        }
+        Ok((mime, body))
+    }
     fn fetch_tile_checked(
         &self,
         tile: TileRequest<'_>,
@@ -275,10 +476,9 @@ impl TileFetchFailure {
     fn protocol_status(self) -> StatusCode {
         match self {
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::Network
-            | Self::Timeout
-            | Self::UpstreamOrCredential
-            | Self::InvalidContent => StatusCode::BAD_GATEWAY,
+            Self::Network | Self::Timeout | Self::UpstreamOrCredential | Self::InvalidContent => {
+                StatusCode::BAD_GATEWAY
+            }
         }
     }
 }
@@ -322,6 +522,56 @@ fn tile_url(tile: TileRequest<'_>, token: &str) -> Zeroizing<String> {
     ))
 }
 
+fn parse_public_tile_request(uri: &tauri::http::Uri) -> Result<PublicTileRequest, &'static str> {
+    if uri.query().is_some() {
+        return Err("query parameters are not allowed");
+    }
+    let scheme = uri.scheme_str().unwrap_or_default();
+    let host = uri.host().unwrap_or_default();
+    if !((scheme == PUBLIC_TILE_PROTOCOL_SCHEME && host == "localhost")
+        || ((scheme == "http" || scheme == "https") && host == "basemap.localhost"))
+    {
+        return Err("invalid public tile origin");
+    }
+    let segments: Vec<_> = uri
+        .path()
+        .strip_prefix('/')
+        .unwrap_or_default()
+        .split('/')
+        .collect();
+    let (layer, z, x, y) = match segments.as_slice() {
+        ["carto", layer, z, x, y] => {
+            let layer = match *layer {
+                "base" => PublicTileLayer::CartoBase,
+                "labels" => PublicTileLayer::CartoLabels,
+                _ => return Err("unsupported public tile layer"),
+            };
+            (layer, *z, *x, *y)
+        }
+        ["eox", "satellite", z, x, y] => (PublicTileLayer::EoxSatellite, *z, *x, *y),
+        _ => return Err("invalid public tile path"),
+    };
+    let z = canonical_u32(z).ok_or("invalid public tile zoom")?;
+    let x = canonical_u32(x).ok_or("invalid public tile column")?;
+    let y = canonical_u32(y).ok_or("invalid public tile row")?;
+    let max_zoom = match layer {
+        PublicTileLayer::CartoBase | PublicTileLayer::CartoLabels => MAX_ZOOM,
+        PublicTileLayer::EoxSatellite => SATELLITE_MAX_ZOOM,
+    };
+    if !(u32::from(PUBLIC_MIN_ZOOM)..=u32::from(max_zoom)).contains(&z) {
+        return Err("public tile zoom is out of range");
+    }
+    let dimension = 1_u32 << z;
+    if x >= dimension || y >= dimension {
+        return Err("public tile coordinate is out of range");
+    }
+    Ok(PublicTileRequest {
+        layer,
+        z: z as u8,
+        x,
+        y,
+    })
+}
 fn parse_tile_request(uri: &tauri::http::Uri) -> Result<TileRequest<'_>, &'static str> {
     if uri.query().is_some() {
         return Err("query parameters are not allowed");
@@ -723,6 +973,147 @@ mod tests {
         ] {
             assert!(parse_tile_request(&bad.parse().unwrap()).is_err(), "{bad}");
         }
+    }
+    #[test]
+    fn public_metadata_is_fixed_and_contains_no_upstream_origins() {
+        let value = serde_json::to_value(PublicBasemapInfo::new()).unwrap();
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["providerId"], "carto-voyager");
+        assert_eq!(value["mode"], "desktop-protocol-proxy");
+        assert_eq!(value["maxZoom"], 18);
+        assert_eq!(value["layers"][0]["id"], "base");
+        assert_eq!(value["layers"][1]["id"], "labels");
+        assert_eq!(
+            value["tilePathTemplate"],
+            "basemap://localhost/carto/{layer}/{z}/{x}/{y}"
+        );
+        assert_eq!(value["satellite"]["providerId"], "eoxcloudless");
+        assert_eq!(value["satellite"]["maxZoom"], 14);
+        assert_eq!(
+            value["satellite"]["tilePathTemplate"],
+            "basemap://localhost/eox/satellite/{z}/{x}/{y}"
+        );
+        let encoded = value.to_string();
+        assert!(!encoded.contains(CARTO_ORIGIN));
+        assert!(!encoded.contains(EOX_ORIGIN));
+        assert!(!encoded.contains("tianditu"));
+    }
+
+    #[test]
+    fn public_paths_are_fixed_canonical_and_provider_scoped() {
+        for mapped in [
+            "basemap://localhost/carto/base/18/262143/262143",
+            "http://basemap.localhost/carto/labels/0/0/0",
+            "https://basemap.localhost/eox/satellite/14/16383/0",
+        ] {
+            assert!(
+                parse_public_tile_request(&mapped.parse().unwrap()).is_ok(),
+                "{mapped}"
+            );
+        }
+        assert_eq!(
+            parse_public_tile_request(&"basemap://localhost/carto/base/8/201/99".parse().unwrap())
+                .unwrap(),
+            PublicTileRequest {
+                layer: PublicTileLayer::CartoBase,
+                z: 8,
+                x: 201,
+                y: 99,
+            }
+        );
+        for bad in [
+            "basemap://evil.invalid/carto/base/1/0/0",
+            "basemap://localhost/tianditu/vec/1/0/0",
+            "basemap://localhost/carto/vec/1/0/0",
+            "basemap://localhost/carto/base/19/0/0",
+            "basemap://localhost/eox/satellite/15/0/0",
+            "basemap://localhost/eox/other/1/0/0",
+            "basemap://localhost/carto/base/2/4/0",
+            "basemap://localhost/carto/base/2/0/4",
+            "basemap://localhost/carto/base/02/0/0",
+            "basemap://localhost/carto/base/2/-1/0",
+            "basemap://localhost/carto/base/2/0/0/extra",
+            "basemap://localhost/carto/base/2/0/0?source=evil",
+            "http://tianditu.localhost/carto/base/1/0/0",
+        ] {
+            assert!(
+                parse_public_tile_request(&bad.parse().unwrap()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_upstream_urls_and_content_contracts_are_fixed() {
+        let base = PublicTileRequest {
+            layer: PublicTileLayer::CartoBase,
+            z: 8,
+            x: 201,
+            y: 99,
+        };
+        assert_eq!(
+            base.upstream_url(),
+            "https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/8/201/99.png"
+        );
+        assert_eq!(base.accept_header(), "image/png");
+        assert_eq!(base.expected_mime(), "image/png");
+
+        let labels = PublicTileRequest {
+            layer: PublicTileLayer::CartoLabels,
+            ..base
+        };
+        assert_eq!(
+            labels.upstream_url(),
+            "https://a.basemaps.cartocdn.com/rastertiles/voyager_only_labels/8/201/99.png"
+        );
+
+        let satellite = PublicTileRequest {
+            layer: PublicTileLayer::EoxSatellite,
+            z: 14,
+            x: 16_383,
+            y: 0,
+        };
+        assert_eq!(
+            satellite.upstream_url(),
+            "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/14/0/16383.jpg"
+        );
+        assert_eq!(satellite.accept_header(), "image/jpeg");
+        assert_eq!(satellite.expected_mime(), "image/jpeg");
+    }
+
+    #[test]
+    fn public_handler_rejects_mutation_and_invalid_paths_without_network() {
+        let root =
+            std::env::temp_dir().join(format!("hamheatmap-public-handler-{}", std::process::id()));
+        let proxy = TileProxy::new(&root);
+        let post = Request::builder()
+            .method(Method::POST)
+            .uri("basemap://localhost/carto/base/8/145/93")
+            .body(Vec::new())
+            .unwrap();
+        assert_eq!(
+            proxy.handle_public(post).status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+
+        let body = Request::builder()
+            .method(Method::GET)
+            .uri("basemap://localhost/carto/base/8/145/93")
+            .body(vec![1])
+            .unwrap();
+        assert_eq!(
+            proxy.handle_public(body).status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+
+        let invalid = Request::builder()
+            .uri("basemap://localhost/carto/evil/8/145/93")
+            .body(Vec::new())
+            .unwrap();
+        assert_eq!(
+            proxy.handle_public(invalid).status(),
+            StatusCode::BAD_REQUEST
+        );
     }
     #[test]
     fn mime_magic_and_headers_are_strict() {

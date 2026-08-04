@@ -24,7 +24,8 @@ use operation_state::{CancellationTarget, DesktopOperation, DesktopOperationCont
 #[cfg(windows)]
 use tauri_plugin_dialog::DialogExt;
 use tile_proxy::{
-    BasemapInfo, BasemapProbeResult, TILE_PROTOCOL_SCHEME, TileProxy,
+    BasemapInfo, BasemapProbeResult, PUBLIC_TILE_PROTOCOL_SCHEME, PublicBasemapInfo,
+    TILE_PROTOCOL_SCHEME, TileProxy,
 };
 
 struct DesktopState {
@@ -286,6 +287,10 @@ fn export_result_blocking(
 }
 
 #[tauri::command]
+fn get_public_basemap() -> PublicBasemapInfo {
+    PublicBasemapInfo::new()
+}
+#[tauri::command]
 fn get_online_basemap(state: State<'_, DesktopState>) -> Result<BasemapInfo, String> {
     state.tile_proxy.info()
 }
@@ -317,8 +322,7 @@ async fn probe_online_basemap(
         .operations
         .begin(DesktopOperation::ConfiguringBasemap)?;
     let tile_proxy = Arc::clone(&state.tile_proxy);
-    let join_result =
-        tauri::async_runtime::spawn_blocking(move || tile_proxy.probe()).await;
+    let join_result = tauri::async_runtime::spawn_blocking(move || tile_proxy.probe()).await;
     let outcome = match join_result {
         Ok(outcome) => outcome,
         Err(error) => Err(format!("online basemap probe worker failed: {error}")),
@@ -338,15 +342,25 @@ fn cancel_download(state: State<'_, DesktopState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().register_asynchronous_uri_scheme_protocol(
-        TILE_PROTOCOL_SCHEME,
-        |context, request, responder| {
-            let proxy = Arc::clone(&context.app_handle().state::<DesktopState>().tile_proxy);
-            tauri::async_runtime::spawn_blocking(move || {
-                responder.respond(proxy.handle(request));
-            });
-        },
-    );
+    let builder = tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol(
+            TILE_PROTOCOL_SCHEME,
+            |context, request, responder| {
+                let proxy = Arc::clone(&context.app_handle().state::<DesktopState>().tile_proxy);
+                tauri::async_runtime::spawn_blocking(move || {
+                    responder.respond(proxy.handle(request));
+                });
+            },
+        )
+        .register_asynchronous_uri_scheme_protocol(
+            PUBLIC_TILE_PROTOCOL_SCHEME,
+            |context, request, responder| {
+                let proxy = Arc::clone(&context.app_handle().state::<DesktopState>().tile_proxy);
+                tauri::async_runtime::spawn_blocking(move || {
+                    responder.respond(proxy.handle_public(request));
+                });
+            },
+        );
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         if let Some(window) = app.get_webview_window("main") {
@@ -382,6 +396,7 @@ pub fn run() {
             export_result,
             cancel_calculation,
             cancel_download,
+            get_public_basemap,
             get_online_basemap,
             configure_online_basemap,
             clear_online_basemap,

@@ -10,21 +10,21 @@ HamHeatmap（業餘無線電傳播熱力圖）是一套面向中國大陸業餘�
 英文 [`README.md`](README.md) 是規範介紹頁；本頁提供完整的繁體中文介紹。
 
 <!-- section:current-status -->
-<!-- synchronized-tests: frontend-files=17 frontend=152 rust=133 ignored=5 -->
+<!-- synchronized-tests: frontend-files=17 frontend=154 rust=133 ignored=5 -->
 ## 目前狀態
 
 ### 線上驗證版
 
 - 私有 validation 服務在伺服器上執行，僅監聽 `127.0.0.1:1421`，必須透過 SSH 通道存取。
 - 目前原始碼在 validation 存在合法 token 時使用同源天地圖普通地圖；沒有 token 時自動使用 CARTO Voyager base + labels。衛星模式使用 EOxCloudless，並保留目前的線上地名圖層（無 token 時為 CARTO labels）。普通底圖、地名及衛星圖的失敗彼此隔離，未受影響的圖層可繼續使用；只有兩個可用視覺底圖都失效時才退回 WGS84 座標網格。受管回環服務已從乾淨提交 d7bd31a 重建：health schema 1、CARTO base/labels、EOx 衛星、舊天地圖拒絕、查詢注入拒絕與 no-store 檢查均通過；瀏覽器視覺仍待驗。
-- 已實作 -140..-60 dBm、步進 1 dB 的全域顯示門檻滑桿；它會動態隱藏較弱像素，不會重新計算傳播結果，也不改變統計或本次匯出內容。目前閘門通過前端 17 files / 152 tests、Rust workspace 133 passed / 5 ignored，以及三組真實快取 HTTP 煙霧測試。8 圖層伺服器 CPU 微基準的 P95 為 5.982 ms。由於 Codex Windows ACL 故障，受管瀏覽器拖曳仍未驗證，Windows WebView2 實機測試也尚待完成。
-- 過去的四省 PMTiles 路線已不再是產品目標，只保留為歷史工程證據。EOxCloudless 仍是 validation 使用的線上衛星圖層，不會納入公開 Windows 發行資產。
+- 已實作 -140..-60 dBm、步進 1 dB 的全域顯示門檻滑桿；它會動態隱藏較弱像素，不會重新計算傳播結果，也不改變統計或本次匯出內容。目前閘門通過前端 17 files / 154 tests、Rust workspace 133 passed / 5 ignored，以及三組真實快取 HTTP 煙霧測試。8 圖層伺服器 CPU 微基準的 P95 為 5.982 ms。由於 Codex Windows ACL 故障，受管瀏覽器拖曳仍未驗證，Windows WebView2 實機測試也尚待完成。
+- 過去的四省 PMTiles 路線已不再是產品目標，只保留為歷史工程證據。EOxCloudless 是 validation 與目前 Windows 原始碼使用的線上衛星圖層，其影像不會打包進 Windows 發行資產。
 
 - 目前原始碼已實作獨立的線上雙點 TX/RX 鏈路分析模式，適用於 1–200 km 路徑。計算完成後會自動開啟非模態浮動地形／菲涅爾剖面視窗；點擊窗外會降至 42% 透明度且地圖仍可互動，點回視窗即可恢復，關閉按鈕或 Escape 可收起，並可由已完成結果重新開啟。受管程序現已包含此原始碼，但真實鏈路分析、剖面視窗和瀏覽器互動仍待驗；沒有部署公開服務。 覆蓋模式 TX 與鏈路模式 TX/RX 的初始選點提示現已縮為地圖頂部緊湊狀態列，且不會攔截地圖點擊。
 
 ### Windows Alpha
 
-- Windows/Tauri 已支援線上天地圖向量圖和衛星圖。使用者自行提供個人 `tk`，Windows 以目前使用者 DPAPI 加密保存。線上圖磚不會進入 2.5 GB 快取或診斷匯出。Alpha 2 新增明確的連線檢查，能區分「設定已保存」與「線上地圖可連線」，而且探測不會寫入圖磚快取。
+- 目前 Windows/Tauri 原始碼預設使用不需天地圖 `tk` 的 CARTO Voyager 線上地圖、地名與 EOxCloudless Sentinel-2 衛星影像。個人天地圖 `tk` 是可選覆寫，設定後由目前使用者 DPAPI 加密保存；清除後會繼續使用公共底圖。線上圖磚不會進入 2.5 GB 快取或診斷匯出。Alpha 2 引入的天地圖明確連線檢查仍保留。
 - v0.1.0-alpha.2 已從提交 9b0fb79 交叉建置並上傳至 GitHub Releases：獨立 EXE 為 16,174,080 bytes，內含離線 WebView2 元件的 NSIS 安裝程式為 217,265,419 bytes。
 - Release 同時提供 `SHA256SUMS.txt`。兩個 Windows 產物都未簽章；Windows 10/11 實機、SmartScreen、安裝／解除安裝，以及中國大陸真實網路仍待驗證。
 - Windows 產品只使用線上視覺底圖，不規劃或發行離線地圖套件；任何線上圖磚都不會持久保存。DEM/WBM、partial 檔案、索引和計算快取仍受不可變更的十進位 2.5 GB 上限約束；已快取區域可在無網路時繼續計算，並在 WGS84 座標網格上顯示結果。
@@ -61,7 +61,7 @@ SHA-256：`HamHeatmap.exe` 為 a1968a48bca419d58680adca31759284f7971d36c59050345
 - 固定 200 km 圓形半徑、1 km 輸出網格及固定 dBm 色階。
 - 地形只用於隱藏計算，不會顯示在底圖上。
 - 淺色／深色 UI。
-- Windows 桌面使用線上天地圖向量／衛星底圖；個人 `tk` 由 DPAPI 加密，圖磚不會持久保存，也不會納入匯出。
+- Windows 桌面預設使用不需 `tk` 的 CARTO Voyager 地圖／地名與 EOxCloudless 衛星影像；有效的個人天地圖 `tk` 可選覆寫預設底圖並由 DPAPI 加密。圖磚不會持久保存，也不會納入匯出。
 - 區域資料快取與離線計算；所有持久資料的硬性上限為 2.5 GB。
 - 具有強制浮水印的內部診斷 PNG/PDF；正式合規地圖匯出仍需取得底圖授權與審圖號。
 - Windows 10/11 64-bit。

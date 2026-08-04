@@ -232,6 +232,18 @@ const configuredCarto: BasemapInfo = {
   tilePathTemplate: "/api/basemap/carto/{layer}/{z}/{x}/{y}",
   satellite: configuredTianditu.satellite,
 };
+const configuredDesktopCarto: BasemapInfo = {
+  ...configuredCarto,
+  mode: "desktop-protocol-proxy",
+  tilePathTemplate: "basemap://localhost/carto/{layer}/{z}/{x}/{y}",
+  satellite: {
+    ...configuredCarto.satellite!,
+    mode: "desktop-protocol-proxy",
+    tilePathTemplate:
+      "basemap://localhost/eox/satellite/{z}/{x}/{y}",
+  },
+};
+
 
 const configuredOnlineBasemap: OnlineBasemapInfo = {
   configured: true,
@@ -551,7 +563,50 @@ describe("MapView controls and desired-state replay", () => {
     unmount();
   });
 
+  it("loads public map and satellite sources through the desktop protocol", () => {
+    const { getByRole, getByText, unmount } = render(
+      <MapView
+        theme="dark"
+        point={null}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+        preview={null}
+        heatmapStale={false}
+        onPointSelect={vi.fn()}
+        basemap={configuredDesktopCarto}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    expect(getByText(i18n.t("mapCartoVector"))).toBeDefined();
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-carto-base",
+      expect.objectContaining({
+        tiles: ["basemap://localhost/carto/base/{z}/{x}/{y}"],
+      }),
+    );
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-carto-labels",
+      expect.objectContaining({
+        tiles: ["basemap://localhost/carto/labels/{z}/{x}/{y}"],
+      }),
+    );
+
+    fireEvent.click(getByRole("button", { name: /satellite|\u536b\u661f/i }));
+    expect(getByText(i18n.t("mapCartoSatellite"))).toBeDefined();
+    expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
+      "basemap-satellite",
+      expect.objectContaining({
+        tiles: ["basemap://localhost/eox/satellite/{z}/{x}/{y}"],
+      }),
+    );
+    expect(maplibreMocks.map.getSource("basemap-carto-labels")).toBeDefined();
+
+    unmount();
+  });
   it("falls back from CARTO satellite to map once, then uses WGS84 if map also fails", () => {
+
     const { getByRole, getByText, unmount } = render(
       <MapView
         theme="dark"

@@ -4,7 +4,6 @@
 // SPDX-FileCopyrightText: 2026 Arsenic-er
 // SPDX-License-Identifier: Apache-2.0
 
-
 fn main() {
     hamheatmap_desktop_lib::run();
 }
