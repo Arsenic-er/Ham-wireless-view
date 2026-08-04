@@ -908,14 +908,14 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 受管服务已停止旧 PID 3040955，并从干净提交 d7bd31a 重建；health schema 1，bootstrap 为 enabled carto-voyager base/labels maxZoom=18。live base 为 HTTP 200 image/png 24,798 bytes，labels 为 HTTP 200 image/png 8,087 bytes，satellite 为 HTTP 200 image/jpeg 17,586 bytes；旧天地图路径 404、query 注入 400、labels Cache-Control: no-store。
 - [ ] 通过 SSH 隧道人工确认道路、详细地名、热力图层级、卫星切换、WGS84 故障回退和署名可读性。
 
-## 39. Windows 默认公共在线底图（2026-08-04，源码与自动化通过；新产物实机待验）
+## 39. Windows 默认公共在线底图（2026-08-05，源码与自动化通过；新产物实机待验）
 
 - [x] Windows/Tauri 在没有天地图 `tk` 时从 `get_public_basemap` 获得固定 CARTO Voyager base/labels 与 EOxCloudless Sentinel-2 元数据。
 - [x] WebView 只信任固定 `desktop-protocol-proxy`、`http://basemap.localhost/carto/{layer}/{z}/{x}/{y}` 与 `http://basemap.localhost/eox/satellite/{z}/{x}/{y}` 契约。
 - [x] 有效个人天地图 `tk` 是可选覆盖并保持优先；清除配置后继续使用 CARTO/EOX，不回退为空白坐标网格。
 - [x] 两类在线瓦片均保持固定 HTTPS 上游、严格路径/MIME/签名检查和 `no-store`，不进入 2.5 GB DEM/WBM 缓存或诊断导出。
 - [x] TypeScript check、production build 与前端全量 `17 files / 155 tests` 通过。
-- [x] 基于提交 `ccf3155d5b55ce755e76db4a6ca23c241223f6e8` 重新构建 Windows EXE/NSIS；产物审计通过，安装包 SHA-256 为 `c2567a95a945e260425646ad88dfa5e4ae44fca90e86eca418121a2dd4b54d93`。
+- [x] 基于提交 `5482f05958b870dc5c29bc257722bb43cca7cd99` 重新构建 Windows EXE/NSIS；产物审计通过，安装包 SHA-256 为 `9b2dea3938bf1330fa3822fad4fbedf22e61ae11056d35480634f9e2b1261107`。
 - [ ] 在 Windows 10/11 和中国大陆真实网络分别验证默认公共底图、卫星切换、可选天地图覆盖与清除回退。
 
 ## 40. Windows WebView2 在线地图协议与持久错误诊断（2026-08-05）
@@ -925,4 +925,5 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 地图错误详情在关闭面板后仍保留；重试期间显示次数，且只有相同失败 source 的 `sourcedata` 事件同时满足 `tile.state=loaded` 才清除。
 - [x] 安全诊断只包含本地固定图源名、固定错误分类、可选整数 HTTP 状态、时间和重试次数；测试确认原始 message、URL、body 与 `tk` 不显示也不复制。
 - [x] 前端 `17 files / 155 tests`、TypeScript、production build、Rust `133 passed / 5 ignored`、rustfmt、严格 Clippy 和 Windows xwin check/Clippy/test `--no-run` 通过。
-- [ ] 新安装包仍需 Windows 10/11 WebView2 实机验证 CARTO 地图、地名、卫星切换、重试成功清除及断网时持久详情。
+- [x] 新安装包已通过 PE 架构、静态运行库、NSIS 内容、内嵌 WebView2 一致性和无签名状态审计，SHA-256 为 `9b2dea3938bf1330fa3822fad4fbedf22e61ae11056d35480634f9e2b1261107`。
+- [ ] 仍需 Windows 10/11 WebView2 实机验证 CARTO 地图、地名、卫星切换、重试成功清除及断网时持久详情。

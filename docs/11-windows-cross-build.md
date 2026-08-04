@@ -53,12 +53,12 @@ app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/HamHeatmap_0.1.0
 
 Windows WebView2 不会可靠拦截 MapLibre 子资源中的 `scheme://localhost/...` 地址，因此发行元数据必须使用 Tauri 的 `http://<scheme>.localhost/...` 映射形式。在线地图错误会保留安全诊断（固定图源名、错误分类、可选状态码、时间和重试次数）；点击重试不会立即清除，只有相同失败图源报告真实 `tile.state=loaded` 后才关闭。原始错误正文、请求 URL 和令牌从不进入界面或复制文本。
 
-本节上方与 Alpha 2 小节记录的 2026-08-01 哈希是历史产物。2026-08-04 已基于提交 `ccf3155d5b55ce755e76db4a6ca23c241223f6e8` 重新执行完整交叉构建，将默认公共底图行为纳入新的 EXE/NSIS。
+本节上方与 Alpha 2 小节记录的旧哈希是历史产物。2026-08-05 已基于提交 `5482f05958b870dc5c29bc257722bb43cca7cd99` 重新执行完整交叉构建，将 WebView2 协议映射和持久错误诊断纳入新的 EXE/NSIS。
 
-| 2026-08-04 公开底图产物 | 大小 | SHA-256 |
+| 2026-08-05 协议修复产物 | 大小 | SHA-256 |
 |---|---:|---|
-| `HamHeatmap.exe` | 16,296,960 bytes | `7535b5cf45501105f3d441e3a8a4bddaf6350bfd78ee7be1e56f4ae66b2e0dd7` |
-| `HamHeatmap_0.1.0_x64-setup.exe` | 217,335,060 bytes | `c2567a95a945e260425646ad88dfa5e4ae44fca90e86eca418121a2dd4b54d93` |
+| `HamHeatmap.exe` | 16,296,960 bytes | `0cc828063378caa5ce2a588377b506abfca3f3c741fccd33cec997e61c3af685` |
+| `HamHeatmap_0.1.0_x64-setup.exe` | 217,333,194 bytes | `9b2dea3938bf1330fa3822fad4fbedf22e61ae11056d35480634f9e2b1261107` |
 
 验证结果：前端 `17 files / 155 tests`、Rust workspace `133 passed / 5 ignored`、TypeScript、production build、rustfmt、严格 Clippy、Windows xwin check/Clippy/test `--no-run` 与 `verify-windows-artifacts.sh` 全部通过；CARTO base/labels 与 EOX 卫星三个固定上游样本均返回匹配 MIME 和图片签名。Windows 实机和中国大陆真实 ISP 仍待验收。
 
