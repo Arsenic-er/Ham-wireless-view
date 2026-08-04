@@ -51,7 +51,14 @@ app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/HamHeatmap_0.1.0
 
 个人天地图 `tk` 是可选覆盖：设置后由当前用户 DPAPI 加密保存，固定 `tianditu:` 普通/卫星模板优先；清除后继续使用 CARTO/EOX。所有在线瓦片响应均为 `no-store`，不会持久缓存、不计入 2.5 GB DEM/WBM 配额，也不进入诊断 PNG/PDF。
 
-本节上方与 Alpha 2 小节记录的 2026-08-01 哈希是历史产物；必须重新执行交叉构建，才会把当前默认公共底图行为纳入新的 EXE/NSIS。当前前端自动化为 `17 files / 154 tests`，但 Windows 实机和中国大陆真实 ISP 仍待验收。
+本节上方与 Alpha 2 小节记录的 2026-08-01 哈希是历史产物。2026-08-04 已基于提交 `ccf3155d5b55ce755e76db4a6ca23c241223f6e8` 重新执行完整交叉构建，将默认公共底图行为纳入新的 EXE/NSIS。
+
+| 2026-08-04 公开底图产物 | 大小 | SHA-256 |
+|---|---:|---|
+| `HamHeatmap.exe` | 16,296,960 bytes | `7535b5cf45501105f3d441e3a8a4bddaf6350bfd78ee7be1e56f4ae66b2e0dd7` |
+| `HamHeatmap_0.1.0_x64-setup.exe` | 217,335,060 bytes | `c2567a95a945e260425646ad88dfa5e4ae44fca90e86eca418121a2dd4b54d93` |
+
+验证结果：前端 `17 files / 154 tests`、Rust workspace `133 passed / 5 ignored`、TypeScript、production build、rustfmt、严格 Clippy、Windows xwin check/Clippy/test `--no-run` 与 `verify-windows-artifacts.sh` 全部通过；CARTO base/labels 与 EOX 卫星三个固定上游样本均返回匹配 MIME 和图片签名。Windows 实机和中国大陆真实 ISP 仍待验收。
 
 ## 运行库策略
 

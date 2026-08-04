@@ -915,4 +915,5 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] 有效个人天地图 `tk` 是可选覆盖并保持优先；清除配置后继续使用 CARTO/EOX，不回退为空白坐标网格。
 - [x] 两类在线瓦片均保持固定 HTTPS 上游、严格路径/MIME/签名检查和 `no-store`，不进入 2.5 GB DEM/WBM 缓存或诊断导出。
 - [x] TypeScript check、production build 与前端全量 `17 files / 154 tests` 通过。
-- [ ] 重新构建并审计包含该源码的 Windows EXE/NSIS；在 Windows 10/11 和中国大陆真实网络分别验证默认公共底图、卫星切换、可选天地图覆盖与清除回退。
+- [x] 基于提交 `ccf3155d5b55ce755e76db4a6ca23c241223f6e8` 重新构建 Windows EXE/NSIS；产物审计通过，安装包 SHA-256 为 `c2567a95a945e260425646ad88dfa5e4ae44fca90e86eca418121a2dd4b54d93`。
+- [ ] 在 Windows 10/11 和中国大陆真实网络分别验证默认公共底图、卫星切换、可选天地图覆盖与清除回退。
