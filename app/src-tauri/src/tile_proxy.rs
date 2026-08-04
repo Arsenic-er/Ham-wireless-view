@@ -59,10 +59,10 @@ impl BasemapInfo {
             configured,
             provider: "Tianditu",
             protocol_scheme: TILE_PROTOCOL_SCHEME,
-            vector_template: "tianditu://localhost/vec/{z}/{x}/{y}",
-            vector_label_template: "tianditu://localhost/cva/{z}/{x}/{y}",
-            imagery_template: "tianditu://localhost/img/{z}/{x}/{y}",
-            imagery_label_template: "tianditu://localhost/cia/{z}/{x}/{y}",
+            vector_template: "http://tianditu.localhost/vec/{z}/{x}/{y}",
+            vector_label_template: "http://tianditu.localhost/cva/{z}/{x}/{y}",
+            imagery_template: "http://tianditu.localhost/img/{z}/{x}/{y}",
+            imagery_label_template: "http://tianditu.localhost/cia/{z}/{x}/{y}",
             attribution: "天地图",
             min_zoom: MIN_ZOOM,
             max_zoom: MAX_ZOOM,
@@ -113,7 +113,7 @@ impl PublicBasemapInfo {
             mode: "desktop-protocol-proxy",
             max_zoom: MAX_ZOOM,
             layers: &PUBLIC_BASEMAP_LAYERS,
-            tile_path_template: "basemap://localhost/carto/{layer}/{z}/{x}/{y}",
+            tile_path_template: "http://basemap.localhost/carto/{layer}/{z}/{x}/{y}",
             satellite: PublicSatelliteInfo {
                 enabled: true,
                 provider_id: "eoxcloudless",
@@ -121,7 +121,7 @@ impl PublicBasemapInfo {
                 attribution: SATELLITE_ATTRIBUTION,
                 mode: "desktop-protocol-proxy",
                 max_zoom: SATELLITE_MAX_ZOOM,
-                tile_path_template: "basemap://localhost/eox/satellite/{z}/{x}/{y}",
+                tile_path_template: "http://basemap.localhost/eox/satellite/{z}/{x}/{y}",
             },
         }
     }
@@ -985,13 +985,13 @@ mod tests {
         assert_eq!(value["layers"][1]["id"], "labels");
         assert_eq!(
             value["tilePathTemplate"],
-            "basemap://localhost/carto/{layer}/{z}/{x}/{y}"
+            "http://basemap.localhost/carto/{layer}/{z}/{x}/{y}"
         );
         assert_eq!(value["satellite"]["providerId"], "eoxcloudless");
         assert_eq!(value["satellite"]["maxZoom"], 14);
         assert_eq!(
             value["satellite"]["tilePathTemplate"],
-            "basemap://localhost/eox/satellite/{z}/{x}/{y}"
+            "http://basemap.localhost/eox/satellite/{z}/{x}/{y}"
         );
         let encoded = value.to_string();
         assert!(!encoded.contains(CARTO_ORIGIN));

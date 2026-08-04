@@ -17,7 +17,7 @@ Windows/Tauri 采用用户自有天地图 Key，并固定使用四个图层：
 
 - 普通地图：`vec_w` + `cva_w`。
 - 卫星图：`img_w` + `cia_w`。
-- MapLibre 只看到 `tianditu://localhost/{layer}/{z}/{x}/{y}`。
+- MapLibre 只看到 WebView2 可拦截的 `http://tianditu.localhost/{layer}/{z}/{x}/{y}` 映射地址。
 - Rust 原生层把固定协议请求转换为固定 `https://t0.tianditu.gov.cn` WMTS 请求。
 - 地图与传播覆盖继续共用 Web Mercator 显示坐标；计算输入和结果地理语义仍是 WGS84。
 

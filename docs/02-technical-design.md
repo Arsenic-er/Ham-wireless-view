@@ -240,7 +240,7 @@ EOxCloudless 只是视觉背景，不进入 DEM/WBM 采样、ITM、路径陆水�
 
 ### 4.2.7 Windows/Tauri 在线天地图
 
-桌面版不复用 validation 的 HTTP 代理，而是注册固定自定义协议 `tianditu://localhost/{layer}/{z}/{x}/{y}`。普通地图组合 `vec+cva`，卫星图组合 `img+cia`；四个模板、provider、协议、缩放范围和署名由 Rust `get_online_basemap` 返回，前端严格匹配后才启用。MapLibre 从始至终看不到供应方 Key 或可变上游 URL。
+桌面版不复用 validation 的 HTTP 代理，而是通过 Tauri/Wry 为 WebView2 注册固定自定义协议，并使用其 Windows 映射地址 `http://tianditu.localhost/{layer}/{z}/{x}/{y}`。普通地图组合 `vec+cva`，卫星图组合 `img+cia`；四个模板、provider、协议、缩放范围和署名由 Rust `get_online_basemap` 返回，前端严格匹配后才启用。MapLibre 从始至终看不到供应方 Key 或可变上游 URL。
 
 `configure_online_basemap` 校验用户输入后，在 Windows 用当前用户作用域 DPAPI 保存密文；`clear_online_basemap` 删除密文并立即回到未配置态。前端 Key 字段只保存本次编辑的临时值，不进入 localStorage、sessionStorage、查询字符串、bootstrap、错误文本或日志。非 Windows 编译只支持测试所需的内存态，不得用明文文件持久化。
 

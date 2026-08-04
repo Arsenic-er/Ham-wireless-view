@@ -261,7 +261,7 @@ const publicDesktopBasemap: BasemapInfo = {
     { id: "base", displayName: "Map" },
     { id: "labels", displayName: "Place labels" },
   ],
-  tilePathTemplate: "basemap://localhost/carto/{layer}/{z}/{x}/{y}",
+  tilePathTemplate: "http://basemap.localhost/carto/{layer}/{z}/{x}/{y}",
   satellite: {
     enabled: true,
     providerId: "eoxcloudless",
@@ -271,7 +271,7 @@ const publicDesktopBasemap: BasemapInfo = {
     mode: "desktop-protocol-proxy",
     maxZoom: 14,
     tilePathTemplate:
-      "basemap://localhost/eox/satellite/{z}/{x}/{y}",
+      "http://basemap.localhost/eox/satellite/{z}/{x}/{y}",
   },
 };
 
@@ -279,10 +279,10 @@ const onlineBasemap: OnlineBasemapInfo = {
   configured: true,
   provider: "Tianditu",
   protocolScheme: "tianditu",
-  vectorTemplate: "tianditu://localhost/vec/{z}/{x}/{y}",
-  vectorLabelTemplate: "tianditu://localhost/cva/{z}/{x}/{y}",
-  imageryTemplate: "tianditu://localhost/img/{z}/{x}/{y}",
-  imageryLabelTemplate: "tianditu://localhost/cia/{z}/{x}/{y}",
+  vectorTemplate: "http://tianditu.localhost/vec/{z}/{x}/{y}",
+  vectorLabelTemplate: "http://tianditu.localhost/cva/{z}/{x}/{y}",
+  imageryTemplate: "http://tianditu.localhost/img/{z}/{x}/{y}",
+  imageryLabelTemplate: "http://tianditu.localhost/cia/{z}/{x}/{y}",
   attribution: "天地图",
   minZoom: 1,
   maxZoom: 18,

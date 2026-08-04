@@ -251,13 +251,13 @@ describe("trusted online basemap contracts", () => {
     expect(map.addSource).toHaveBeenCalledWith(
       CARTO_BASE_SOURCE_ID,
       expect.objectContaining({
-        tiles: ["basemap://localhost/carto/base/{z}/{x}/{y}"],
+        tiles: ["http://basemap.localhost/carto/base/{z}/{x}/{y}"],
       }),
     );
     expect(map.addSource).toHaveBeenCalledWith(
       CARTO_LABEL_SOURCE_ID,
       expect.objectContaining({
-        tiles: ["basemap://localhost/carto/labels/{z}/{x}/{y}"],
+        tiles: ["http://basemap.localhost/carto/labels/{z}/{x}/{y}"],
       }),
     );
 
@@ -270,7 +270,7 @@ describe("trusted online basemap contracts", () => {
     expect(map.addSource).toHaveBeenCalledWith(
       SATELLITE_SOURCE_ID,
       expect.objectContaining({
-        tiles: ["basemap://localhost/eox/satellite/{z}/{x}/{y}"],
+        tiles: ["http://basemap.localhost/eox/satellite/{z}/{x}/{y}"],
       }),
     );
   });

@@ -81,6 +81,71 @@ const SATELLITE_BASEMAP_SOURCE_IDS = new Set([
   TIANDITU_IMAGERY_SOURCE_ID,
 ]);
 
+const KNOWN_BASEMAP_SOURCE_IDS = new Set([
+  ...BASEMAP_LABEL_SOURCE_IDS,
+  ...ORDINARY_BASEMAP_SOURCE_IDS,
+  ...SATELLITE_BASEMAP_SOURCE_IDS,
+]);
+
+type BasemapFailureKind =
+  | "offline"
+  | "network"
+  | "not-configured"
+  | "invalid-request"
+  | "upstream"
+  | "invalid-content"
+  | "unknown";
+
+interface BasemapDiagnostic {
+  sourceId: string;
+  kind: BasemapFailureKind;
+  httpStatus: number | null;
+  occurredAt: number;
+  retryCount: number;
+}
+
+function safeBasemapHttpStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object" || !("status" in error)) return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" &&
+    Number.isInteger(status) &&
+    status >= 0 &&
+    status <= 599
+    ? status
+    : null;
+}
+
+function classifyBasemapFailure(status: number | null): BasemapFailureKind {
+  if (status === 0) return "network";
+  if (status === 400) return "invalid-request";
+  if (status === 401) return "not-configured";
+  if (status === 413) return "invalid-content";
+  if (status !== null && status >= 500) return "upstream";
+  return "unknown";
+}
+
+function activeBasemapSourceId(
+  basemap: BasemapInfo | null | undefined,
+  onlineBasemap: OnlineBasemapInfo | null | undefined,
+  presentation: BasemapPresentation,
+): string | null {
+  if (presentation === "satellite") {
+    if (isTrustedOnlineBasemap(onlineBasemap)) {
+      return TIANDITU_IMAGERY_SOURCE_ID;
+    }
+    if (isTrustedSatelliteBasemap(basemap)) return SATELLITE_SOURCE_ID;
+  }
+  if (
+    isTrustedOnlineBasemap(onlineBasemap) ||
+    isTrustedTiandituBasemap(basemap)
+  ) {
+    return TIANDITU_VECTOR_SOURCE_ID;
+  }
+  if (isTrustedCartoBasemap(basemap)) return CARTO_BASE_SOURCE_ID;
+  if (isTrustedSatelliteBasemap(basemap)) return SATELLITE_SOURCE_ID;
+  return null;
+}
+
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
   type: "FeatureCollection",
   features: [],
@@ -406,6 +471,12 @@ export function MapView({
   const [satelliteFallback, setSatelliteFallback] = useState(false);
   const [ordinaryMapFallback, setOrdinaryMapFallback] = useState(false);
   const [onlineBasemapFailed, setOnlineBasemapFailed] = useState(false);
+  const [basemapDiagnostic, setBasemapDiagnostic] =
+    useState<BasemapDiagnostic | null>(null);
+  const [basemapRetrying, setBasemapRetrying] = useState(false);
+  const [basemapDiagnosticOpen, setBasemapDiagnosticOpen] = useState(false);
+  const [basemapDiagnosticCopied, setBasemapDiagnosticCopied] =
+    useState(false);
   const [unavailableSourceIds, setUnavailableSourceIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -440,6 +511,8 @@ export function MapView({
   const onlineBasemapFailedRef = useRef(onlineBasemapFailed);
   const unavailableSourceIdsRef =
     useRef<ReadonlySet<string>>(unavailableSourceIds);
+  const basemapDiagnosticRef = useRef<BasemapDiagnostic | null>(basemapDiagnostic);
+  const basemapRetryingRef = useRef(basemapRetrying);
   const basemapPresentationRef = useRef(basemapPresentation);
   themeRef.current = theme;
   pointRef.current = point;
@@ -457,6 +530,29 @@ export function MapView({
   onlineBasemapRef.current = onlineBasemap;
   onlineBasemapFailedRef.current = onlineBasemapFailed;
   unavailableSourceIdsRef.current = unavailableSourceIds;
+  basemapDiagnosticRef.current = basemapDiagnostic;
+  basemapRetryingRef.current = basemapRetrying;
+
+  const recordBasemapDiagnostic = (
+    sourceId: string,
+    kind: BasemapFailureKind,
+    httpStatus: number | null,
+  ) => {
+    const previous = basemapDiagnosticRef.current;
+    const next: BasemapDiagnostic = {
+      sourceId,
+      kind,
+      httpStatus,
+      occurredAt: Date.now(),
+      retryCount: previous?.sourceId === sourceId ? previous.retryCount : 0,
+    };
+    basemapDiagnosticRef.current = next;
+    basemapRetryingRef.current = false;
+    setBasemapDiagnostic(next);
+    setBasemapRetrying(false);
+    setBasemapDiagnosticOpen(true);
+    setBasemapDiagnosticCopied(false);
+  };
 
   useEffect(() => {
     if (!containerRef.current || !heatmapCanvasLeasesRef.current || !previewBlobUrlsRef.current) return;
@@ -688,9 +784,48 @@ export function MapView({
     map.on("click", (event) => {
       onPointSelectRef.current({ lat: event.lngLat.lat, lon: event.lngLat.lng });
     });
+    map.on("sourcedata", (event) => {
+      const dataEvent = event as {
+        sourceId?: string;
+        tile?: { state?: string };
+      };
+      const diagnostic = basemapDiagnosticRef.current;
+      if (
+        !diagnostic ||
+        !basemapRetryingRef.current ||
+        dataEvent.sourceId !== diagnostic.sourceId ||
+        dataEvent.tile?.state !== "loaded"
+      ) {
+        return;
+      }
+      basemapDiagnosticRef.current = null;
+      basemapRetryingRef.current = false;
+      setBasemapDiagnostic(null);
+      setBasemapRetrying(false);
+      setBasemapDiagnosticOpen(false);
+      setBasemapDiagnosticCopied(false);
+      onlineBasemapFailedRef.current = false;
+      setOnlineBasemapFailed(false);
+      setSatelliteFallback(false);
+      setOrdinaryMapFallback(false);
+    });
     map.on("error", (event) => {
       const sourceId = (event as { sourceId?: string }).sourceId;
-      if (!sourceId || !map.getSource(sourceId)) return;
+      if (
+        !sourceId ||
+        !KNOWN_BASEMAP_SOURCE_IDS.has(sourceId) ||
+        !map.getSource(sourceId)
+      ) {
+        return;
+      }
+      const httpStatus = safeBasemapHttpStatus(
+        (event as { error?: unknown }).error,
+      );
+      recordBasemapDiagnostic(
+        sourceId,
+        classifyBasemapFailure(httpStatus),
+        httpStatus,
+      );
 
       const trustedCustom = isTrustedOnlineBasemap(onlineBasemapRef.current);
       const trustedSameOrigin = isTrustedTiandituBasemap(basemapRef.current);
@@ -842,6 +977,12 @@ export function MapView({
     setOnlineBasemapFailed(false);
     setSatelliteFallback(false);
     setOrdinaryMapFallback(false);
+    basemapDiagnosticRef.current = null;
+    basemapRetryingRef.current = false;
+    setBasemapDiagnostic(null);
+    setBasemapRetrying(false);
+    setBasemapDiagnosticOpen(false);
+    setBasemapDiagnosticCopied(false);
     synchronizeMapStateRef.current?.();
   }, [basemap, onlineBasemap]);
   useEffect(() => {
@@ -888,6 +1029,7 @@ export function MapView({
   }, [visibleSignalThresholdDbm]);
 
   const retryOnlineBasemap = () => {
+    if (basemapRetryingRef.current) return;
     if (
       !isTrustedOnlineBasemap(onlineBasemapRef.current) &&
       !isTrustedTiandituBasemap(basemapRef.current) &&
@@ -895,6 +1037,26 @@ export function MapView({
       !isTrustedSatelliteBasemap(basemapRef.current)
     ) {
       return;
+    }
+    const diagnostic = basemapDiagnosticRef.current;
+    if (diagnostic) {
+      const next = {
+        ...diagnostic,
+        retryCount: diagnostic.retryCount + 1,
+      };
+      basemapDiagnosticRef.current = next;
+      basemapRetryingRef.current = true;
+      setBasemapDiagnostic(next);
+      setBasemapRetrying(true);
+      setBasemapDiagnosticOpen(true);
+      setBasemapDiagnosticCopied(false);
+      if (SATELLITE_BASEMAP_SOURCE_IDS.has(diagnostic.sourceId)) {
+        basemapPresentationRef.current = "satellite";
+        setBasemapPresentation("satellite");
+      } else if (ORDINARY_BASEMAP_SOURCE_IDS.has(diagnostic.sourceId)) {
+        basemapPresentationRef.current = "map";
+        setBasemapPresentation("map");
+      }
     }
     const available = new Set<string>();
     unavailableSourceIdsRef.current = available;
@@ -914,6 +1076,18 @@ export function MapView({
         isTrustedCartoBasemap(basemapRef.current) ||
         isTrustedSatelliteBasemap(basemapRef.current)
       ) {
+        const sourceId = activeBasemapSourceId(
+          basemapRef.current,
+          onlineBasemapRef.current,
+          basemapPresentationRef.current,
+        );
+        if (sourceId) {
+          recordBasemapDiagnostic(
+            sourceId,
+            "offline",
+            null,
+          );
+        }
         setSatelliteFallback(false);
         setOrdinaryMapFallback(false);
         onlineBasemapFailedRef.current = true;
@@ -959,12 +1133,86 @@ export function MapView({
       isTrustedTiandituBasemap(basemap) ||
       isTrustedCartoBasemap(basemap) ||
       isTrustedSatelliteBasemap(basemap));
+  const diagnosticSourceKey = (() => {
+    switch (basemapDiagnostic?.sourceId) {
+      case CARTO_BASE_SOURCE_ID:
+        return "mapDiagnosticSourceCartoMap";
+      case CARTO_LABEL_SOURCE_ID:
+        return "mapDiagnosticSourceCartoLabels";
+      case SATELLITE_SOURCE_ID:
+        return "mapDiagnosticSourceEoxSatellite";
+      case TIANDITU_VECTOR_SOURCE_ID:
+        return "mapDiagnosticSourceTiandituMap";
+      case TIANDITU_LABEL_SOURCE_ID:
+        return "mapDiagnosticSourceTiandituLabels";
+      case TIANDITU_IMAGERY_SOURCE_ID:
+        return "mapDiagnosticSourceTiandituSatellite";
+      case TIANDITU_IMAGERY_LABEL_SOURCE_ID:
+        return "mapDiagnosticSourceTiandituSatelliteLabels";
+      default:
+        return "mapDiagnosticSourceUnknown";
+    }
+  })();
+  const diagnosticKindKey = (() => {
+    switch (basemapDiagnostic?.kind) {
+      case "offline":
+        return "mapDiagnosticKindOffline";
+      case "network":
+        return "mapDiagnosticKindNetwork";
+      case "not-configured":
+        return "mapDiagnosticKindNotConfigured";
+      case "invalid-request":
+        return "mapDiagnosticKindInvalidRequest";
+      case "upstream":
+        return "mapDiagnosticKindUpstream";
+      case "invalid-content":
+        return "mapDiagnosticKindInvalidContent";
+      default:
+        return "mapDiagnosticKindUnknown";
+    }
+  })();
+  const diagnosticTime = basemapDiagnostic
+    ? new Intl.DateTimeFormat(i18n.resolvedLanguage ?? "en", {
+        dateStyle: "short",
+        timeStyle: "medium",
+      }).format(new Date(basemapDiagnostic.occurredAt))
+    : "";
+  const copyBasemapDiagnostic = async () => {
+    if (!basemapDiagnostic || !navigator.clipboard?.writeText) return;
+    const lines = [
+      t("mapDiagnosticTitle"),
+      `${t("mapDiagnosticSource")}: ${t(diagnosticSourceKey)}`,
+      `${t("mapDiagnosticErrorType")}: ${t(diagnosticKindKey)}`,
+      `${t("mapDiagnosticOccurredAt")}: ${diagnosticTime}`,
+      `${t("mapDiagnosticRetryCount")}: ${basemapDiagnostic.retryCount}`,
+    ];
+    if (basemapDiagnostic.httpStatus !== null) {
+      lines.push(
+        `${t("mapDiagnosticHttpStatus")}: ${basemapDiagnostic.httpStatus}`,
+      );
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setBasemapDiagnosticCopied(true);
+    } catch {
+      setBasemapDiagnosticCopied(false);
+    }
+  };
   return (
     <section className="map-shell" aria-label={t("mapAria")}>
       <div ref={containerRef} className="map-canvas" />
-      <div className="map-warning">
+      <div
+        className="map-warning"
+        role={basemapDiagnostic ? "alert" : undefined}
+        aria-live={basemapDiagnostic ? "polite" : undefined}
+      >
         <span className="map-warning-dot" />
-        {onlineMapUnavailable
+        <span>
+        {basemapDiagnostic && basemapRetrying
+          ? t("mapDiagnosticRetrying", {
+              count: basemapDiagnostic.retryCount,
+            })
+          : onlineMapUnavailable
           ? t("mapUnavailable")
           : ordinaryMapFallback
             ? t("mapOrdinaryFallback")
@@ -987,19 +1235,68 @@ export function MapView({
                       : trustedTianditu
                         ? t("mapValidationVector")
                         : t("mapGrid")}
+        </span>
         {(onlineMapUnavailable ||
           ordinaryMapFallback ||
           satelliteFallback ||
-          activeLabelsUnavailable) && (
-          <button
-            type="button"
-            className="map-retry"
-            onClick={retryOnlineBasemap}
-          >
-            {t("retry")}
-          </button>
+          activeLabelsUnavailable ||
+          basemapDiagnostic) && (
+          <div className="map-warning-actions">
+            {basemapDiagnostic && (
+              <button
+                type="button"
+                className="map-retry"
+                aria-expanded={basemapDiagnosticOpen}
+                onClick={() => setBasemapDiagnosticOpen(true)}
+              >
+                {t("mapDiagnosticDetails")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="map-retry"
+              onClick={retryOnlineBasemap}
+              disabled={basemapRetrying}
+            >
+              {basemapRetrying
+                ? t("mapDiagnosticRetryingShort")
+                : t("retry")}
+            </button>
+          </div>
         )}
       </div>
+      {basemapDiagnostic && basemapDiagnosticOpen && (
+        <aside className="map-diagnostic" aria-label={t("mapDiagnosticTitle")}>
+          <div className="map-diagnostic-heading">
+            <strong>{t("mapDiagnosticTitle")}</strong>
+            <button
+              type="button"
+              onClick={() => setBasemapDiagnosticOpen(false)}
+              aria-label={t("mapDiagnosticClose")}
+            >
+              X
+            </button>
+          </div>
+          <dl>
+            <div><dt>{t("mapDiagnosticSource")}</dt><dd>{t(diagnosticSourceKey)}</dd></div>
+            <div><dt>{t("mapDiagnosticErrorType")}</dt><dd>{t(diagnosticKindKey)}</dd></div>
+            <div><dt>{t("mapDiagnosticOccurredAt")}</dt><dd>{diagnosticTime}</dd></div>
+            <div><dt>{t("mapDiagnosticRetryCount")}</dt><dd>{basemapDiagnostic.retryCount}</dd></div>
+            {basemapDiagnostic.httpStatus !== null && (
+              <div><dt>{t("mapDiagnosticHttpStatus")}</dt><dd>{basemapDiagnostic.httpStatus}</dd></div>
+            )}
+          </dl>
+          <button
+            type="button"
+            className="map-diagnostic-copy"
+            onClick={() => void copyBasemapDiagnostic()}
+          >
+            {basemapDiagnosticCopied
+              ? t("mapDiagnosticCopied")
+              : t("mapDiagnosticCopy")}
+          </button>
+        </aside>
+      )}
       {satelliteAvailable && (
         <div className="map-style-switch" role="group" aria-label={t("basemapStyle")}>
           <button

@@ -19,18 +19,18 @@ export const TIANDITU_IMAGERY_LAYER_ID = "basemap-tianditu-imagery-layer";
 export const TIANDITU_IMAGERY_LABEL_LAYER_ID = "basemap-tianditu-imagery-label-layer";
 
 export const TAURI_TIANDITU_VECTOR_TEMPLATE =
-  "tianditu://localhost/vec/{z}/{x}/{y}";
+  "http://tianditu.localhost/vec/{z}/{x}/{y}";
 export const TAURI_TIANDITU_VECTOR_LABEL_TEMPLATE =
-  "tianditu://localhost/cva/{z}/{x}/{y}";
+  "http://tianditu.localhost/cva/{z}/{x}/{y}";
 export const TAURI_TIANDITU_IMAGERY_TEMPLATE =
-  "tianditu://localhost/img/{z}/{x}/{y}";
+  "http://tianditu.localhost/img/{z}/{x}/{y}";
 export const TAURI_TIANDITU_IMAGERY_LABEL_TEMPLATE =
-  "tianditu://localhost/cia/{z}/{x}/{y}";
+  "http://tianditu.localhost/cia/{z}/{x}/{y}";
 
 export const CARTO_TILE_PATH_TEMPLATE =
   "/api/basemap/carto/{layer}/{z}/{x}/{y}";
 export const TAURI_CARTO_TILE_PATH_TEMPLATE =
-  "basemap://localhost/carto/{layer}/{z}/{x}/{y}";
+  "http://basemap.localhost/carto/{layer}/{z}/{x}/{y}";
 export const CARTO_ATTRIBUTION =
   "\u00a9 OpenStreetMap contributors \u00a9 CARTO";
 export const CARTO_BASE_SOURCE_ID = "basemap-carto-base";
@@ -41,7 +41,7 @@ export const CARTO_LABEL_LAYER_ID = "basemap-carto-labels-layer";
 export const SATELLITE_TILE_PATH_TEMPLATE =
   "/api/basemap/satellite/{z}/{x}/{y}";
 export const TAURI_SATELLITE_TILE_PATH_TEMPLATE =
-  "basemap://localhost/eox/satellite/{z}/{x}/{y}";
+  "http://basemap.localhost/eox/satellite/{z}/{x}/{y}";
 export const SATELLITE_SOURCE_ID = "basemap-satellite";
 export const SATELLITE_LAYER_ID = "basemap-satellite-layer";
 export const SATELLITE_ATTRIBUTION =

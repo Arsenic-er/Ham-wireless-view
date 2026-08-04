@@ -839,11 +839,11 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 - [x] AUTHORS.md、NOTICE、.github/CODEOWNERS、npm/Cargo/Tauri metadata 与四语言 README 统一记录 Arsenic-er 为项目创建者及主开发者。
 - [x] Tauri bundle 资源包含 AUTHORS.md、NOTICE、LICENSE 与 THIRD_PARTY_LICENSES.md，并保持 English、SimpChinese、TradChinese、Japanese 四语言 NSIS 配置。
 - [x] scripts/check-source-attribution.py 使用 Git tracked + untracked allowlist，漏头、第三方误盖章和未分类文件均 fail closed；GitHub Actions documentation job 执行该检查。
-- [x] 当前前端证据更新为 17 files / 154 tests；README 四语言事实检查必须继续通过。
+- [x] 当前前端证据更新为 17 files / 155 tests；README 四语言事实检查必须继续通过。
 
 ## 37. 双点链路通视分析（2026-08-02，源码/自动化与受管进程重建已通过；链路实跑、浏览器、Windows 与性能待验）
 
-本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面浮动弹窗；本次最终门禁确认为前端 17 files / 154 passed 与 Rust workspace 133 passed / 5 ignored。受管 validation 已重建并健康运行，但尚未执行真实 200 km 缓存链路、剖面弹窗浏览器验收或 Windows 实机验收，也没有公开服务。
+本节执行 ADR 0024。当前源码已经形成独立的 link 请求/结果、Rust 分析核心、Tauri/validation 路由、四语言 React 工作区和 SVG 剖面浮动弹窗；本次最终门禁确认为前端 17 files / 155 passed 与 Rust workspace 133 passed / 5 ignored。受管 validation 已重建并健康运行，但尚未执行真实 200 km 缓存链路、剖面弹窗浏览器验收或 Windows 实机验收，也没有公开服务。
 
 ### 37.1 请求、路径与数据完整性
 
@@ -890,7 +890,7 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 
 ### 37.5 本轮执行证据与发布边界
 
-- [x] `scripts/node-project.sh --prefix app test`：17 test files / 154 passed。
+- [x] `scripts/node-project.sh --prefix app test`：17 test files / 155 passed。
 - [x] `scripts/cargo-project.sh test --workspace --all-targets --locked`：133 passed / 5 ignored。
 - [x] Windows xwin workspace check、测试程序 `--no-run` 与严格 Clippy 均通过；这不替代 Windows 实机。
 - [x] 当前源码已从干净提交 d7bd31a 完成受管 stop/build/start，health schema 1；该事实只证明当前二进制已运行。
@@ -911,9 +911,18 @@ ADR 0016 把预览定义为 best-effort、latest-only、不可导出的临时覆
 ## 39. Windows 默认公共在线底图（2026-08-04，源码与自动化通过；新产物实机待验）
 
 - [x] Windows/Tauri 在没有天地图 `tk` 时从 `get_public_basemap` 获得固定 CARTO Voyager base/labels 与 EOxCloudless Sentinel-2 元数据。
-- [x] WebView 只信任固定 `desktop-protocol-proxy`、`basemap://localhost/carto/{layer}/{z}/{x}/{y}` 与 `basemap://localhost/eox/satellite/{z}/{x}/{y}` 契约。
+- [x] WebView 只信任固定 `desktop-protocol-proxy`、`http://basemap.localhost/carto/{layer}/{z}/{x}/{y}` 与 `http://basemap.localhost/eox/satellite/{z}/{x}/{y}` 契约。
 - [x] 有效个人天地图 `tk` 是可选覆盖并保持优先；清除配置后继续使用 CARTO/EOX，不回退为空白坐标网格。
 - [x] 两类在线瓦片均保持固定 HTTPS 上游、严格路径/MIME/签名检查和 `no-store`，不进入 2.5 GB DEM/WBM 缓存或诊断导出。
-- [x] TypeScript check、production build 与前端全量 `17 files / 154 tests` 通过。
+- [x] TypeScript check、production build 与前端全量 `17 files / 155 tests` 通过。
 - [x] 基于提交 `ccf3155d5b55ce755e76db4a6ca23c241223f6e8` 重新构建 Windows EXE/NSIS；产物审计通过，安装包 SHA-256 为 `c2567a95a945e260425646ad88dfa5e4ae44fca90e86eca418121a2dd4b54d93`。
 - [ ] 在 Windows 10/11 和中国大陆真实网络分别验证默认公共底图、卫星切换、可选天地图覆盖与清除回退。
+
+## 40. Windows WebView2 在线地图协议与持久错误诊断（2026-08-05）
+
+- [x] CARTO/EOX 与可选天地图的桌面元数据统一使用 Tauri/Wry 在 Windows 可拦截的 `http://<scheme>.localhost/...` 映射地址，不再把 `scheme://localhost/...` 用作 MapLibre 子资源 URL。
+- [x] Rust 协议解析继续只接受固定 scheme/host、规范路径、层级和坐标；固定上游、零重定向、响应上限、MIME/签名检查与 `no-store` 保持不变。
+- [x] 地图错误详情在关闭面板后仍保留；重试期间显示次数，且只有相同失败 source 的 `sourcedata` 事件同时满足 `tile.state=loaded` 才清除。
+- [x] 安全诊断只包含本地固定图源名、固定错误分类、可选整数 HTTP 状态、时间和重试次数；测试确认原始 message、URL、body 与 `tk` 不显示也不复制。
+- [x] 前端 `17 files / 155 tests`、TypeScript、production build、Rust `133 passed / 5 ignored`、rustfmt、严格 Clippy 和 Windows xwin check/Clippy/test `--no-run` 通过。
+- [ ] 新安装包仍需 Windows 10/11 WebView2 实机验证 CARTO 地图、地名、卫星切换、重试成功清除及断网时持久详情。

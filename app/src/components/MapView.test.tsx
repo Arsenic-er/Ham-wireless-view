@@ -13,6 +13,9 @@ const objectUrlMocks = vi.hoisted(() => ({
   create: vi.fn(() => "blob:coverage-heatmap"),
   revoke: vi.fn(),
 }));
+const clipboardMocks = vi.hoisted(() => ({
+  writeText: vi.fn((_text: string) => Promise.resolve()),
+}));
 const canvasLeaseMocks = vi.hoisted(() => ({
   instances: [] as Array<{
     dirty: boolean;
@@ -235,12 +238,12 @@ const configuredCarto: BasemapInfo = {
 const configuredDesktopCarto: BasemapInfo = {
   ...configuredCarto,
   mode: "desktop-protocol-proxy",
-  tilePathTemplate: "basemap://localhost/carto/{layer}/{z}/{x}/{y}",
+  tilePathTemplate: "http://basemap.localhost/carto/{layer}/{z}/{x}/{y}",
   satellite: {
     ...configuredCarto.satellite!,
     mode: "desktop-protocol-proxy",
     tilePathTemplate:
-      "basemap://localhost/eox/satellite/{z}/{x}/{y}",
+      "http://basemap.localhost/eox/satellite/{z}/{x}/{y}",
   },
 };
 
@@ -249,10 +252,10 @@ const configuredOnlineBasemap: OnlineBasemapInfo = {
   configured: true,
   provider: "Tianditu",
   protocolScheme: "tianditu",
-  vectorTemplate: "tianditu://localhost/vec/{z}/{x}/{y}",
-  vectorLabelTemplate: "tianditu://localhost/cva/{z}/{x}/{y}",
-  imageryTemplate: "tianditu://localhost/img/{z}/{x}/{y}",
-  imageryLabelTemplate: "tianditu://localhost/cia/{z}/{x}/{y}",
+  vectorTemplate: "http://tianditu.localhost/vec/{z}/{x}/{y}",
+  vectorLabelTemplate: "http://tianditu.localhost/cva/{z}/{x}/{y}",
+  imageryTemplate: "http://tianditu.localhost/img/{z}/{x}/{y}",
+  imageryLabelTemplate: "http://tianditu.localhost/cia/{z}/{x}/{y}",
   attribution: "天地图",
   minZoom: 1,
   maxZoom: 18,
@@ -271,6 +274,10 @@ describe("MapView controls and desired-state replay", () => {
     Object.defineProperty(URL, "revokeObjectURL", {
       configurable: true,
       value: objectUrlMocks.revoke,
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardMocks.writeText },
     });
   });
 
@@ -447,6 +454,20 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
 
     fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-satellite",
+        tile: { state: "loaded" },
+      });
+    });
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-tianditu-vector",
+        tile: { state: "loaded" },
+      });
+    });
     fireEvent.click(getByRole("button", { name: /卫星/ }));
     expect(getByText("Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证")).toBeDefined();
     act(() => {
@@ -460,6 +481,13 @@ describe("MapView controls and desired-state replay", () => {
     );
 
     fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-satellite",
+        tile: { state: "loaded" },
+      });
+    });
     expect(getByText("Sentinel-2 卫星影像（联网）· 中文地名 · 内部验证")).toBeDefined();
     fireEvent.click(getByRole("button", { name: "地图" }));
     act(() => {
@@ -473,6 +501,13 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
 
     fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-tianditu-label",
+        tile: { state: "loaded" },
+      });
+    });
     expect(maplibreMocks.map.getSource("basemap-tianditu-label")).toBeDefined();
     expect(getByText("天地图在线真实底图 · 内部验证")).toBeDefined();
     expect(maplibreMocks.map.setMaxZoom).toHaveBeenLastCalledWith(18);
@@ -536,6 +571,13 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
 
     fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-carto-labels",
+        tile: { state: "loaded" },
+      });
+    });
     expect(maplibreMocks.map.getSource("basemap-carto-labels")).toBeDefined();
     expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
 
@@ -583,13 +625,13 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-carto-base",
       expect.objectContaining({
-        tiles: ["basemap://localhost/carto/base/{z}/{x}/{y}"],
+        tiles: ["http://basemap.localhost/carto/base/{z}/{x}/{y}"],
       }),
     );
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-carto-labels",
       expect.objectContaining({
-        tiles: ["basemap://localhost/carto/labels/{z}/{x}/{y}"],
+        tiles: ["http://basemap.localhost/carto/labels/{z}/{x}/{y}"],
       }),
     );
 
@@ -598,13 +640,98 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-satellite",
       expect.objectContaining({
-        tiles: ["basemap://localhost/eox/satellite/{z}/{x}/{y}"],
+        tiles: ["http://basemap.localhost/eox/satellite/{z}/{x}/{y}"],
       }),
     );
     expect(maplibreMocks.map.getSource("basemap-carto-labels")).toBeDefined();
 
     unmount();
   });
+
+  it("keeps redacted map diagnostics until the failed raster source loads", () => {
+    const {
+      getByLabelText,
+      getByRole,
+      getByText,
+      queryByLabelText,
+      queryByText,
+      unmount,
+    } = render(
+      <MapView
+        theme="dark"
+        point={null}
+        heatmaps={[sampleCoverage]}
+        activeHeatmapId={sampleCoverage.id}
+        preview={null}
+        heatmapStale={false}
+        onPointSelect={vi.fn()}
+        basemap={configuredCarto}
+      />,
+    );
+
+    maplibreMocks.map.isStyleLoaded.mockReturnValue(true);
+    maplibreMocks.emit("load");
+    act(() => {
+      maplibreMocks.emit("error", {
+        sourceId: "basemap-carto-base",
+        error: {
+          status: 502,
+          message:
+            "AJAXError: Bad Gateway (502): https://tiles.invalid/tile.png?tk=secret-token",
+          url: "https://tiles.invalid/tile.png?tk=secret-token",
+          body: "private response",
+        },
+      });
+    });
+
+    const diagnostic = getByLabelText("在线地图错误详情");
+    expect(diagnostic.textContent).toContain("CARTO Voyager · 地图");
+    expect(diagnostic.textContent).toContain("地图服务或网络不可用");
+    expect(diagnostic.textContent).toContain("502");
+    expect(queryByText(/secret-token|tiles\.invalid/)).toBeNull();
+
+    fireEvent.click(getByRole("button", { name: "复制安全诊断" }));
+    expect(clipboardMocks.writeText).toHaveBeenCalledOnce();
+    const copied = String(clipboardMocks.writeText.mock.calls[0][0]);
+    expect(copied).toContain("CARTO Voyager · 地图");
+    expect(copied).toContain("HTTP 状态: 502");
+    expect(copied).not.toMatch(/secret-token|tiles\.invalid|https?:\/\/|\?tk=/);
+
+    fireEvent.click(getByRole("button", { name: "关闭地图错误详情" }));
+    expect(queryByLabelText("在线地图错误详情")).toBeNull();
+    expect(getByText("普通在线地图不可用，已切换到卫星影像。")).toBeDefined();
+    fireEvent.click(getByRole("button", { name: "详情" }));
+    expect(getByLabelText("在线地图错误详情")).toBeDefined();
+
+    fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-carto-base",
+        tile: { state: "loading" },
+      });
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-carto-labels",
+        tile: { state: "loaded" },
+      });
+      window.dispatchEvent(new Event("online"));
+    });
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    expect(getByLabelText("在线地图错误详情")).toBeDefined();
+
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-carto-base",
+        tile: { state: "loaded" },
+      });
+    });
+    expect(queryByLabelText("在线地图错误详情")).toBeNull();
+    expect(queryByText("正在重试在线地图（第 1 次）…")).toBeNull();
+    expect(getByText("CARTO Voyager 在线地图 · 地名 · 内部验证")).toBeDefined();
+
+    unmount();
+  });
+
   it("falls back from CARTO satellite to map once, then uses WGS84 if map also fails", () => {
 
     const { getByRole, getByText, unmount } = render(
@@ -679,6 +806,13 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.setZoom).not.toHaveBeenCalled();
 
     fireEvent.click(getByRole("button", { name: "重试" }));
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-satellite",
+        tile: { state: "loaded" },
+      });
+    });
     expect(getByText("Sentinel-2 卫星影像（联网）· 内部验证")).toBeDefined();
     expect(maplibreMocks.map.getSource("basemap-satellite")).toBeDefined();
 
@@ -704,7 +838,7 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-tianditu-vector",
       expect.objectContaining({
-        tiles: ["tianditu://localhost/vec/{z}/{x}/{y}"],
+        tiles: ["http://tianditu.localhost/vec/{z}/{x}/{y}"],
         minzoom: 1,
         maxzoom: 18,
       }),
@@ -712,7 +846,7 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-tianditu-label",
       expect.objectContaining({
-        tiles: ["tianditu://localhost/cva/{z}/{x}/{y}"],
+        tiles: ["http://tianditu.localhost/cva/{z}/{x}/{y}"],
       }),
     );
     expect(maplibreMocks.map.addLayer).toHaveBeenCalledWith(
@@ -730,13 +864,13 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-tianditu-imagery",
       expect.objectContaining({
-        tiles: ["tianditu://localhost/img/{z}/{x}/{y}"],
+        tiles: ["http://tianditu.localhost/img/{z}/{x}/{y}"],
       }),
     );
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-tianditu-imagery-label",
       expect.objectContaining({
-        tiles: ["tianditu://localhost/cia/{z}/{x}/{y}"],
+        tiles: ["http://tianditu.localhost/cia/{z}/{x}/{y}"],
       }),
     );
 
@@ -755,6 +889,13 @@ describe("MapView controls and desired-state replay", () => {
     expect(maplibreMocks.map.getSource("coverage-heatmap-coverage-1")).toBeDefined();
 
     fireEvent.click(getByRole("button", { name: /卫星/ }));
+    expect(getByText("正在重试在线地图（第 1 次）…")).toBeDefined();
+    act(() => {
+      maplibreMocks.emit("sourcedata", {
+        sourceId: "basemap-tianditu-imagery",
+        tile: { state: "loaded" },
+      });
+    });
     expect(getByText("天地图卫星影像（联网）· 中文地名")).toBeDefined();
     expect(maplibreMocks.map.addSource).toHaveBeenCalledWith(
       "basemap-tianditu-imagery",
