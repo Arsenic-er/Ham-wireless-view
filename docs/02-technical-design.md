@@ -35,7 +35,6 @@ Tauri 在 Windows 使用 WebView2；离线安装包采用内嵌 WebView2 离线�
 
 ```text
 hamheatmap/
-├─ AGENTS.md
 ├─ README.md
 ├─ LICENSE
 ├─ docs/

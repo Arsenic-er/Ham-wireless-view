@@ -46,7 +46,6 @@ INLINE_SUFFIXES = {".rs", ".cpp", ".h", ".ts", ".tsx", ".css", ".sh", ".ps1", ".
 EXTERNAL_EXACT = {
     ".gitignore",
     ".node-version",
-    "AGENTS.md",
     "AUTHORS.md",
     "NOTICE",
     "app/package.json",
