@@ -25,22 +25,22 @@ HamHeatmap（業餘無線電傳播熱力圖）是一套面向中國大陸業餘�
 ### Windows Alpha
 
 - 目前 Windows/Tauri 原始碼預設使用不需天地圖 `tk` 的 CARTO Voyager 線上地圖、地名與 EOxCloudless Sentinel-2 衛星影像。個人天地圖 `tk` 是可選覆寫，設定後由目前使用者 DPAPI 加密保存；清除後會繼續使用公共底圖。線上圖磚不會進入 2.5 GB 快取或診斷匯出。Alpha 2 引入的天地圖明確連線檢查仍保留。
-- v0.1.0-alpha.2 已從提交 9b0fb79 交叉建置並上傳至 GitHub Releases：獨立 EXE 為 16,174,080 bytes，內含離線 WebView2 元件的 NSIS 安裝程式為 217,265,419 bytes。
+- v0.1.0-alpha.3 已從提交 5482f05 交叉建置並上傳至 GitHub Releases：獨立 EXE 為 16,296,960 bytes，內含離線 WebView2 元件的 NSIS 安裝程式為 217,333,194 bytes。
 - Release 同時提供 `SHA256SUMS.txt`。兩個 Windows 產物都未簽章；Windows 10/11 實機、SmartScreen、安裝／解除安裝，以及中國大陸真實網路仍待驗證。
 - Windows 產品只使用線上視覺底圖，不規劃或發行離線地圖套件；任何線上圖磚都不會持久保存。DEM/WBM、partial 檔案、索引和計算快取仍受不可變更的十進位 2.5 GB 上限約束；已快取區域可在無網路時繼續計算，並在 WGS84 座標網格上顯示結果。
 
-- 此鏈路分析原始碼晚於 v0.1.0-alpha.2，尚未封裝為新的 Windows 發行版。
+- Alpha 3 已包含覆蓋與鏈路分析、免 token 的 CARTO/EOX 線上底圖、WebView2 協定修復與可持續查看的安全地圖診斷。
 
 <!-- section:windows-download -->
 ## Windows 下載
 
-請開啟 [v0.1.0-alpha.2 發行頁面](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.2) 下載：
+請開啟 [v0.1.0-alpha.3 發行頁面](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.3) 下載：
 
 - `HamHeatmap.exe`：獨立程式；目標電腦必須已安裝 WebView2 Runtime。
 - `HamHeatmap_*_x64-setup.exe`：目前使用者安裝程式，內含離線 WebView2 元件，因此檔案較大。
 - `SHA256SUMS.txt`：用於驗證下載檔案完整性的校驗值。
 
-SHA-256：`HamHeatmap.exe` 為 a1968a48bca419d58680adca31759284f7971d36c590503451212114c3808247；安裝程式為 4df826b0eb96cd5a69f3c6a3a6d2b9d248c067fe60be34bb9bcd2e7bbe0fbc0e。
+SHA-256：`HamHeatmap.exe` 為 0cc828063378caa5ce2a588377b506abfca3f3c741fccd33cec997e61c3af685；安裝程式為 9b2dea3938bf1330fa3822fad4fbedf22e61ae11056d35480634f9e2b1261107。
 
 > [!WARNING]
 > 目前版本是未簽章的內部 Alpha。傳播結果是模型估算，尚未經過外場量測校準，不得作為生命安全、緊急指揮或法規遵循決策的唯一依據。公開原始碼倉庫並不代表目前的線上底圖整合或匯出報告已符合中國大陸公開地圖發行要求。
@@ -94,11 +94,13 @@ SHA-256：`HamHeatmap.exe` 為 a1968a48bca419d58680adca31759284f7971d36c59050345
 - [`docs/decisions/0024-point-to-point-link-analysis.md`](docs/decisions/0024-point-to-point-link-analysis.md)：鎖定的點對點鏈路分析契約、公式、分類及驗證邊界。
 - `docs/decisions/`：具有證據的工程決策。
 - [`docs/21-protomaps-four-province-basemap.md`](docs/21-protomaps-four-province-basemap.md)：已退出目前產品目標的四省 PMTiles 歷史驗證證據。
+- [`docs/22-project-history-and-handoff.zh-Hans.md`](docs/22-project-history-and-handoff.zh-Hans.md)：脫敏後的對話決策、里程碑、目前狀態及交接摘要。
+- [`docs/23-server-retirement-archive.md`](docs/23-server-retirement-archive.md)：伺服器資料清單、排除項目、校驗值與復原步驟。
 
 <!-- section:development -->
 ## 開發與建置
 
-唯一規範的開發工作區是 `gpu-273312`（`ubuntu@150.65.181.202`）上的 `/home/ubuntu/hamheatmap`。原始碼、相依套件、快取、建置及驗證產物都保留在該伺服器，Windows 電腦只接收最終執行檔。
+開發不再綁定即將退役的臨時伺服器。請在任意 Linux 建置主機複製公開倉庫，並將相依套件、快取、建置及驗證產物保留於專案目錄；Windows 電腦只需接收最終執行檔。
 
 複製公開倉庫：
 
@@ -188,7 +190,7 @@ scripts/validation-platform.sh self-test
 在 Windows PowerShell 建立 SSH 通道，並保持該終端機開啟：
 
 ```powershell
-ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 1421:127.0.0.1:1421 ubuntu@150.65.181.202
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 1421:127.0.0.1:1421 ubuntu@your-server
 ```
 
 在本機瀏覽器開啟 `http://127.0.0.1:1421`。這是通道的本機端點，不是伺服器公開連接埠。驗證完成後在伺服器停止：
@@ -234,7 +236,7 @@ HamHeatmap 是規劃及教學工具，不保證實際通聯。MVP 不考慮建�
 
 桌面程式使用 Tauri 2.11.5、React 19.2.7、TypeScript 7.0.2、Vite 8.1.4 和 MapLibre GL JS 5.24.0。後端使用 Rust、內嵌 SQLite、NTIA 官方 ITM C++ v1.4、純 Rust `tiff` 及 rustls HTTPS。
 
-目前所有視覺底圖都在線上。PMTiles JavaScript 4.4.1 與 fflate 0.8.3 已從目前原始碼和下一次建置目標移除，四省歸檔也不會發行。現有公開 Alpha 2 仍包含這兩個歷史 JavaScript 相依套件，但不含離線地圖歸檔。
+目前所有視覺底圖都在線上。PMTiles JavaScript 4.4.1 與 fflate 0.8.3 已從目前原始碼和 Alpha 3 移除，四省歸檔也不會發行。
 
 <!-- section:author -->
 ## 開發者

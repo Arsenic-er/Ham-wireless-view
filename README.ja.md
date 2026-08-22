@@ -25,22 +25,22 @@ HamHeatmap（アマチュア無線伝搬ヒートマップ）は、中国本土�
 ### Windows Alpha
 
 - 現在の Windows/Tauri ソースは、Tianditu `tk` なしで CARTO Voyager のオンライン地図・地名と EOxCloudless Sentinel-2 衛星画像を既定表示します。個人用 Tianditu `tk` は任意の上書き設定で、設定時は現在のユーザーの DPAPI で暗号化します。消去後は公共ベースマップを引き続き使用します。オンラインタイルは 2.5 GB キャッシュにも診断エクスポートにも入りません。Alpha 2 で導入した Tianditu 接続テストも維持します。
-- v0.1.0-alpha.2 はコミット 9b0fb79 からクロスビルドして GitHub Releases に公開済みです。単体 EXE は 16,174,080 bytes、オフライン WebView2 コンポーネントを内蔵する NSIS インストーラーは 217,265,419 bytes です。
+- v0.1.0-alpha.3 はコミット 5482f05 からクロスビルドして GitHub Releases に公開済みです。単体 EXE は 16,296,960 bytes、オフライン WebView2 コンポーネントを内蔵する NSIS インストーラーは 217,333,194 bytes です。
 - Release には `SHA256SUMS.txt` も含まれます。2 つの Windows 成果物はいずれも未署名で、Windows 10/11 実機、SmartScreen、インストール／アンインストール、中国本土の実ネットワークでの検証は未完了です。
 - Windows 製品はオンライン表示用ベースマップのみを使用し、オフライン地図パッケージの計画・配布は行いません。オンラインタイルは永続化しません。DEM/WBM、partial ファイル、インデックス、計算キャッシュには変更不可の 10 進 2.5 GB 上限が適用されます。キャッシュ済み地域ではオフラインでも計算を続行し、WGS84 座標グリッド上に結果を表示できます。
 
-- このリンク解析ソースは v0.1.0-alpha.2 より新しく、新しい Windows リリースにはまだパッケージ化していません。
+- Alpha 3 には、カバレッジ／リンク解析、token 不要の CARTO/EOX オンライン地図、WebView2 プロトコル修正、永続表示される安全な地図診断が含まれます。
 
 <!-- section:windows-download -->
 ## Windows 版のダウンロード
 
-[v0.1.0-alpha.2 リリースページ](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.2)からダウンロードしてください。
+[v0.1.0-alpha.3 リリースページ](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.3)からダウンロードしてください。
 
 - `HamHeatmap.exe`：単体アプリ。対象 PC に WebView2 Runtime がインストール済みである必要があります。
 - `HamHeatmap_*_x64-setup.exe`：ユーザー単位のインストーラー。オフライン WebView2 コンポーネントを内蔵するため、ファイルサイズが大きくなります。
 - `SHA256SUMS.txt`：ダウンロードファイルの完全性を検証するチェックサムです。
 
-SHA-256：`HamHeatmap.exe` は a1968a48bca419d58680adca31759284f7971d36c590503451212114c3808247、インストーラーは 4df826b0eb96cd5a69f3c6a3a6d2b9d248c067fe60be34bb9bcd2e7bbe0fbc0e です。
+SHA-256：`HamHeatmap.exe` は 0cc828063378caa5ce2a588377b506abfca3f3c741fccd33cec997e61c3af685、インストーラーは 9b2dea3938bf1330fa3822fad4fbedf22e61ae11056d35480634f9e2b1261107 です。
 
 > [!WARNING]
 > 現在の版は未署名の内部 Alpha です。伝搬結果はモデルによる推定値であり、フィールド測定による校正は未実施です。人命安全、緊急指揮、法規適合判断の唯一の根拠として使用しないでください。ソースリポジトリの公開は、現在のオンラインベースマップ統合やエクスポートレポートが中国本土の公開地図配布要件を満たすことを意味しません。
@@ -94,11 +94,13 @@ SHA-256：`HamHeatmap.exe` は a1968a48bca419d58680adca31759284f7971d36c59050345
 - [`docs/decisions/0024-point-to-point-link-analysis.md`](docs/decisions/0024-point-to-point-link-analysis.md)：地点間リンク解析の固定契約、数式、分類、検証境界。
 - `docs/decisions/`：証拠に基づく技術判断。
 - [`docs/21-protomaps-four-province-basemap.md`](docs/21-protomaps-four-province-basemap.md)：製品対象から外れた 4 省 PMTiles の過去の検証証拠。
+- [`docs/22-project-history-and-handoff.zh-Hans.md`](docs/22-project-history-and-handoff.zh-Hans.md)：機密情報を除いた会話上の判断、マイルストーン、現状、引き継ぎ概要。
+- [`docs/23-server-retirement-archive.md`](docs/23-server-retirement-archive.md)：サーバーデータ一覧、除外項目、チェックサム、復旧手順。
 
 <!-- section:development -->
 ## 開発とビルド
 
-正規の開発ワークスペースは、`gpu-273312`（`ubuntu@150.65.181.202`）上の `/home/ubuntu/hamheatmap` だけです。ソース、依存関係、キャッシュ、ビルド、検証成果物はサーバーに保持し、Windows PC へ渡すのは最終実行ファイルのみです。
+開発環境は廃止予定の一時サーバーに依存しません。任意の Linux ビルドホストに公開リポジトリをクローンし、依存関係、キャッシュ、ビルド、検証成果物をプロジェクト内に保持してください。Windows PC に必要なのは最終実行ファイルだけです。
 
 公開リポジトリをクローンします。
 
@@ -188,7 +190,7 @@ scripts/validation-platform.sh self-test
 Windows PowerShell で SSH トンネルを作成し、そのターミナルを開いたままにします。
 
 ```powershell
-ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 1421:127.0.0.1:1421 ubuntu@150.65.181.202
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 1421:127.0.0.1:1421 ubuntu@your-server
 ```
 
 ローカルブラウザーで `http://127.0.0.1:1421` を開きます。これはトンネルのローカルエンドポイントであり、サーバーの公開ポートではありません。検証後はサーバー上で停止します。
@@ -234,7 +236,7 @@ HamHeatmap は計画・学習用ツールであり、実際の交信を保証し
 
 デスクトップアプリは Tauri 2.11.5、React 19.2.7、TypeScript 7.0.2、Vite 8.1.4、MapLibre GL JS 5.24.0 を使用します。バックエンドは Rust、組み込み SQLite、NTIA 公式 ITM C++ v1.4、Pure Rust の `tiff`、rustls HTTPS を使用します。
 
-現在の表示用ベースマップはすべてオンラインです。PMTiles JavaScript 4.4.1 と fflate 0.8.3 は現行ソースおよび次回ビルド対象から削除済みで、4 省アーカイブも配布しません。現在公開中の Alpha 2 には、この 2 つの旧 JavaScript 依存関係が残っていますが、オフライン地図アーカイブは含まれません。
+現在の表示用ベースマップはすべてオンラインです。PMTiles JavaScript 4.4.1 と fflate 0.8.3 は現行ソースと Alpha 3 から削除済みで、4 省アーカイブも配布しません。
 
 <!-- section:author -->
 ## 開発者

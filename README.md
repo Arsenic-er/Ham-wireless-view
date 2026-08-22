@@ -23,22 +23,22 @@ HamHeatmap is an open-source Windows desktop application for amateur-radio opera
 ### Windows Alpha
 
 - The current Windows/Tauri source defaults to online CARTO Voyager maps with place labels and EOxCloudless Sentinel-2 imagery; no Tianditu `tk` is required. A personal Tianditu `tk` is an optional override and is encrypted with current-user DPAPI when configured. Online tiles do not enter the 2.5 GB cache or diagnostic exports. Alpha 2 introduced the explicit Tianditu connection check; the current public basemap path remains available after that optional configuration is cleared.
-- v0.1.0-alpha.2 was cross-built from commit 9b0fb79 and uploaded to GitHub Releases: the standalone EXE is 16,174,080 bytes and the NSIS installer with the offline WebView2 component is 217,265,419 bytes.
+- v0.1.0-alpha.3 was cross-built from commit 5482f05 and uploaded to GitHub Releases: the standalone EXE is 16,296,960 bytes and the NSIS installer with the offline WebView2 component is 217,333,194 bytes.
 - The Release also includes `SHA256SUMS.txt`. Both Windows artifacts are unsigned; Windows 10/11 hardware testing, SmartScreen, installation/uninstallation, and real mainland-China network testing remain pending.
 - The Windows product uses online visual basemaps only and does not plan or distribute an offline map package. Online tiles are never persisted. DEM/WBM, partial files, indexes, and calculation caches remain subject to the immutable decimal 2.5 GB cap; cached regions can still be calculated without a network connection and displayed on the WGS84 coordinate grid.
 
-- This link-analysis source is newer than v0.1.0-alpha.2 and has not been packaged into a new Windows release.
+- Alpha 3 packages coverage and link analysis, token-free CARTO/EOX online basemaps, the WebView2 protocol repair, and persistent safe basemap diagnostics.
 
 <!-- section:windows-download -->
 ## Windows download
 
-Open the [v0.1.0-alpha.2 release page](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.2) and download:
+Open the [v0.1.0-alpha.3 release page](https://github.com/Arsenic-er/Ham-wireless-view/releases/tag/v0.1.0-alpha.3) and download:
 
 - `HamHeatmap.exe`: standalone application; the target computer must already have the WebView2 Runtime.
 - `HamHeatmap_*_x64-setup.exe`: per-user installer with the offline WebView2 component; this file is larger.
 - `SHA256SUMS.txt`: checksums for verifying the downloaded files.
 
-SHA-256: `HamHeatmap.exe` is a1968a48bca419d58680adca31759284f7971d36c590503451212114c3808247; the installer is 4df826b0eb96cd5a69f3c6a3a6d2b9d248c067fe60be34bb9bcd2e7bbe0fbc0e.
+SHA-256: `HamHeatmap.exe` is 0cc828063378caa5ce2a588377b506abfca3f3c741fccd33cec997e61c3af685; the installer is 9b2dea3938bf1330fa3822fad4fbedf22e61ae11056d35480634f9e2b1261107.
 
 > [!WARNING]
 > This is an unsigned internal Alpha. Propagation results are model estimates and have not been calibrated against field measurements. Do not use them as the sole basis for life-safety, emergency-command, or regulatory-compliance decisions. Publishing the source repository does not establish that the current online basemap integration or exported reports meet mainland-China public map distribution requirements.
@@ -92,11 +92,13 @@ Most engineering documents are currently written in Simplified Chinese. Their co
 - [`docs/decisions/0024-point-to-point-link-analysis.md`](docs/decisions/0024-point-to-point-link-analysis.md): locked point-to-point link-analysis contract, equations, classifications, and verification boundary.
 - `docs/decisions/`: evidence-backed engineering decisions.
 - [`docs/21-protomaps-four-province-basemap.md`](docs/21-protomaps-four-province-basemap.md): historical four-province PMTiles validation evidence, no longer a product target.
+- [`docs/22-project-history-and-handoff.zh-Hans.md`](docs/22-project-history-and-handoff.zh-Hans.md): public-safe conversation decisions, milestones, current state, and handoff summary.
+- [`docs/23-server-retirement-archive.md`](docs/23-server-retirement-archive.md): server data inventory, archive exclusions, hashes, and recovery procedure.
 
 <!-- section:development -->
 ## Development and build
 
-The only canonical development workspace is `/home/ubuntu/hamheatmap` on `gpu-273312` (`ubuntu@150.65.181.202`). Source, dependencies, caches, builds, and validation artifacts stay on that server; the Windows computer receives only final executables.
+Development is no longer tied to the retired temporary server. Clone the public repository on a Linux build host and keep dependencies, caches, builds, and validation artifacts inside the project; Windows computers need only the final executables.
 
 Clone the public repository:
 
@@ -186,7 +188,7 @@ scripts/validation-platform.sh self-test
 Create an SSH tunnel in Windows PowerShell and keep that terminal open:
 
 ```powershell
-ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 1421:127.0.0.1:1421 ubuntu@150.65.181.202
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 1421:127.0.0.1:1421 ubuntu@your-server
 ```
 
 Open `http://127.0.0.1:1421` in a local browser. This is the tunnel's local endpoint, not a public server port. Stop the platform on the server after validation:
@@ -232,7 +234,7 @@ Before public distribution in mainland China, the release must complete basemap 
 
 The desktop application uses Tauri 2.11.5, React 19.2.7, TypeScript 7.0.2, Vite 8.1.4, and MapLibre GL JS 5.24.0. The backend uses Rust, embedded SQLite, official NTIA ITM C++ v1.4, pure-Rust `tiff`, and rustls HTTPS.
 
-All current visual basemaps are online. PMTiles JavaScript 4.4.1 and fflate 0.8.3 have been removed from the current source and next build target, and the four-province archive will not be distributed. The public Alpha 2 still contains those two historical JavaScript dependencies but no offline map archive.
+All current visual basemaps are online. PMTiles JavaScript 4.4.1 and fflate 0.8.3 have been removed from the current source and Alpha 3, and the four-province archive is not distributed.
 
 <!-- section:author -->
 ## Author
