@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest an improvement to Ham-wireless-view.
+title: '[Feature]: '
+body:
+- type: dropdown
+  id: component
+  attributes:
+    label: Affected component
+    options:
+    - Coverage prediction
+    - Point-to-point link or Fresnel profile
+    - Terrain data or calculation cache
+    - Basemap or satellite imagery
+    - Interface or export
+    - Windows installation
+    - Other / unsure
+  validations:
+    required: true
+- type: textarea
+  id: problem
+  attributes:
+    label: Problem or use case
+    placeholder: 'Example: I want to compare how antenna height changes one transmitter-to-receiver
+      link.'
+  validations:
+    required: true
+- type: textarea
+  id: proposal
+  attributes:
+    label: Proposed solution
+    placeholder: 'Example: Add a comparison of two antenna heights on the same link
+      profile.'
+  validations:
+    required: true
+- type: textarea
+  id: alternatives
+  attributes:
+    label: Alternatives considered
+    description: Describe other approaches or current workarounds, if any.
+- type: textarea
+  id: acceptance
+  attributes:
+    label: Acceptance criteria
+    placeholder: 'Units and propagation assumptions are visible.
+
+      Both results use the same terrain inputs.
+
+      The existing cache limit and export behavior remain respected.'
+- type: textarea
+  id: context
+  attributes:
+    label: Additional context
+    description: Add related issues, small examples, design sketches, or references
+      if useful.

@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a map, propagation calculation, cache, or Windows application
+  problem.
+title: '[Bug]: '
+body:
+- type: dropdown
+  id: component
+  attributes:
+    label: Affected component
+    options:
+    - Coverage prediction
+    - Point-to-point link or Fresnel profile
+    - Terrain data or calculation cache
+    - Basemap or satellite imagery
+    - Interface or export
+    - Windows installation
+    - Other / unsure
+  validations:
+    required: true
+- type: input
+  id: version
+  attributes:
+    label: Version or commit SHA
+  validations:
+    required: true
+- type: textarea
+  id: summary
+  attributes:
+    label: What happened?
+    placeholder: 'Example: Coverage calculation values change after changing only
+      the visual basemap.'
+  validations:
+    required: true
+- type: textarea
+  id: steps
+  attributes:
+    label: Steps to reproduce
+    placeholder: '1. Record the transmitter and propagation inputs.
+
+      2. Calculate coverage using one visual basemap.
+
+      3. Change only the basemap and compare the numerical output.'
+  validations:
+    required: true
+- type: textarea
+  id: expected
+  attributes:
+    label: Expected behavior
+    placeholder: Changing only the visual basemap should preserve the propagation
+      inputs and numerical result.
+  validations:
+    required: true
+- type: textarea
+  id: context
+  attributes:
+    label: Radio and terrain inputs
+    placeholder: 'Mode: coverage or point-to-point link
+
+      Frequency (MHz):
+
+      Transmit power (W):
+
+      Antenna height (m), gain (dBi), and polarization:
+
+      Reproducible test coordinates or approximate area:
+
+      Terrain source and cache state:
+
+      Expected and observed received power (dBm), if applicable:'
+- type: textarea
+  id: environment
+  attributes:
+    label: Environment
+    placeholder: 'Windows version or browser validation build:
+
+      Application version:
+
+      WebView2 version (if applicable):
+
+      Basemap provider:
+
+      Network availability:'
+  validations:
+    required: true
+- type: textarea
+  id: evidence
+  attributes:
+    label: Logs, screenshots, or a minimal example
+    description: Include the smallest example or log excerpt needed to reproduce the
+      problem.
